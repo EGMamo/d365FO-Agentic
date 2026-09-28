@@ -1,0 +1,26 @@
+{
+  "id": "TC-VENDOR-001",
+  "title": "Create a new vendor and validate it appears in the Vendors list",
+  "module": "Accounts payable",
+  "area": "AP\\Vendors",
+  "priority": 2,
+  "tags": ["smoke", "vendors", "ap"],
+  "preconditions": "User has AP clerk role and USMF legal entity is selectable.",
+  "legalEntity": "USMF",
+  "steps": [
+    { "index": 1, "action": "Log into D365 F&O and switch to the USMF legal entity." },
+    { "index": 2, "action": "Navigate to Modules > Accounts payable > Vendors > All vendors." },
+    { "index": 3, "action": "Click New to open the vendor creation form." },
+    {
+      "index": 4,
+      "action": "Fill Vendor account = 'TESTV-{timestamp}', Name = 'Test Vendor', Group = 'DOM'.",
+      "expected": "Fields accept input without validation errors."
+    },
+    { "index": 5, "action": "Click Save.", "expected": "Vendor is saved; header shows the new Vendor account code." },
+    {
+      "index": 6,
+      "action": "Return to All vendors and search for the newly created account.",
+      "expected": "The new vendor is present in the results grid."
+    }
+  ]
+}

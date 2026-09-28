@@ -1,0 +1,29 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test artifacts & reports
+reports/
+artifacts/
+traces/
+screenshots/
+videos/
+
+# Knowledge base (local, machine-specific)
+knowledge/kb.local.json
+knowledge/index/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
