@@ -1,0 +1,43 @@
+import type { AppConfig } from '../config/index.js';
+import { McpManager, type McpServerSpec } from './manager.js';
+
+/**
+ * Builds the default MCP server registry for the agent. Playwright and Learn
+ * are always registered; Azure DevOps MCP is registered only if opted in.
+ */
+export function buildDefaultManager(cfg: AppConfig): McpManager {
+  const manager = new McpManager();
+
+  const playwright: McpServerSpec = {
+    name: 'playwright',
+    transport: 'stdio',
+    command: 'npx',
+    args: [
+      '-y',
+      '@playwright/mcp@latest',
+      ...(cfg.PW_HEADLESS ? ['--headless'] : []),
+      '--browser',
+      cfg.PW_BROWSER,
+    ],
+  };
+  manager.register(playwright);
+
+  const learn: McpServerSpec = {
+    name: 'learn',
+    transport: 'http',
+    url: cfg.LEARN_MCP_URL,
+  };
+  manager.register(learn);
+
+  if (cfg.AZDO_USE_MCP && cfg.AZDO_ORG_URL) {
+    manager.register({
+      name: 'azure-devops',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@azure-devops/mcp', '--org', cfg.AZDO_ORG_URL],
+      env: cfg.AZDO_PAT ? { AZURE_DEVOPS_EXT_PAT: cfg.AZDO_PAT } : undefined,
+    });
+  }
+
+  return manager;
+}

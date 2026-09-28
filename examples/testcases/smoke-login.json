@@ -1,0 +1,11 @@
+{
+  "id": "TC-SMOKE-LOGIN",
+  "title": "Login smoke test — user can sign in and see the default dashboard",
+  "module": "Platform",
+  "tags": ["smoke", "login"],
+  "steps": [
+    { "index": 1, "action": "Navigate to the D365 F&O base URL." },
+    { "index": 2, "action": "Complete the Microsoft Entra login using the configured credentials.", "expected": "Dashboard loads with the navigation bar visible." },
+    { "index": 3, "action": "Verify the current company matches the configured legal entity.", "expected": "Company code equals D365_COMPANY." }
+  ]
+}

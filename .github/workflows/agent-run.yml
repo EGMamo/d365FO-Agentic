@@ -1,0 +1,80 @@
+name: agent-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      testCasesDir:
+        description: 'Path to local test case JSON directory (relative to repo)'
+        default: 'examples/testcases'
+        required: false
+      planId:
+        description: 'Azure DevOps Test Plan ID (optional, overrides env)'
+        required: false
+      suiteId:
+        description: 'Azure DevOps Test Suite ID (optional, overrides env)'
+        required: false
+      upload:
+        description: 'Upload results to Azure DevOps'
+        type: boolean
+        default: false
+      dryRun:
+        description: 'Dry run (skip mutating browser actions)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Doctor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZDO_ORG_URL: ${{ secrets.AZDO_ORG_URL }}
+          AZDO_PROJECT: ${{ secrets.AZDO_PROJECT }}
+          AZDO_PAT: ${{ secrets.AZDO_PAT }}
+          AZDO_TEST_PLAN_ID: ${{ inputs.planId }}
+          AZDO_TEST_SUITE_ID: ${{ inputs.suiteId }}
+          D365_BASE_URL: ${{ secrets.D365_BASE_URL }}
+          D365_USERNAME: ${{ secrets.D365_USERNAME }}
+          D365_PASSWORD: ${{ secrets.D365_PASSWORD }}
+        run: node dist/cli/index.js doctor
+
+      - name: Run tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZDO_ORG_URL: ${{ secrets.AZDO_ORG_URL }}
+          AZDO_PROJECT: ${{ secrets.AZDO_PROJECT }}
+          AZDO_PAT: ${{ secrets.AZDO_PAT }}
+          AZDO_TEST_PLAN_ID: ${{ inputs.planId }}
+          AZDO_TEST_SUITE_ID: ${{ inputs.suiteId }}
+          D365_BASE_URL: ${{ secrets.D365_BASE_URL }}
+          D365_USERNAME: ${{ secrets.D365_USERNAME }}
+          D365_PASSWORD: ${{ secrets.D365_PASSWORD }}
+          PW_HEADLESS: 'true'
+        run: |
+          node dist/cli/index.js run \
+            --local "${{ inputs.testCasesDir }}" \
+            ${{ inputs.dryRun && '--dry-run' || '' }} \
+            ${{ inputs.upload && '--upload' || '' }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-reports
+          path: |
+            reports/
+            knowledge/
