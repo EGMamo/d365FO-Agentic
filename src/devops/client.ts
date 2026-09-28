@@ -189,7 +189,18 @@ export function parseTestSteps(xml: string): { index: number; action: string; ex
   if (!xml || xml.trim() === '') return [];
   const stepRe = /<step[^>]*id="(\d+)"[^>]*>([\s\S]*?)<\/step>/gi;
   const paramRe = /<parameterizedString[^>]*>([\s\S]*?)<\/parameterizedString>/gi;
-  const stripHtml = (s: string) => s.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
+  const stripHtml = (s: string) => {
+    let prev = s;
+    // Loop until stable so we never leave partial tag fragments behind
+    // (single-pass replacement is vulnerable to nested/broken tags).
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const next = prev.replace(/<[^>]*>/g, '');
+      if (next === prev) break;
+      prev = next;
+    }
+    return prev.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
+  };
   const steps: { index: number; action: string; expected?: string }[] = [];
   let m: RegExpExecArray | null;
   let i = 1;
