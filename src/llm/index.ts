@@ -27,6 +27,9 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         model: cfg.OPENAI_MODEL,
         maxTokens: cfg.LLM_MAX_TOKENS,
         temperature: cfg.LLM_TEMPERATURE,
+        timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+        maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+        retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
       });
     }
     case 'azure-openai': {
@@ -44,6 +47,9 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         temperature: cfg.LLM_TEMPERATURE,
         authScheme: 'header',
         authHeaderName: 'api-key',
+        timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+        maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+        retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
       });
     }
     case 'github-models': {
@@ -55,6 +61,9 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         model: cfg.GITHUB_MODELS_MODEL,
         maxTokens: cfg.LLM_MAX_TOKENS,
         temperature: cfg.LLM_TEMPERATURE,
+        timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+        maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+        retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
       });
     }
   }

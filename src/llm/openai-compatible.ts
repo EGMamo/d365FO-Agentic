@@ -1,16 +1,11 @@
-import { fetch } from 'undici';
 import type {
   LlmCompleteRequest,
   LlmCompleteResponse,
   LlmProvider,
   LlmToolCall,
 } from './types.js';
+import { fetchWithResilience } from '../utils/http.js';
 
-/**
- * Minimal adapter for OpenAI-compatible Chat Completions endpoints. Works for
- * OpenAI, Azure OpenAI, and GitHub Models with the appropriate base URL and
- * auth header. Kept lightweight — no extra SDK dependency.
- */
 export interface OpenAiCompatibleOptions {
   name: string;
   baseUrl: string;
@@ -18,11 +13,12 @@ export interface OpenAiCompatibleOptions {
   model: string;
   maxTokens: number;
   temperature: number;
-  /** Extra headers, e.g. `api-key` for Azure OpenAI. */
   headers?: Record<string, string>;
-  /** Bearer scheme vs api-key header. */
   authScheme?: 'bearer' | 'header';
   authHeaderName?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryBaseMs?: number;
 }
 
 export class OpenAiCompatibleProvider implements LlmProvider {
@@ -82,20 +78,30 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       ...(this.opts.headers ?? {}),
     };
     if ((this.opts.authScheme ?? 'bearer') === 'bearer') {
-      headers.authorization = `Bearer ${this.opts.apiKey}`;
+      headers.authorization = ['Bearer', this.opts.apiKey].join(' ');
     } else {
       headers[this.opts.authHeaderName ?? 'api-key'] = this.opts.apiKey;
     }
 
-    const res = await fetch(this.opts.baseUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const res = await fetchWithResilience(
+      this.opts.baseUrl,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      },
+      {
+        timeoutMs: this.opts.timeoutMs ?? 60000,
+        maxRetries: this.opts.maxRetries ?? 2,
+        retryBaseMs: this.opts.retryBaseMs ?? 500,
+      },
+    );
+
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`${this.name} error ${res.status}: ${text}`);
     }
+
     const data = (await res.json()) as {
       choices: Array<{
         message: {
@@ -106,12 +112,14 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+
     const choice = data.choices?.[0];
     const toolCalls: LlmToolCall[] = (choice?.message.tool_calls ?? []).map((c) => ({
       id: c.id,
       name: c.function.name,
       arguments: safeParseJson(c.function.arguments),
     }));
+
     const stopReason: LlmCompleteResponse['stopReason'] =
       choice?.finish_reason === 'tool_calls'
         ? 'tool_use'
@@ -120,6 +128,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
           : choice?.finish_reason === 'stop'
             ? 'end_turn'
             : 'other';
+
     return {
       text: choice?.message.content ?? '',
       toolCalls,

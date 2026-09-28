@@ -5,13 +5,9 @@ import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import type { KnowledgeBase } from '../knowledge/kb.js';
-import type { StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 
-/**
- * Local tools the agent can invoke directly (not routed through MCP). These
- * capture structured verdicts and knowledge-base updates in-process.
- */
 const LOCAL_TOOLS: LlmTool[] = [
   {
     name: 'report_step',
@@ -69,8 +65,19 @@ interface RunOptions {
   llm: LlmProvider;
   mcp: McpManager;
   kb: KnowledgeBase;
-  /** MCP servers whose tools should be exposed to the model. */
   mcpServers: string[];
+}
+
+interface AttemptResult {
+  outcome: StepStatus;
+  runState: RunState;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  steps: StepResult[];
+  artifacts: string[];
+  learnings: string[];
+  errorMessage?: string;
 }
 
 export class AgentOrchestrator {
@@ -88,17 +95,75 @@ export class AgentOrchestrator {
     this.mcpServers = opts.mcpServers;
   }
 
-  /**
-   * Runs a single test case: builds the tool list from MCP + local tools,
-   * loops plan→tool-call→result until the model calls `finish_test` or hits
-   * the step budget.
-   */
   async runTestCase(tc: TestCase): Promise<TestResult> {
+    let state: RunState = 'pending';
+    const attempts: AttemptResult[] = [];
+    const maxAttempts = Math.max(1, this.cfg.AGENT_RELOOP_MAX_RETRIES + 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      state = attempt === 1 ? 'running' : 'retrying';
+      const result = await this.runAttempt(tc);
+      attempts.push(result);
+
+      if (!shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) {
+        state = result.outcome === 'passed' || result.outcome === 'skipped' ? 'completed' : result.runState;
+        break;
+      }
+      if (this.cfg.AGENT_RELOOP_COOLDOWN_MS > 0) {
+        await sleep(this.cfg.AGENT_RELOOP_COOLDOWN_MS);
+      }
+    }
+
+    const first = attempts[0];
+    const final = attempts.at(-1) ?? {
+      outcome: 'blocked' as StepStatus,
+      runState: 'blocked' as RunState,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 0,
+      steps: [],
+      artifacts: [],
+      learnings: [],
+      errorMessage: 'No attempts were executed',
+    };
+
+    const previous = attempts.length > 1 ? attempts[attempts.length - 2] : undefined;
+    const finalState: RunState =
+      final.outcome === 'passed' || final.outcome === 'skipped' ? 'completed' : final.outcome === 'failed' ? 'failed' : 'blocked';
+
+    return {
+      testCaseId: tc.id,
+      title: tc.title,
+      outcome: final.outcome,
+      runState: finalState,
+      startedAt: first.startedAt,
+      finishedAt: final.finishedAt,
+      durationMs: attempts.reduce((sum, a) => sum + a.durationMs, 0),
+      steps: final.steps,
+      artifacts: Array.from(new Set(attempts.flatMap((a) => a.artifacts))),
+      errorMessage: final.errorMessage,
+      learnings: final.learnings,
+      attemptCount: attempts.length,
+      firstOutcome: first.outcome,
+      previousOutcome: previous?.outcome,
+      retryHistory: attempts.map((a, idx) => ({
+        attempt: idx + 1,
+        outcome: a.outcome,
+        runState: a.runState,
+        startedAt: a.startedAt,
+        finishedAt: a.finishedAt,
+        durationMs: a.durationMs,
+        errorMessage: a.errorMessage,
+        retryReason: idx > 0 ? `Retry after attempt ${idx} due to ${attempts[idx - 1]?.outcome}` : undefined,
+      })),
+    };
+  }
+
+  private async runAttempt(tc: TestCase): Promise<AttemptResult> {
     const startedAt = new Date();
     const artifactsDir = join(this.cfg.REPORT_DIR, 'artifacts', tc.id);
     await mkdir(artifactsDir, { recursive: true });
 
-    // Build the tool catalogue from configured MCP servers + local tools.
     const mcpTools: McpToolDescriptor[] = [];
     for (const server of this.mcpServers) {
       try {
@@ -110,7 +175,6 @@ export class AgentOrchestrator {
     }
     const tools: LlmTool[] = [
       ...mcpTools.map((t) => ({
-        // Prefix with server name so we can route back at dispatch time.
         name: `${t.server}__${t.name}`,
         description: `[${t.server}] ${t.description}`,
         inputSchema: t.inputSchema,
@@ -118,17 +182,13 @@ export class AgentOrchestrator {
       ...LOCAL_TOOLS,
     ];
 
-    // Seed with retrieved KB context.
     const retrieved = this.kb.retrieve(
       `${tc.title} ${tc.module ?? ''} ${tc.tags?.join(' ') ?? ''}`,
       tc.tags ?? [],
       5,
     );
 
-    const messages: LlmMessage[] = [
-      { role: 'user', content: testCaseUserPrompt(tc, retrieved) },
-    ];
-
+    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved) }];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
     const artifacts: string[] = [];
@@ -136,55 +196,55 @@ export class AgentOrchestrator {
     let overallError: string | undefined;
     let stopped = false;
 
-    for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
-      const response = await this.llm.complete({
-        system: baseSystemPrompt(this.cfg),
-        messages,
-        tools,
-      });
-
-      // Persist assistant turn (text + tool calls).
-      messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
-
-      if (response.toolCalls.length === 0) {
-        // Model went silent without finishing — treat as blocked.
-        overallError = response.text || 'Model produced no tool calls and no final verdict.';
-        outcome = 'blocked';
-        break;
-      }
-
-      for (const call of response.toolCalls) {
-        const dispatched = await this.dispatch(call, {
-          tc,
-          steps,
-          learnings,
-          artifactsDir,
-          artifacts,
+    try {
+      for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
+        const response = await this.llm.complete({
+          system: baseSystemPrompt(this.cfg),
+          messages,
+          tools,
         });
-        messages.push({
-          role: 'tool',
-          content: dispatched.content,
-          toolCallId: call.id,
-          toolName: call.name,
-        });
-        if (dispatched.done) {
-          outcome = dispatched.outcome ?? 'blocked';
-          overallError = dispatched.errorMessage;
-          stopped = true;
+
+        messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
+
+        if (response.toolCalls.length === 0) {
+          overallError = response.text || 'Model produced no tool calls and no final verdict.';
+          outcome = 'blocked';
+          break;
         }
-      }
 
-      if (response.stopReason === 'end_turn' && !stopped) {
-        // No tool call, no finish → nothing more to do.
-        break;
+        for (const call of response.toolCalls) {
+          const dispatched = await this.dispatch(call, {
+            tc,
+            steps,
+            learnings,
+            artifactsDir,
+            artifacts,
+          });
+          messages.push({
+            role: 'tool',
+            content: dispatched.content,
+            toolCallId: call.id,
+            toolName: call.name,
+          });
+          if (dispatched.done) {
+            outcome = dispatched.outcome ?? 'blocked';
+            overallError = dispatched.errorMessage;
+            stopped = true;
+          }
+        }
+
+        if (response.stopReason === 'end_turn' && !stopped) break;
       }
+    } catch (e) {
+      outcome = 'blocked';
+      overallError = `Transient orchestration failure: ${(e as Error).message}`;
     }
 
     const finishedAt = new Date();
+    const runState: RunState = outcome === 'failed' ? 'failed' : outcome === 'blocked' ? 'blocked' : 'completed';
     return {
-      testCaseId: tc.id,
-      title: tc.title,
       outcome,
+      runState,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - startedAt.getTime(),
@@ -195,11 +255,6 @@ export class AgentOrchestrator {
     };
   }
 
-  /**
-   * Route a tool call from the model to either a local handler or the
-   * appropriate MCP server. Returns the string content the model will see
-   * plus a signal of whether this call ended the test.
-   */
   private async dispatch(
     call: LlmToolCall,
     ctx: {
@@ -210,7 +265,6 @@ export class AgentOrchestrator {
       artifacts: string[];
     },
   ): Promise<{ content: string; done?: boolean; outcome?: StepStatus; errorMessage?: string }> {
-    // Local tools first.
     if (call.name === 'report_step') {
       const stepStart = Date.now();
       const step: StepResult = {
@@ -258,28 +312,19 @@ export class AgentOrchestrator {
       };
     }
 
-    // MCP route: names are `<server>__<tool>`.
     const idx = call.name.indexOf('__');
-    if (idx < 0) {
-      return { content: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
-    }
+    if (idx < 0) return { content: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
     const server = call.name.slice(0, idx);
     const toolName = call.name.slice(idx + 2);
     try {
       if (this.cfg.AGENT_DRY_RUN && server === 'playwright' && isMutatingBrowserTool(toolName)) {
-        return {
-          content: JSON.stringify({ dryRun: true, note: `Skipped mutating browser tool ${toolName}` }),
-        };
+        return { content: JSON.stringify({ dryRun: true, note: `Skipped mutating browser tool ${toolName}` }) };
       }
       const res = await this.mcp.callTool(server, toolName, call.arguments);
-      // Persist Playwright screenshots to disk when returned as base64 image content.
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
       return {
-        content:
-          typeof res.content === 'string'
-            ? res.content
-            : JSON.stringify(res.content ?? { ok: !res.isError }),
+        content: typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError }),
       };
     } catch (e) {
       return { content: JSON.stringify({ error: (e as Error).message }) };
@@ -302,6 +347,14 @@ export class AgentOrchestrator {
     }
     return paths;
   }
+}
+
+function shouldRetry(outcome: StepStatus, retryOn: StepStatus[], attempt: number, maxAttempts: number): boolean {
+  return retryOn.includes(outcome) && attempt < maxAttempts;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isMutatingBrowserTool(name: string): boolean {

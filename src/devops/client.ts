@@ -1,8 +1,8 @@
-import { fetch, FormData } from 'undici';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 import type { StepResult, TestCase, TestResult } from '../testing/types.js';
+import { fetchWithResilience } from '../utils/http.js';
 
 /**
  * Azure DevOps REST client (PAT-based). Covers the minimal surface needed by
@@ -37,16 +37,20 @@ export class AzureDevOpsClient {
       accept: 'application/json',
       ...(init?.headers ?? {}),
     };
-    let body: string | FormData | undefined;
+    let body: string | undefined;
     if (init?.body !== undefined) {
-      if (init.body instanceof FormData) {
-        body = init.body;
-      } else {
-        headers['content-type'] = 'application/json';
-        body = JSON.stringify(init.body);
-      }
+      headers['content-type'] = 'application/json';
+      body = JSON.stringify(init.body);
     }
-    const res = await fetch(this.url(path), { method: init?.method ?? 'GET', headers, body });
+    const res = await fetchWithResilience(
+      this.url(path),
+      { method: init?.method ?? 'GET', headers, body },
+      {
+        timeoutMs: this.cfg.AZDO_HTTP_TIMEOUT_MS,
+        maxRetries: this.cfg.AZDO_HTTP_MAX_RETRIES,
+        retryBaseMs: this.cfg.AZDO_HTTP_RETRY_BASE_MS,
+      },
+    );
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Azure DevOps ${res.status} ${res.statusText}: ${text}`);

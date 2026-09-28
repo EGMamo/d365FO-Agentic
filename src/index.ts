@@ -5,4 +5,5 @@ export { KnowledgeBase } from './knowledge/kb.js';
 export { AzureDevOpsClient } from './devops/client.js';
 export { writeReports } from './reporting/reporters.js';
 export { loadLocalTestCases } from './testing/loader.js';
+export { discoverTestCases, executeTestRun } from './core/runner.js';
 export type * from './testing/types.js';

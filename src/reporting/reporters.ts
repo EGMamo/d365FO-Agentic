@@ -36,11 +36,16 @@ function toJUnit(results: TestResult[]): string {
   const cases = results
     .map((r) => {
       const t = (r.durationMs / 1000).toFixed(3);
+      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}`;
       let body = '';
       if (r.outcome === 'failed') {
-        body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}">${xmlEscape(r.errorMessage ?? '')}</failure>`;
+        body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}">${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
+          retryMeta,
+        )}</system-out>`;
       } else if (r.outcome === 'skipped' || r.outcome === 'blocked') {
-        body = `<skipped/>`;
+        body = `<skipped/><system-out>${xmlEscape(retryMeta)}</system-out>`;
+      } else {
+        body = `<system-out>${xmlEscape(retryMeta)}</system-out>`;
       }
       return `<testcase classname="d365fo-agentic" name="${xmlEscape(r.title)}" time="${t}">${body}</testcase>`;
     })
@@ -59,6 +64,8 @@ function toHtml(results: TestResult[]): string {
   <td>${xmlEscape(r.testCaseId)}</td>
   <td>${xmlEscape(r.title)}</td>
   <td><span class="badge ${r.outcome}">${r.outcome}</span></td>
+  <td>${r.attemptCount ?? 1}</td>
+  <td>${xmlEscape(`${r.firstOutcome ?? r.outcome} → ${r.outcome}`)}</td>
   <td>${(r.durationMs / 1000).toFixed(2)}s</td>
   <td>${r.steps.length}</td>
   <td>${r.errorMessage ? xmlEscape(r.errorMessage) : ''}</td>
@@ -71,7 +78,12 @@ function toHtml(results: TestResult[]): string {
     failed: results.filter((r) => r.outcome === 'failed').length,
     blocked: results.filter((r) => r.outcome === 'blocked').length,
     skipped: results.filter((r) => r.outcome === 'skipped').length,
+    firstPassPassed: results.filter((r) => (r.firstOutcome ?? r.outcome) === 'passed').length,
+    recoveredByRetry: results.filter((r) => (r.firstOutcome ?? r.outcome) !== 'passed' && r.outcome === 'passed').length,
+    unresolvedAfterRetry: results.filter((r) => r.outcome === 'failed' || r.outcome === 'blocked').length,
   };
+  const firstPassRate = summary.total ? ((summary.firstPassPassed / summary.total) * 100).toFixed(1) : '0.0';
+  const postRetryRate = summary.total ? ((summary.passed / summary.total) * 100).toFixed(1) : '0.0';
   return `<!doctype html><html><head><meta charset="utf-8"><title>d365fo-agentic report</title>
 <style>
 body{font-family:system-ui,sans-serif;margin:24px;color:#222}
@@ -94,9 +106,13 @@ th{background:#fafafa}
   <div>Failed: ${summary.failed}</div>
   <div>Blocked: ${summary.blocked}</div>
   <div>Skipped: ${summary.skipped}</div>
+  <div>First-pass pass rate: ${firstPassRate}%</div>
+  <div>Post-retry pass rate: ${postRetryRate}%</div>
+  <div>Recovered by retry: ${summary.recoveredByRetry}</div>
+  <div>Unresolved after retry: ${summary.unresolvedAfterRetry}</div>
 </div>
 <table>
-<thead><tr><th>ID</th><th>Title</th><th>Outcome</th><th>Duration</th><th>Steps</th><th>Error</th></tr></thead>
+<thead><tr><th>ID</th><th>Title</th><th>Outcome</th><th>Attempts</th><th>First→Final</th><th>Duration</th><th>Steps</th><th>Error</th></tr></thead>
 <tbody>${rows}</tbody></table>
 </body></html>`;
 }
