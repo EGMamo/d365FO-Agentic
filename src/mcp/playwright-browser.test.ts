@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import {
+  checkPlaywrightBrowser,
   ensurePlaywrightBrowser,
+  playwrightCacheDir,
   playwrightInstallArgs,
   PLAYWRIGHT_MCP_PACKAGE,
   type Exec,
@@ -45,6 +47,53 @@ describe('playwrightInstallArgs', () => {
       specs: Map<string, { args?: string[] }>;
     };
     assert.ok(specs.get('playwright')?.args?.includes(PLAYWRIGHT_MCP_PACKAGE));
+  });
+});
+
+describe('checkPlaywrightBrowser (used by doctor)', () => {
+  const probe = (entries: string[] | Error) => ({
+    env: {} as NodeJS.ProcessEnv,
+    platform: 'linux' as const,
+    home: '/home/u',
+    list: async () => {
+      if (entries instanceof Error) throw entries;
+      return entries;
+    },
+  });
+
+  it('reports a missing browser with the exact install command', async () => {
+    const status = await checkPlaywrightBrowser({ PW_BROWSER: 'chromium' }, probe(['firefox-1495', 'chromium_headless_shell-1247']));
+    assert.equal(status.installed, false);
+    assert.equal(status.cacheDir, '/home/u/.cache/ms-playwright');
+    assert.equal(
+      status.installCommand,
+      'npx -y @playwright/mcp@latest install-browser --no-progress --no-remove chrome-for-testing',
+    );
+  });
+
+  it('treats a missing cache directory as not installed', async () => {
+    const status = await checkPlaywrightBrowser({ PW_BROWSER: 'firefox' }, probe(new Error('ENOENT')));
+    assert.equal(status.installed, false);
+    assert.match(status.installCommand, /firefox$/);
+  });
+
+  it('detects the configured browser in the cache', async () => {
+    assert.equal((await checkPlaywrightBrowser({ PW_BROWSER: 'chromium' }, probe(['chromium-1247']))).installed, true);
+    assert.equal((await checkPlaywrightBrowser({ PW_BROWSER: 'webkit' }, probe(['chromium-1247']))).installed, false);
+  });
+
+  it('does not guess when browsers live in node_modules (PLAYWRIGHT_BROWSERS_PATH=0)', async () => {
+    const status = await checkPlaywrightBrowser(
+      { PW_BROWSER: 'chromium' },
+      { ...probe([]), env: { PLAYWRIGHT_BROWSERS_PATH: '0' } },
+    );
+    assert.equal(status.installed, undefined);
+  });
+
+  it('resolves the cache directory per platform and honours the override', () => {
+    assert.equal(playwrightCacheDir({ PLAYWRIGHT_BROWSERS_PATH: '/pw' }, 'linux', '/h'), '/pw');
+    assert.equal(playwrightCacheDir({}, 'darwin', '/Users/u'), '/Users/u/Library/Caches/ms-playwright');
+    assert.equal(playwrightCacheDir({ LOCALAPPDATA: '/L' }, 'win32', '/h'), '/L/ms-playwright');
   });
 });
 

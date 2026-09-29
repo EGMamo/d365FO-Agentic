@@ -14,6 +14,7 @@ import {
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
+import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 
 const program = new Command();
 program
@@ -30,6 +31,17 @@ program
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'}`);
     console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
+    const browser = await checkPlaywrightBrowser(cfg);
+    if (browser.installed === false) {
+      console.log(`Playwright browser (${cfg.PW_BROWSER}): NOT INSTALLED (looked in ${browser.cacheDir})`);
+      console.log(`  Install it with: ${browser.installCommand}`);
+      if (cfg.PW_AUTO_INSTALL) console.log('  (PW_AUTO_INSTALL is on, so `run` will also install it automatically.)');
+      else issues.push(`Playwright ${cfg.PW_BROWSER} browser is missing and PW_AUTO_INSTALL is off. Run: ${browser.installCommand}`);
+    } else if (browser.installed) {
+      console.log(`Playwright browser (${cfg.PW_BROWSER}): installed`);
+    } else {
+      console.log(`Playwright browser (${cfg.PW_BROWSER}): not checked (PLAYWRIGHT_BROWSERS_PATH=0)`);
+    }
     if (issues.length) {
       console.log('\nIssues:');
       for (const i of issues) console.log(`  - ${i}`);
