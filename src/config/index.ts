@@ -6,6 +6,7 @@ import { z } from 'zod';
  * endpoints live in `.env` so the agent stays portable.
  */
 const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models']);
+const stepStatusEnum = z.enum(['passed', 'failed', 'skipped', 'blocked']);
 
 const envSchema = z.object({
   LLM_PROVIDER: providerEnum.default('anthropic'),
@@ -54,6 +55,23 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
   AGENT_MAX_STEPS: z.coerce.number().int().positive().default(40),
+  AGENT_RELOOP_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
+  AGENT_RELOOP_RETRY_ON: z
+    .string()
+    .default('failed,blocked')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((x) => x.trim().toLowerCase())
+        .filter((x): x is z.infer<typeof stepStatusEnum> => stepStatusEnum.safeParse(x).success),
+    ),
+  AGENT_RELOOP_COOLDOWN_MS: z.coerce.number().int().min(0).default(1000),
+  LLM_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  LLM_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
+  LLM_HTTP_RETRY_BASE_MS: z.coerce.number().int().positive().default(500),
+  AZDO_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  AZDO_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
+  AZDO_HTTP_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
   KB_DIR: z.string().default('./knowledge'),
   REPORT_DIR: z.string().default('./reports'),
 });

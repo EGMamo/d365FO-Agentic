@@ -3,14 +3,11 @@ import { Command } from 'commander';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig, validateForRun } from '../config/index.js';
-import { createLlmProvider } from '../llm/index.js';
-import { buildDefaultManager } from '../mcp/registry.js';
-import { KnowledgeBase } from '../knowledge/kb.js';
 import { AzureDevOpsClient } from '../devops/client.js';
-import { AgentOrchestrator } from '../agent/orchestrator.js';
-import { loadLocalTestCases } from '../testing/loader.js';
+import { KnowledgeBase } from '../knowledge/kb.js';
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
+import { discoverTestCases, executeTestRun } from '../core/runner.js';
 
 const program = new Command();
 program
@@ -63,6 +60,9 @@ program
   .option('--case <id>', 'Filter to a single test-case id')
   .option('--dry-run', 'Skip mutating browser actions (planning only)')
   .option('--upload', 'Upload results to Azure DevOps after the run')
+  .option('--reloop-max-retries <n>', 'Retries per case after first attempt', Number.parseInt)
+  .option('--reloop-retry-on <csv>', 'Outcomes to retry (comma-separated)', 'failed,blocked')
+  .option('--reloop-cooldown-ms <ms>', 'Delay between retries in milliseconds', Number.parseInt)
   .action(async (opts: {
     plan?: string;
     suite?: string;
@@ -70,65 +70,49 @@ program
     case?: string;
     dryRun?: boolean;
     upload?: boolean;
+    reloopMaxRetries?: number;
+    reloopRetryOn?: string;
+    reloopCooldownMs?: number;
   }) => {
     const cfg = loadConfig();
     if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
+    if (opts.reloopMaxRetries !== undefined && !Number.isNaN(opts.reloopMaxRetries)) {
+      cfg.AGENT_RELOOP_MAX_RETRIES = Math.max(0, opts.reloopMaxRetries);
+    }
+    if (opts.reloopCooldownMs !== undefined && !Number.isNaN(opts.reloopCooldownMs)) {
+      cfg.AGENT_RELOOP_COOLDOWN_MS = Math.max(0, opts.reloopCooldownMs);
+    }
+    if (opts.reloopRetryOn) {
+      cfg.AGENT_RELOOP_RETRY_ON = opts.reloopRetryOn
+        .split(',')
+        .map((x) => x.trim().toLowerCase())
+        .filter((x): x is (typeof cfg.AGENT_RELOOP_RETRY_ON)[number] =>
+          ['passed', 'failed', 'skipped', 'blocked'].includes(x),
+        );
+    }
     const issues = validateForRun(cfg);
     if (issues.length) {
       for (const i of issues) console.error(`config: ${i}`);
       process.exit(1);
     }
 
-    const cases = await discover(cfg, opts);
-    const filtered = opts.case ? cases.filter((c) => c.id === opts.case) : cases;
-    if (filtered.length === 0) {
+    const execution = await executeTestRun(cfg, {
+      plan: opts.plan,
+      suite: opts.suite,
+      local: opts.local,
+      caseId: opts.case,
+      dryRun: cfg.AGENT_DRY_RUN,
+      upload: opts.upload,
+      reloopMaxRetries: cfg.AGENT_RELOOP_MAX_RETRIES,
+      reloopRetryOn: cfg.AGENT_RELOOP_RETRY_ON,
+      reloopCooldownMs: cfg.AGENT_RELOOP_COOLDOWN_MS,
+    });
+    if (execution.cases.length === 0) {
       console.log('No test cases matched.');
       return;
     }
-
-    const llm = createLlmProvider(cfg);
-    const mcp = buildDefaultManager(cfg);
-    const kb = new KnowledgeBase(cfg.KB_DIR);
-    await kb.load();
-
-    const orchestrator = new AgentOrchestrator({
-      cfg,
-      llm,
-      mcp,
-      kb,
-      mcpServers: ['playwright', 'learn'],
-    });
-
-    const results: TestResult[] = [];
-    try {
-      for (const tc of filtered) {
-        console.log(`\n▶ Running [${tc.id}] ${tc.title}`);
-        const result = await orchestrator.runTestCase(tc);
-        results.push(result);
-        console.log(`  → ${result.outcome} in ${(result.durationMs / 1000).toFixed(1)}s`);
-      }
-    } finally {
-      await mcp.closeAll();
-      await kb.save();
-    }
-
-    const paths = await writeReports(cfg.REPORT_DIR, results);
-    console.log(`\nReports:\n  ${paths.html}\n  ${paths.json}\n  ${paths.junit}`);
-
-    if (opts.upload) {
-      if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT || !cfg.AZDO_PAT) {
-        console.error('--upload requires AZDO_ORG_URL, AZDO_PROJECT, and AZDO_PAT');
-        process.exit(1);
-      }
-      const planId = opts.plan ?? cfg.AZDO_TEST_PLAN_ID;
-      if (!planId) {
-        console.error('--plan or AZDO_TEST_PLAN_ID is required to upload');
-        process.exit(1);
-      }
-      const client = new AzureDevOpsClient(cfg);
-      const { runId, url } = await client.publishResults(planId, results);
-      console.log(`Uploaded to Azure DevOps run #${runId}: ${url}`);
-    }
+    console.log(`\nReports:\n  ${execution.reportPaths.html}\n  ${execution.reportPaths.json}\n  ${execution.reportPaths.junit}`);
+    if (execution.upload) console.log(`Uploaded to Azure DevOps run #${execution.upload.runId}: ${execution.upload.url}`);
   });
 
 program
@@ -178,16 +162,7 @@ program
   });
 
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
-  if (opts.local) {
-    return loadLocalTestCases(resolve(opts.local));
-  }
-  const planId = opts.plan ?? cfg.AZDO_TEST_PLAN_ID;
-  const suiteId = opts.suite ?? cfg.AZDO_TEST_SUITE_ID;
-  if (!planId || !suiteId) {
-    throw new Error('Either --local, or --plan+--suite (or AZDO_TEST_PLAN_ID+AZDO_TEST_SUITE_ID) must be provided');
-  }
-  const client = new AzureDevOpsClient(cfg);
-  return client.listTestCases(planId, suiteId);
+  return discoverTestCases(cfg, opts);
 }
 
 program.parseAsync(process.argv).catch((e) => {

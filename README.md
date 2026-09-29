@@ -18,6 +18,7 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - MCP client for stdio (Playwright) and HTTP streamable (Learn) servers.
 - Azure DevOps ingestion of test cases + publishing of test runs, results, and attachments (PAT via `.env`).
 - Deterministic, structured reports: HTML, JSON, JUnit XML.
+- Controlled reloop/retry of failed or blocked test cases with attempt audit history.
 - Self-learning knowledge base (`knowledge/kb.json`) with keyword retrieval.
 - Dry-run mode that plans without mutating the target environment.
 - CLI: `doctor`, `discover`, `run`, `report`, `upload`, `learn`.
@@ -42,6 +43,9 @@ node dist/cli/index.js run --local examples/testcases --dry-run
 
 # 5. Real run + upload to Azure DevOps
 node dist/cli/index.js run --plan 1234 --suite 5678 --upload
+
+# 6. Run with retries (reloop)
+node dist/cli/index.js run --local examples/testcases --reloop-max-retries 2 --reloop-retry-on failed,blocked
 ```
 
 Reports are written to `./reports` and the knowledge base to `./knowledge/kb.json`.
@@ -58,6 +62,9 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `D365_USERNAME` / `D365_PASSWORD` | Test account credentials (non-MFA recommended for automated runs) |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
+| `AGENT_RELOOP_MAX_RETRIES` / `AGENT_RELOOP_RETRY_ON` | Retry controls for failed/blocked outcomes |
+| `LLM_HTTP_TIMEOUT_MS` / `LLM_HTTP_MAX_RETRIES` | LLM timeout and retry resilience |
+| `AZDO_HTTP_TIMEOUT_MS` / `AZDO_HTTP_MAX_RETRIES` | Azure DevOps timeout and retry resilience |
 
 ## Test-case format
 
@@ -77,6 +84,7 @@ The agent is prompted as a **QA persona** that:
 - [Azure DevOps setup](docs/azure-devops.md)
 - [D365 F&O notes](docs/d365fo.md)
 - [Self-learning](docs/self-learning.md)
+- [Desktop transition roadmap](docs/desktop-roadmap.md)
 
 ## License
 

@@ -22,6 +22,7 @@ export interface TestCase {
 }
 
 export type StepStatus = 'passed' | 'failed' | 'skipped' | 'blocked';
+export type RunState = 'pending' | 'running' | 'retrying' | 'completed' | 'failed' | 'blocked';
 
 export interface StepResult {
   index: number;
@@ -36,6 +37,7 @@ export interface TestResult {
   testCaseId: string;
   title: string;
   outcome: StepStatus;
+  runState: RunState;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -43,4 +45,17 @@ export interface TestResult {
   artifacts: string[]; // absolute paths to screenshots / traces / logs
   errorMessage?: string;
   learnings?: string[];
+  attemptCount?: number;
+  firstOutcome?: StepStatus;
+  previousOutcome?: StepStatus;
+  retryHistory?: Array<{
+    attempt: number;
+    outcome: StepStatus;
+    runState: RunState;
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    retryReason?: string;
+    errorMessage?: string;
+  }>;
 }
