@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 
 /**
@@ -32,6 +35,57 @@ export type Exec = (command: string, args: string[], onLine: (line: string) => v
 export function playwrightInstallArgs(browser: AppConfig['PW_BROWSER']): string[] {
   // `--no-remove`: never garbage-collect browsers other projects may rely on.
   return ['-y', PLAYWRIGHT_MCP_PACKAGE, 'install-browser', '--no-progress', '--no-remove', INSTALL_NAMES[browser]];
+}
+
+/** Directory prefix Playwright uses for each browser inside its cache (e.g. `chromium-1247`). */
+const CACHE_PREFIXES: Record<AppConfig['PW_BROWSER'], string> = {
+  chromium: 'chromium-',
+  firefox: 'firefox-',
+  webkit: 'webkit-',
+};
+
+export interface BrowserStatus {
+  /** `undefined` when the cache location cannot be inspected (e.g. PLAYWRIGHT_BROWSERS_PATH=0). */
+  installed: boolean | undefined;
+  cacheDir?: string;
+  /** Exact command that installs the configured browser. */
+  installCommand: string;
+}
+
+export interface BrowserProbe {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  home?: string;
+  list?: (dir: string) => Promise<string[]>;
+}
+
+/** Playwright's browser cache location, or `undefined` when it lives inside node_modules. */
+export function playwrightCacheDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string | undefined {
+  const override = env.PLAYWRIGHT_BROWSERS_PATH;
+  if (override === '0') return undefined;
+  if (override) return override;
+  if (platform === 'win32') return join(env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'ms-playwright');
+  if (platform === 'darwin') return join(home, 'Library', 'Caches', 'ms-playwright');
+  return join(env.XDG_CACHE_HOME ?? join(home, '.cache'), 'ms-playwright');
+}
+
+/** Read-only check (nothing is downloaded) used by `doctor` to report whether the browser is present. */
+export async function checkPlaywrightBrowser(
+  cfg: Pick<AppConfig, 'PW_BROWSER'>,
+  probe: BrowserProbe = {},
+): Promise<BrowserStatus> {
+  const installCommand = `npx ${playwrightInstallArgs(cfg.PW_BROWSER).join(' ')}`;
+  const cacheDir = playwrightCacheDir(probe.env ?? process.env, probe.platform ?? process.platform, probe.home ?? homedir());
+  if (!cacheDir) return { installed: undefined, installCommand };
+  const list = probe.list ?? ((dir: string) => readdir(dir));
+  let entries: string[];
+  try {
+    entries = await list(cacheDir);
+  } catch {
+    entries = [];
+  }
+  const prefix = CACHE_PREFIXES[cfg.PW_BROWSER];
+  return { installed: entries.some((e) => e.startsWith(prefix)), cacheDir, installCommand };
 }
 
 /**
