@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
+import { ensurePlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { buildDefaultManager } from '../mcp/registry.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { AgentOrchestrator } from '../agent/orchestrator.js';
@@ -58,6 +59,8 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   }
 
   const llm = createLlmProvider(cfg);
+  // After the LLM check so missing credentials fail before a large download.
+  await ensurePlaywrightBrowser(cfg);
   const mcp = buildDefaultManager(cfg);
   const kb = new KnowledgeBase(cfg.KB_DIR);
   await kb.load();

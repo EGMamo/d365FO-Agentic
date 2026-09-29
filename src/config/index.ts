@@ -50,6 +50,10 @@ const envSchema = z.object({
   PW_TRACE: z.enum(['on', 'off', 'on-failure']).default('on-failure'),
   PW_VIDEO: z.enum(['on', 'off', 'on-failure']).default('off'),
   PW_BROWSER: z.enum(['chromium', 'firefox', 'webkit']).default('chromium'),
+  PW_AUTO_INSTALL: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() === 'true'),
 
   LEARN_MCP_URL: z.string().default('https://learn.microsoft.com/api/mcp'),
 

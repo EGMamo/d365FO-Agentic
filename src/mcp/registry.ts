@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config/index.js';
 import { McpManager, type McpServerSpec } from './manager.js';
+import { PLAYWRIGHT_MCP_PACKAGE } from './playwright-browser.js';
 
 /**
  * Builds the default MCP server registry for the agent. Playwright and Learn
@@ -14,7 +15,7 @@ export function buildDefaultManager(cfg: AppConfig): McpManager {
     command: 'npx',
     args: [
       '-y',
-      '@playwright/mcp@latest',
+      PLAYWRIGHT_MCP_PACKAGE,
       ...(cfg.PW_HEADLESS ? ['--headless'] : []),
       '--browser',
       cfg.PW_BROWSER,
