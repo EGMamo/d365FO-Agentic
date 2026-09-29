@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config/index.js';
 import { AnthropicProvider } from './anthropic.js';
+import { createGitHubCopilotProvider, resolveGitHubToken } from './github-copilot.js';
 import { OpenAiCompatibleProvider } from './openai-compatible.js';
 import type { LlmProvider } from './types.js';
 
@@ -64,6 +65,23 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
         maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
         retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
+      });
+    }
+    case 'github-copilot': {
+      const githubToken = resolveGitHubToken(cfg.GITHUB_COPILOT_TOKEN);
+      if (!githubToken) {
+        throw new Error('GitHub Copilot credentials are required: set GITHUB_COPILOT_TOKEN or run `d365fo-agent copilot-login`');
+      }
+      return createGitHubCopilotProvider({
+        githubToken,
+        model: cfg.GITHUB_COPILOT_MODEL,
+        maxTokens: cfg.LLM_MAX_TOKENS,
+        temperature: cfg.LLM_TEMPERATURE,
+        http: {
+          timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+          maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+          retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
+        },
       });
     }
   }

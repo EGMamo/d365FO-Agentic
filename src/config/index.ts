@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { resolveGitHubToken } from '../llm/github-copilot.js';
 
 /**
  * Central configuration loaded from environment variables. All secrets and
  * endpoints live in `.env` so the agent stays portable.
  */
-const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models']);
+const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models', 'github-copilot']);
 const stepStatusEnum = z.enum(['passed', 'failed', 'skipped', 'blocked']);
 
 const envSchema = z.object({
@@ -23,6 +24,8 @@ const envSchema = z.object({
   AZURE_OPENAI_API_VERSION: z.string().default('2024-10-21'),
   GITHUB_TOKEN: z.string().optional(),
   GITHUB_MODELS_MODEL: z.string().default('gpt-4o'),
+  GITHUB_COPILOT_TOKEN: z.string().optional(),
+  GITHUB_COPILOT_MODEL: z.string().default('gpt-4.1'),
 
   AZDO_ORG_URL: z.string().optional(),
   AZDO_PROJECT: z.string().optional(),
@@ -115,8 +118,29 @@ export function validateForRun(cfg: AppConfig): string[] {
     case 'github-models':
       if (!cfg.GITHUB_TOKEN) issues.push('GITHUB_TOKEN is required for provider=github-models');
       break;
+    case 'github-copilot':
+      if (!resolveGitHubToken(cfg.GITHUB_COPILOT_TOKEN)) {
+        issues.push('No GitHub Copilot credentials: set GITHUB_COPILOT_TOKEN or run `d365fo-agent copilot-login`');
+      }
+      break;
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
   return issues;
+}
+
+/** The model the selected provider will actually use (each provider reads its own variable). */
+export function activeModel(cfg: AppConfig): string {
+  switch (cfg.LLM_PROVIDER) {
+    case 'anthropic':
+      return cfg.LLM_MODEL;
+    case 'openai':
+      return cfg.OPENAI_MODEL;
+    case 'azure-openai':
+      return cfg.AZURE_OPENAI_DEPLOYMENT ?? '(missing)';
+    case 'github-models':
+      return cfg.GITHUB_MODELS_MODEL;
+    case 'github-copilot':
+      return cfg.GITHUB_COPILOT_MODEL;
+  }
 }

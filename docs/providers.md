@@ -30,9 +30,31 @@ AZURE_OPENAI_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_API_VERSION=2024-10-21
 ```
 
-## GitHub Models / Copilot
+## GitHub Copilot
 
-Uses the GitHub Models Azure inference endpoint. Requires a `GITHUB_TOKEN` with `models:read` access.
+Runs the agent on your **GitHub Copilot subscription** instead of a paid API key. This is a different service from GitHub Models (below): it authenticates as your Copilot account and uses the models your plan includes.
+
+```bash
+# One-time sign-in (GitHub device flow): prints a code to enter in the browser,
+# checks the account can use Copilot, then saves the token to
+# ~/.d365fo-agent/github-copilot.json (mode 0600).
+node dist/cli/index.js copilot-login
+```
+
+```env
+LLM_PROVIDER=github-copilot
+GITHUB_COPILOT_MODEL=gpt-4.1   # any model your Copilot plan offers
+# GITHUB_COPILOT_TOKEN=gho_...  # optional: use instead of the saved login (e.g. CI)
+```
+
+- **Model choice.** Available models depend on your plan and change over time. If a model is rejected, pick another with `GITHUB_COPILOT_MODEL`. Models must support tool calling.
+- **CI.** Run `copilot-login` locally, then store the `oauth_token` value from `~/.d365fo-agent/github-copilot.json` as a repository secret named `COPILOT_OAUTH_TOKEN` (Actions secret names cannot start with `GITHUB_`; the workflow maps it to `GITHUB_COPILOT_TOKEN`) and set the `LLM_PROVIDER` repository variable to `github-copilot`. The workflow's built-in `GITHUB_TOKEN` cannot be used. To change the model, add `GITHUB_COPILOT_MODEL` to the workflow's `env`. Treat the token as a password.
+- **Usage limits.** Every agent step is one request, and a run can issue up to `AGENT_MAX_STEPS` requests per attempt (times retries). Check your plan's rate limits and per-model usage multipliers before large suites.
+- **Stability caveat.** GitHub does not publish a public inference API for Copilot. This provider follows the same sign-in and token exchange as the editor plugins, which is undocumented and can change without notice. Personal access tokens are not accepted. Confirm your organization's Copilot policy allows this kind of use.
+
+## GitHub Models
+
+The separate GitHub Models prototyping API (Azure inference endpoint). Requires a `GITHUB_TOKEN` with `models:read` access; it is **not** billed through Copilot.
 
 ```env
 LLM_PROVIDER=github-models
