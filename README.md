@@ -53,6 +53,8 @@ node dist/cli/index.js run --local examples/testcases --reloop-max-retries 2 --r
 
 Reports are written to `./reports` and the knowledge base to `./knowledge/kb.json`.
 
+The first `run` downloads the Playwright browser it needs (~300 MB, once); later runs only spend about a second checking it. Set `PW_AUTO_INSTALL=false` to skip this and install it yourself with `npx @playwright/mcp install-browser chrome-for-testing`.
+
 ## Configuration
 
 All configuration is via environment variables (loaded from `.env`). See [`.env.example`](.env.example) for the full list. The essentials:
@@ -66,6 +68,7 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `D365_USERNAME` / `D365_PASSWORD` | Test account credentials (non-MFA recommended for automated runs) |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
+| `PW_BROWSER` / `PW_AUTO_INSTALL` | Playwright browser (`chromium` default) and whether to download it automatically when missing (default `true`) |
 | `AGENT_RELOOP_MAX_RETRIES` / `AGENT_RELOOP_RETRY_ON` | Retry controls for failed/blocked outcomes |
 | `LLM_HTTP_TIMEOUT_MS` / `LLM_HTTP_MAX_RETRIES` | LLM timeout and retry resilience |
 | `AZDO_HTTP_TIMEOUT_MS` / `AZDO_HTTP_MAX_RETRIES` | Azure DevOps timeout and retry resilience |
