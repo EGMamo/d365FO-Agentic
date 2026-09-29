@@ -19,6 +19,10 @@ export interface OpenAiCompatibleOptions {
   timeoutMs?: number;
   maxRetries?: number;
   retryBaseMs?: number;
+  /** Resolves credentials per request (short-lived tokens). Overrides `apiKey` / `baseUrl`. */
+  resolveAuth?: () => Promise<{ apiKey: string; baseUrl?: string }>;
+  /** Called on HTTP 401 so cached credentials can be dropped; the request is then retried once. */
+  onUnauthorized?: () => void;
 }
 
 export class OpenAiCompatibleProvider implements LlmProvider {
@@ -73,29 +77,40 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }));
     }
 
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      ...(this.opts.headers ?? {}),
-    };
-    if ((this.opts.authScheme ?? 'bearer') === 'bearer') {
-      headers.authorization = ['Bearer', this.opts.apiKey].join(' ');
-    } else {
-      headers[this.opts.authHeaderName ?? 'api-key'] = this.opts.apiKey;
-    }
+    const send = async (): Promise<Response> => {
+      const auth = await this.opts.resolveAuth?.();
+      const apiKey = auth?.apiKey ?? this.opts.apiKey;
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        ...(this.opts.headers ?? {}),
+      };
+      if ((this.opts.authScheme ?? 'bearer') === 'bearer') {
+        headers.authorization = ['Bearer', apiKey].join(' ');
+      } else {
+        headers[this.opts.authHeaderName ?? 'api-key'] = apiKey;
+      }
 
-    const res = await fetchWithResilience(
-      this.opts.baseUrl,
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      },
-      {
-        timeoutMs: this.opts.timeoutMs ?? 60000,
-        maxRetries: this.opts.maxRetries ?? 2,
-        retryBaseMs: this.opts.retryBaseMs ?? 500,
-      },
-    );
+      return fetchWithResilience(
+        auth?.baseUrl ?? this.opts.baseUrl,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        },
+        {
+          timeoutMs: this.opts.timeoutMs ?? 60000,
+          maxRetries: this.opts.maxRetries ?? 2,
+          retryBaseMs: this.opts.retryBaseMs ?? 500,
+        },
+      );
+    };
+
+    let res = await send();
+    if (res.status === 401 && this.opts.onUnauthorized) {
+      await res.text().catch(() => '');
+      this.opts.onUnauthorized();
+      res = await send();
+    }
 
     if (!res.ok) {
       const text = await res.text();

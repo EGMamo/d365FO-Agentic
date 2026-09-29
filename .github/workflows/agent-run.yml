@@ -42,7 +42,10 @@ jobs:
 
       - name: Doctor
         env:
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'anthropic' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Secret names cannot start with GITHUB_, hence the different secret name.
+          GITHUB_COPILOT_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
           AZDO_ORG_URL: ${{ secrets.AZDO_ORG_URL }}
           AZDO_PROJECT: ${{ secrets.AZDO_PROJECT }}
           AZDO_PAT: ${{ secrets.AZDO_PAT }}
@@ -55,7 +58,10 @@ jobs:
 
       - name: Run tests
         env:
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'anthropic' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Secret names cannot start with GITHUB_, hence the different secret name.
+          GITHUB_COPILOT_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
           AZDO_ORG_URL: ${{ secrets.AZDO_ORG_URL }}
           AZDO_PROJECT: ${{ secrets.AZDO_PROJECT }}
           AZDO_PAT: ${{ secrets.AZDO_PAT }}

@@ -6,7 +6,8 @@ The agent is **LLM-agnostic** and ships with adapters for:
 - **Anthropic Claude** (default)
 - **OpenAI**
 - **Azure OpenAI**
-- **GitHub Models / Copilot**
+- **GitHub Copilot** (uses your Copilot subscription — see [Providers](docs/providers.md#github-copilot))
+- **GitHub Models**
 
 It maintains a **local knowledge base** so it can learn selectors, recipes, and remediations across runs.
 
@@ -21,7 +22,7 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
 - Self-learning knowledge base (`knowledge/kb.json`) with keyword retrieval.
 - Dry-run mode that plans without mutating the target environment.
-- CLI: `doctor`, `discover`, `run`, `report`, `upload`, `learn`.
+- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Quick start
@@ -34,6 +35,8 @@ npm run build
 # 2. Configure
 cp .env.example .env
 # fill in ANTHROPIC_API_KEY, D365_BASE_URL, and (optionally) Azure DevOps + F&O creds
+# To use GitHub Copilot instead of Claude: set LLM_PROVIDER=github-copilot, then run
+#   node dist/cli/index.js copilot-login
 
 # 3. Sanity check
 node dist/cli/index.js doctor
@@ -56,8 +59,9 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 
 | Variable | Purpose |
 | --- | --- |
-| `LLM_PROVIDER` | `anthropic` (default), `openai`, `azure-openai`, `github-models` |
+| `LLM_PROVIDER` | `anthropic` (default), `openai`, `azure-openai`, `github-models`, `github-copilot` |
 | `ANTHROPIC_API_KEY` | Required when provider is `anthropic` |
+| `GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_MODEL` | Provider `github-copilot`: token (or run `copilot-login` to save one) and model |
 | `D365_BASE_URL` | Your F&O sandbox URL |
 | `D365_USERNAME` / `D365_PASSWORD` | Test account credentials (non-MFA recommended for automated runs) |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |

@@ -2,9 +2,15 @@
 import { Command } from 'commander';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { loadConfig, validateForRun } from '../config/index.js';
+import { activeModel, loadConfig, validateForRun } from '../config/index.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
+import {
+  CopilotSessionAuth,
+  DEFAULT_AUTH_FILE,
+  loginWithDeviceFlow,
+  saveGitHubToken,
+} from '../llm/github-copilot.js';
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
@@ -21,7 +27,7 @@ program
   .action(async () => {
     const cfg = loadConfig();
     const issues = validateForRun(cfg);
-    console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${cfg.LLM_MODEL})`);
+    console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'}`);
     console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
     if (issues.length) {
@@ -31,6 +37,30 @@ program
     } else {
       console.log('\nConfiguration looks good.');
     }
+  });
+
+program
+  .command('copilot-login')
+  .description('Sign in to GitHub Copilot (device flow) and save the token for LLM_PROVIDER=github-copilot')
+  .action(async () => {
+    const cfg = loadConfig();
+    const http = {
+      timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+      maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+      retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
+    };
+    const token = await loginWithDeviceFlow({
+      http,
+      onPrompt: ({ userCode, verificationUri }) => {
+        console.log(`\nOpen ${verificationUri} and enter the code: ${userCode}`);
+        console.log('Waiting for authorization...');
+      },
+    });
+    // Prove the account can actually get a Copilot session before saving anything.
+    await new CopilotSessionAuth(token, http).get();
+    await saveGitHubToken(token);
+    console.log(`\nSigned in. Token saved to ${DEFAULT_AUTH_FILE}`);
+    console.log('Set LLM_PROVIDER=github-copilot (and optionally GITHUB_COPILOT_MODEL) to use it.');
   });
 
 program
