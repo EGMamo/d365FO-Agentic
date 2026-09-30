@@ -9,6 +9,8 @@ import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, credentialFor, redactSecrets } from '../d365fo/login.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 
+const DEFAULT_MAX_REPEATED_CALLS = 3;
+
 const LOCAL_TOOLS: LlmTool[] = [
   {
     name: 'report_step',
@@ -197,6 +199,9 @@ export class AgentOrchestrator {
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
     let stopped = false;
+    const maxRepeats = this.cfg.AGENT_MAX_REPEATED_CALLS ?? DEFAULT_MAX_REPEATED_CALLS;
+    let lastCallKey: string | undefined;
+    let repeats = 0;
 
     try {
       for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
@@ -216,6 +221,15 @@ export class AgentOrchestrator {
         }
 
         for (const call of response.toolCalls) {
+          const callKey = `${call.name}:${JSON.stringify(call.arguments)}`;
+          repeats = callKey === lastCallKey ? repeats + 1 : 1;
+          lastCallKey = callKey;
+          if (maxRepeats > 0 && repeats > maxRepeats) {
+            outcome = 'blocked';
+            overallError = `Agent stopped: ${call.name} was called ${repeats} times in a row with identical arguments (limit ${maxRepeats}, AGENT_MAX_REPEATED_CALLS). The run is not making progress.`;
+            stopped = true;
+            break;
+          }
           if (this.cfg.AGENT_VERBOSE) this.log(`→ ${call.name} ${JSON.stringify(call.arguments)}`);
           const dispatched = await this.dispatch(call, {
             tc,
@@ -395,6 +409,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isMutatingBrowserTool(name: string): boolean {
-  return /(click|type|fill|drag|press|upload|handle_dialog|select_option|navigate)/i.test(name);
+/**
+ * Browser tools that change state in the app under test. Navigation and snapshots are
+ * deliberately not listed: in a dry run they must still execute so the model can see a page
+ * (e.g. reach the login screen) instead of looping on a skipped navigate.
+ */
+export function isMutatingBrowserTool(name: string): boolean {
+  return /(click|type|fill|drag|press|upload|handle_dialog|select_option)/i.test(name);
 }
