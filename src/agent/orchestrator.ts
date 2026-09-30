@@ -6,7 +6,7 @@ import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import type { KnowledgeBase } from '../knowledge/kb.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
-import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, credentialFor, redactSecrets } from '../d365fo/login.js';
+import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 
 const DEFAULT_MAX_REPEATED_CALLS = 3;
@@ -87,6 +87,7 @@ export class AgentOrchestrator {
   private cfg: AppConfig;
   private llm: LlmProvider;
   private mcp: McpManager;
+  private browserTypeSchema?: Record<string, unknown>;
   private kb: KnowledgeBase;
   private mcpServers: string[];
 
@@ -172,6 +173,8 @@ export class AgentOrchestrator {
       try {
         const tools = await this.mcp.listTools(server);
         mcpTools.push(...tools);
+        const bt = tools.find((t) => t.server === 'playwright' && t.name === 'browser_type');
+        if (bt) this.browserTypeSchema = bt.inputSchema;
       } catch (e) {
         console.warn(`[agent] failed to list tools for MCP server '${server}': ${(e as Error).message}`);
       }
@@ -297,27 +300,37 @@ export class AgentOrchestrator {
       return { content: JSON.stringify({ ok: true, recorded: step.index }) };
     }
     if (call.name === CREDENTIAL_TOOL_NAME) {
+      const field = String(call.arguments.field);
       const secret = credentialFor(this.cfg, call.arguments.field);
       if (!secret) {
         return {
           content: JSON.stringify({
-            error: `No value configured for ${String(call.arguments.field)}: set D365_USERNAME / D365_PASSWORD in .env. Mark the step BLOCKED.`,
+            error: `No value configured for ${field}: set D365_USERNAME / D365_PASSWORD in .env. Mark the step BLOCKED.`,
           }),
         };
       }
       if (this.cfg.AGENT_DRY_RUN) return { content: JSON.stringify({ dryRun: true, note: 'Skipped credential entry' }) };
+      const ref = (call.arguments.ref ?? call.arguments.target) as string | undefined;
+      if (!ref) {
+        return { content: JSON.stringify({ error: 'Missing `ref`: take the element ref from the latest browser_snapshot and call again.' }) };
+      }
       try {
-        const res = await this.mcp.callTool('playwright', 'browser_type', {
-          element: (call.arguments.element as string | undefined) ?? `${String(call.arguments.field)} field`,
-          ref: call.arguments.ref,
-          text: secret,
-          submit: Boolean(call.arguments.submit),
-        });
-        return {
-          content: redactSecrets(this.cfg, JSON.stringify(res.isError ? { error: res.content } : { ok: true, entered: call.arguments.field })),
-        };
+        const res = await this.mcp.callTool(
+          'playwright',
+          'browser_type',
+          browserTypeArgs(this.browserTypeSchema, {
+            ref,
+            element: (call.arguments.element as string | undefined) ?? `${field} field`,
+            text: secret,
+            submit: Boolean(call.arguments.submit),
+          }),
+        );
+        const body = res.isError
+          ? { error: `The credential was configured, but typing it failed: ${mcpErrorText(res.content)}` }
+          : { ok: true, entered: call.arguments.field };
+        return { content: redactSecrets(this.cfg, JSON.stringify(body)) };
       } catch (e) {
-        return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
+        return { content: redactSecrets(this.cfg, JSON.stringify({ error: `Typing the credential failed: ${(e as Error).message}` })) };
       }
     }
     if (call.name === 'kb_search') {

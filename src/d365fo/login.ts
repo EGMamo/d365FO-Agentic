@@ -17,10 +17,11 @@ export const CREDENTIAL_TOOL: LlmTool = {
     'Set `submit` to press Enter after typing (use it for the username and the password steps of the Microsoft sign-in page).',
   inputSchema: {
     type: 'object',
-    required: ['field', 'ref'],
+    required: ['field'],
     properties: {
       field: { type: 'string', enum: ['username', 'password'] },
-      ref: { type: 'string', description: 'Element ref from the latest browser_snapshot' },
+      ref: { type: 'string', description: 'Element ref from the latest browser_snapshot (e.g. "e28")' },
+      target: { type: 'string', description: 'Alias of `ref`' },
       element: { type: 'string', description: 'Human-readable field description (e.g. "Email or phone")' },
       submit: { type: 'boolean', description: 'Press Enter after typing', default: false },
     },
@@ -40,4 +41,32 @@ export function redactSecrets(cfg: AppConfig, text: string): string {
     if (secret) out = out.split(secret).join('***');
   }
   return out;
+}
+
+/**
+ * Builds the `browser_type` arguments for the installed Playwright MCP. Newer
+ * releases take the snapshot reference as `target`; older ones as `ref`. The
+ * server's input schema is strict, so only the key it declares may be sent.
+ */
+export function browserTypeArgs(
+  schema: Record<string, unknown> | undefined,
+  a: { ref: string; element?: string; text: string; submit?: boolean },
+): Record<string, unknown> {
+  const props = (schema?.properties ?? {}) as Record<string, unknown>;
+  const refKey = 'target' in props || !('ref' in props) ? 'target' : 'ref';
+  const args: Record<string, unknown> = { [refKey]: a.ref, text: a.text, submit: Boolean(a.submit) };
+  if (a.element && (!schema || 'element' in props)) args.element = a.element;
+  return args;
+}
+
+/** Flattens an MCP error result into short text, with credentials redacted by the caller. */
+export function mcpErrorText(content: unknown): string {
+  if (Array.isArray(content)) {
+    const t = content
+      .map((c) => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (t) return t;
+  }
+  return typeof content === 'string' ? content : JSON.stringify(content);
 }
