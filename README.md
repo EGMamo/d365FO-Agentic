@@ -102,6 +102,7 @@ Redaction cannot recognise arbitrary business data (customer names, amounts) tha
 - [Azure DevOps setup](docs/azure-devops.md)
 - [D365 F&O notes](docs/d365fo.md)
 - [Self-learning](docs/self-learning.md)
+- [Roadmap](docs/roadmap.md)
 - [Desktop transition roadmap](docs/desktop-roadmap.md)
 
 ## License
