@@ -30,6 +30,7 @@ program
     const issues = validateForRun(cfg);
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'}`);
+    console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
     console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
     const browser = await checkPlaywrightBrowser(cfg);
     if (browser.installed === false) {

@@ -61,6 +61,10 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  AGENT_VERBOSE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   AGENT_MAX_STEPS: z.coerce.number().int().positive().default(40),
   AGENT_RELOOP_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
   AGENT_RELOOP_RETRY_ON: z
@@ -130,6 +134,9 @@ export function validateForRun(cfg: AppConfig): string[] {
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
+  if (!cfg.D365_USERNAME || !cfg.D365_PASSWORD) {
+    issues.push('D365_USERNAME and D365_PASSWORD are required so the agent can sign in to F&O');
+  }
   return issues;
 }
 
