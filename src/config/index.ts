@@ -101,6 +101,9 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
   AGENT_MAX_STEPS: z.coerce.number().int().positive().default(40),
+  // Per-tool-call time budgets. A call that exceeds them is reported to the model and recorded on the result.
+  AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  AGENT_NAV_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
   AGENT_MAX_REPEATED_CALLS: z.coerce.number().int().min(0).default(3),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
