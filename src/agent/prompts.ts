@@ -17,6 +17,7 @@ export function baseSystemPrompt(cfg: AppConfig): string {
     'You have these MCP tool families available:',
     '- `browser_*` (Playwright MCP, restricted to a safe subset): drive the F&O web UI. Prefer `browser_snapshot` before actions to identify accessible refs.',
     '- `microsoft_docs_search` / `microsoft_docs_fetch` (Learn MCP): look up official Microsoft product behavior. Cite when relevant.',
+    ...(cfg.RELEASE_PLANNER_MCP_URL ? ['- `release-planner__*`: read-only queries of Microsoft release plans (which features land in which release wave). Use them only when a test case asks about release-wave changes.'] : []),
     '- `kb_*` (local knowledge base): recall past selectors, recipes, and remediations.',
     '- `report_step` / `finish_test`: record structured verdicts. `record_value` / `recall_values`: keep values you create or discover during the run (a generated vendor account, an order number).',
     '',

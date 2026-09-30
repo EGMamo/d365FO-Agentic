@@ -91,6 +91,11 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() === 'true'),
 
   LEARN_MCP_URL: z.string().default('https://learn.microsoft.com/api/mcp'),
+  // Optional: URL of a running Release Planner MCP server (FastTrack sample, e.g. http://localhost:3000/mcp).
+  RELEASE_PLANNER_MCP_URL: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
 
   AGENT_DRY_RUN: z
     .string()

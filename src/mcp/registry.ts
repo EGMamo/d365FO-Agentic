@@ -5,7 +5,7 @@ import { traceLaunchArgs } from './playwright-trace.js';
 
 /**
  * Builds the default MCP server registry for the agent. Playwright and Learn
- * are always registered; Azure DevOps MCP is registered only if opted in.
+ * are always registered; Release Planner and Azure DevOps MCP are registered only if opted in.
  */
 export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpManager {
   const manager = new McpManager();
@@ -33,6 +33,10 @@ export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpMa
     url: cfg.LEARN_MCP_URL,
   };
   manager.register(learn);
+
+  if (cfg.RELEASE_PLANNER_MCP_URL) {
+    manager.register({ name: 'release-planner', transport: 'http', url: cfg.RELEASE_PLANNER_MCP_URL });
+  }
 
   if (cfg.AZDO_USE_MCP && cfg.AZDO_ORG_URL) {
     manager.register({
