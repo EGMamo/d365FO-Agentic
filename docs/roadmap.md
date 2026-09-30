@@ -12,7 +12,7 @@ Each item has a scope, the files likely touched, an acceptance check and the sup
 |---|------|
 | 1 | Stronger saved-session check in `doctor` (Done) |
 | 2 | Optional live session probe (Done) |
-| 3 | MFA and non-MFA setup guide |
+| 3 | MFA and non-MFA setup guide (Done) |
 | 4 | Sign-out policy (Done) |
 | 5 | Wait and timeout budgets |
 | 6 | Assertion discipline |
@@ -43,6 +43,8 @@ Each item has a scope, the files likely touched, an acceptance check and the sup
 - **Source:** Cookies in the [JMeter sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx) are session cookies (`expires 0`), so file age (`D365_SESSION_MAX_AGE_HOURS`) is a weak signal. Inference.
 
 ## 3. MFA and non-MFA setup guide
+
+**Done** in `docs/d365fo.md` (Authentication section: no-MFA and MFA routes).
 
 - **Scope:** Document both routes: a dedicated test account excluded from security defaults / Conditional Access, or `session-login` for MFA accounts, and what renewal looks like for scheduled runs.
 - **Files likely touched:** `docs/d365fo.md`, `README.md`
