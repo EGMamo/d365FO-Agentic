@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveGitHubToken } from '../llm/github-copilot.js';
 
@@ -42,6 +44,12 @@ const envSchema = z.object({
   D365_USERNAME: z.string().optional(),
   D365_PASSWORD: z.string().optional(),
   D365_COMPANY: z.string().default('USMF'),
+  // Optional: sign in with a saved browser session instead of a password. Created by `session-login`.
+  D365_STORAGE_STATE: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
+  D365_SESSION_MAX_AGE_HOURS: z.coerce.number().positive().default(12),
 
   PW_HEADLESS: z
     .string()
@@ -134,8 +142,13 @@ export function validateForRun(cfg: AppConfig): string[] {
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
-  if (!cfg.D365_USERNAME || !cfg.D365_PASSWORD) {
-    issues.push('D365_USERNAME and D365_PASSWORD are required so the agent can sign in to F&O');
+  const hasPassword = !!cfg.D365_USERNAME && !!cfg.D365_PASSWORD;
+  if (!hasPassword) {
+    if (!cfg.D365_STORAGE_STATE) {
+      issues.push('D365_USERNAME and D365_PASSWORD are required so the agent can sign in to F&O (or use a saved session: D365_STORAGE_STATE)');
+    } else if (!existsSync(resolve(cfg.D365_STORAGE_STATE))) {
+      issues.push(`D365_STORAGE_STATE points at ${cfg.D365_STORAGE_STATE}, which does not exist. Run \`d365fo-agent session-login\` or set D365_USERNAME and D365_PASSWORD`);
+    }
   }
   return issues;
 }

@@ -12,6 +12,10 @@ dist/
 *.log
 npm-debug.log*
 
+# Saved browser sessions (live login cookies)
+.d365fo-session/
+*storage-state*.json
+
 # Test artifacts & reports
 reports/
 artifacts/

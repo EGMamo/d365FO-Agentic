@@ -6,7 +6,7 @@ import { PLAYWRIGHT_MCP_PACKAGE } from './playwright-browser.js';
  * Builds the default MCP server registry for the agent. Playwright and Learn
  * are always registered; Azure DevOps MCP is registered only if opted in.
  */
-export function buildDefaultManager(cfg: AppConfig): McpManager {
+export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpManager {
   const manager = new McpManager();
 
   const playwright: McpServerSpec = {
@@ -19,6 +19,8 @@ export function buildDefaultManager(cfg: AppConfig): McpManager {
       ...(cfg.PW_HEADLESS ? ['--headless'] : []),
       '--browser',
       cfg.PW_BROWSER,
+      // A saved sign-in is loaded into an isolated (in-memory) context; the file itself is never modified.
+      ...(sessionFile ? ['--isolated', '--storage-state', sessionFile] : []),
     ],
   };
   manager.register(playwright);
