@@ -207,6 +207,7 @@ export class AgentOrchestrator {
         });
 
         messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
+        if (this.cfg.AGENT_VERBOSE && response.text) this.log(`model: ${response.text}`);
 
         if (response.toolCalls.length === 0) {
           overallError = response.text || 'Model produced no tool calls and no final verdict.';
@@ -215,6 +216,7 @@ export class AgentOrchestrator {
         }
 
         for (const call of response.toolCalls) {
+          if (this.cfg.AGENT_VERBOSE) this.log(`→ ${call.name} ${JSON.stringify(call.arguments)}`);
           const dispatched = await this.dispatch(call, {
             tc,
             steps,
@@ -222,6 +224,7 @@ export class AgentOrchestrator {
             artifactsDir,
             artifacts,
           });
+          if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
             role: 'tool',
             content: dispatched.content,
@@ -358,6 +361,12 @@ export class AgentOrchestrator {
     } catch (e) {
       return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
     }
+  }
+
+  /** One-line, truncated, secret-free progress output so a stuck run is visible. */
+  private log(line: string): void {
+    const clean = redactSecrets(this.cfg, line).replace(/\s+/g, ' ');
+    console.log(`[agent] ${clean.length > 300 ? `${clean.slice(0, 300)}…` : clean}`);
   }
 
   private async captureBinaryContent(content: unknown, dir: string): Promise<string[]> {

@@ -61,6 +61,10 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  AGENT_VERBOSE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   AGENT_MAX_STEPS: z.coerce.number().int().positive().default(40),
   AGENT_RELOOP_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
   AGENT_RELOOP_RETRY_ON: z

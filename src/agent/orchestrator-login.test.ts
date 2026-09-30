@@ -22,6 +22,7 @@ function cfg(over: Partial<AppConfig> = {}, dir = '.'): AppConfig {
     LLM_PROVIDER: 'anthropic',
     ANTHROPIC_API_KEY: 'k',
     AGENT_DRY_RUN: false,
+    AGENT_VERBOSE: false,
     AGENT_MAX_STEPS: 5,
     AGENT_RELOOP_MAX_RETRIES: 0,
     AGENT_RELOOP_RETRY_ON: [],
