@@ -26,11 +26,11 @@ Each item has a scope, the files likely touched, an acceptance check and the sup
 
 ## 1. Stronger saved-session check in `doctor`
 
-**Done.** `checkSession` requires `DynamicsOwinAuth`; a missing `ms-dyn-csrftoken` is a warning.
+**Done.** `checkSession` warns when `DynamicsOwinAuth` or `ms-dyn-csrftoken` is missing. It is a warning, not a failure, because the cookie names are unconfirmed on a real deployment.
 
 - **Scope:** `checkSession` also requires the F&O session cookie `DynamicsOwinAuth` for the F&O host and warns when `ms-dyn-csrftoken` is missing. Today any cookie for the host passes.
 - **Files likely touched:** `src/d365fo/session.ts`, `src/d365fo/session.test.ts`, `docs/d365fo.md`
-- **Acceptance check:** A storage state with only Entra cookies is reported as `expired` with the `session-login` hint; one with `DynamicsOwinAuth` stays `ok`. Unit tests cover both.
+- **Acceptance check:** A storage state with only Entra cookies is reported `ok` with a warning carrying the `session-login` hint; one with `DynamicsOwinAuth` has no warning. Unit tests cover both.
 - **Source:** [JMeter cookie sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx) names the three cookies. Inference: a file without `DynamicsOwinAuth` cannot be a valid F&O login.
 
 ## 2. Optional live session probe
