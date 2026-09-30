@@ -1,6 +1,7 @@
 import type { AppConfig } from '../config/index.js';
 import { McpManager, type McpServerSpec } from './manager.js';
 import { PLAYWRIGHT_MCP_PACKAGE } from './playwright-browser.js';
+import { traceLaunchArgs } from './playwright-trace.js';
 
 /**
  * Builds the default MCP server registry for the agent. Playwright and Learn
@@ -19,6 +20,7 @@ export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpMa
       ...(cfg.PW_HEADLESS ? ['--headless'] : []),
       '--browser',
       cfg.PW_BROWSER,
+      ...traceLaunchArgs(cfg),
       // A saved sign-in is loaded into an isolated (in-memory) context; the file itself is never modified.
       ...(sessionFile ? ['--isolated', '--storage-state', sessionFile] : []),
     ],

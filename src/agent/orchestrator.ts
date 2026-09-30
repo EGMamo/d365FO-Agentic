@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
+import { finishTrace, snapshotFiles, traceOutputDir, tracingEnabled } from '../mcp/playwright-trace.js';
 import { join } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 import type { LlmProvider } from '../llm/index.js';
@@ -253,6 +254,17 @@ export class AgentOrchestrator {
       5,
     );
 
+    let traceBefore: Set<string> | undefined;
+    if (tracingEnabled(this.cfg) && this.mcpServers.includes('playwright')) {
+      try {
+        traceBefore = await snapshotFiles(traceOutputDir(this.cfg));
+        await this.mcp.callTool('playwright', 'browser_start_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
+      } catch (e) {
+        traceBefore = undefined;
+        console.warn(`[agent] could not start a Playwright trace (${(e as Error).message}); continuing without one`);
+      }
+    }
+
     const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved) }];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
@@ -351,6 +363,15 @@ export class AgentOrchestrator {
       if (unverified.length) {
         outcome = 'blocked';
         overallError = `Not counted as passed: step ${unverified.join(', ')} ${unverified.length > 1 ? 'have' : 'has'} an expected result that was not verified against the page. Nothing was checked, so no pass is claimed.`;
+      }
+    }
+
+    if (traceBefore) {
+      try {
+        await this.mcp.callTool('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
+        artifacts.push(...(await finishTrace(this.cfg, traceBefore, outcome)));
+      } catch (e) {
+        console.warn(`[agent] could not finish the Playwright trace: ${(e as Error).message}`);
       }
     }
 
