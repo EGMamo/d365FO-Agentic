@@ -1,0 +1,24 @@
+{
+  "id": "TC-AGENT-USER-001",
+  "title": "Verify the user and roles provisioned by the User Onboarding Agent",
+  "module": "System administration",
+  "area": "System administration\\Security",
+  "priority": 3,
+  "tags": ["sandbox-only", "agent-verification", "user-onboarding-agent"],
+  "preconditions": "SANDBOX ONLY. The FastTrack User Onboarding Agent has onboarded a test employee. Replace {userId} with that user's ID and {approvedRole} with the security role approved in the Teams card. The account used to run this test must be allowed to open the Users form; the Dynamics 365 ERP MCP server cannot open it, but the web client can. Read-only: do not assign or remove roles.",
+  "legalEntity": "USMF",
+  "steps": [
+    { "index": 1, "action": "Log into D365 F&O." },
+    { "index": 2, "action": "Navigate to Modules > System administration > Users > Users." },
+    {
+      "index": 3,
+      "action": "Find the user with User ID '{userId}'.",
+      "expected": "The user exists and is enabled."
+    },
+    {
+      "index": 4,
+      "action": "Open the user's assigned roles.",
+      "expected": "The role '{approvedRole}' is assigned, and no role that was not approved appears."
+    }
+  ]
+}

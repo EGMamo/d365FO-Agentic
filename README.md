@@ -75,6 +75,9 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `PW_BROWSER` / `PW_AUTO_INSTALL` | Playwright browser (`chromium` default) and whether to download it automatically when missing (default `true`) |
 | `AGENT_ALLOW_PRODUCTION` / `AGENT_ALLOWED_HOSTS` / `AGENT_ALLOWED_TOOLS_EXTRA` | Guardrail overrides (production runs, extra navigable hosts, extra MCP tools) |
 | `AGENT_CONTEXT_KEEP_RECENT` / `LLM_PROMPT_CACHE` | Prompt size and cost: how many recent page snapshots stay verbatim, and Anthropic prompt caching |
+| `AGENT_TOOL_TIMEOUT_MS` / `AGENT_NAV_TIMEOUT_MS` | Time budget per tool call (default 60 s, navigation 90 s); a call over budget is reported and recorded as a timeout |
+| `PW_TRACE` | `on-failure` (default), `on` or `off`: save a Playwright trace per attempt; kept only for failed attempts with `on-failure` |
+| `RELEASE_PLANNER_MCP_URL` | Optional: a running FastTrack Release Planner MCP server (read-only release-wave queries) |
 | `AGENT_RELOOP_MAX_RETRIES` / `AGENT_RELOOP_RETRY_ON` | Retry controls for failed/blocked outcomes |
 | `LLM_HTTP_TIMEOUT_MS` / `LLM_HTTP_MAX_RETRIES` | LLM timeout and retry resilience |
 | `AZDO_HTTP_TIMEOUT_MS` / `AZDO_HTTP_MAX_RETRIES` | Azure DevOps timeout and retry resilience |
@@ -103,6 +106,9 @@ Redaction cannot recognise arbitrary business data (customer names, amounts) tha
 - [D365 F&O notes](docs/d365fo.md)
 - [Self-learning](docs/self-learning.md)
 - [Roadmap](docs/roadmap.md)
+- [Sandbox verification checklist](docs/sandbox-checklist.md)
+- [RSAT and Test Plans note](docs/rsat-and-test-plans.md)
+- [Test data setup note](docs/test-data-setup.md)
 - [Desktop transition roadmap](docs/desktop-roadmap.md)
 
 ## License
