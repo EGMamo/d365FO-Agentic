@@ -18,6 +18,7 @@ export function d365SystemGuidance(cfg: AppConfig): string {
           cfg.D365_USERNAME && cfg.D365_PASSWORD
             ? 'If you are redirected to login.microsoftonline.com anyway (the session expired), fall back to the credential steps below.'
             : 'If you are redirected to login.microsoftonline.com (the session expired), mark the step BLOCKED and say the saved session must be renewed with `session-login`; no credentials are configured.',
+          'Never sign out, log off or end the session (user menu, /Logout, End sessions): the saved session is reused by later runs and signing out would invalidate it.',
         ]
       : []),
     '1. Navigate to the D365 F&O URL.',

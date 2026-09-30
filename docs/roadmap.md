@@ -6,15 +6,14 @@ Customer Service Playwright sample and its F&O JMeter samples. That repo has no 
 Test Plans content, so several items are marked as inference and need checking against a real sandbox. The UI-shell plan
 is in [desktop-roadmap.md](desktop-roadmap.md).
 
-Each item has a scope, the files likely touched, an acceptance check and the supporting FastTrack link. This file is a
-plan only; no item is implemented yet.
+Each item has a scope, the files likely touched, an acceptance check and the supporting FastTrack link. Items marked **Done** are implemented; the rest are plan only.
 
 | # | Item |
 |---|------|
-| 1 | Stronger saved-session check in `doctor` |
-| 2 | Optional live session probe |
+| 1 | Stronger saved-session check in `doctor` (Done) |
+| 2 | Optional live session probe (Done) |
 | 3 | MFA and non-MFA setup guide |
-| 4 | Sign-out policy |
+| 4 | Sign-out policy (Done) |
 | 5 | Wait and timeout budgets |
 | 6 | Assertion discipline |
 | 7 | Per-run data bag |
@@ -27,12 +26,16 @@ plan only; no item is implemented yet.
 
 ## 1. Stronger saved-session check in `doctor`
 
+**Done.** `checkSession` requires `DynamicsOwinAuth`; a missing `ms-dyn-csrftoken` is a warning.
+
 - **Scope:** `checkSession` also requires the F&O session cookie `DynamicsOwinAuth` for the F&O host and warns when `ms-dyn-csrftoken` is missing. Today any cookie for the host passes.
 - **Files likely touched:** `src/d365fo/session.ts`, `src/d365fo/session.test.ts`, `docs/d365fo.md`
 - **Acceptance check:** A storage state with only Entra cookies is reported as `expired` with the `session-login` hint; one with `DynamicsOwinAuth` stays `ok`. Unit tests cover both.
 - **Source:** [JMeter cookie sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx) names the three cookies. Inference: a file without `DynamicsOwinAuth` cannot be a valid F&O login.
 
 ## 2. Optional live session probe
+
+**Done** as `doctor --probe`, implemented as one HTTP request with the saved host cookies rather than a headless browser (cheaper, no browser needed). Not run before `run`.
 
 - **Scope:** `doctor --probe` (and optionally before `run`) opens the F&O URL headless with the saved session and reports `expired` if it lands on `login.microsoftonline.com`. No test steps run.
 - **Files likely touched:** `src/d365fo/session.ts`, `src/cli/index.ts`, `src/mcp/playwright-browser.ts`, `docs/d365fo.md`
@@ -47,6 +50,8 @@ plan only; no item is implemented yet.
 - **Source:** [Playwright setup guide](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Documentation) (security defaults off, dedicated account); the JMeter folder has [enabled login and cookie-injection variants](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample) side by side.
 
 ## 4. Sign-out policy
+
+**Done** (docs and prompt rule). Decision: never sign out, for saved sessions and password logins alike; the optional sign-out step is not adopted.
 
 - **Scope:** Decide and document: never sign out a saved session (it would end the session we reuse); optionally sign out for password logins so F&O user sessions are freed. Note per-user session limits for parallel runs.
 - **Files likely touched:** `src/d365fo/guidance.ts`, `docs/d365fo.md` (code only if the optional sign-out is adopted)
