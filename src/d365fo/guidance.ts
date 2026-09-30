@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config/index.js';
+import { activeSessionFile } from './session.js';
 
 /**
  * D365 F&O–specific guidance surfaced to the agent as part of its system
@@ -11,6 +12,14 @@ export function d365SystemGuidance(cfg: AppConfig): string {
     `Default legal entity / company: ${cfg.D365_COMPANY}`,
     '',
     'Login flow:',
+    ...(activeSessionFile(cfg)
+      ? [
+          'A saved, already signed-in browser session is loaded. Navigate to the D365 F&O URL; you should land on the F&O client without signing in.',
+          cfg.D365_USERNAME && cfg.D365_PASSWORD
+            ? 'If you are redirected to login.microsoftonline.com anyway (the session expired), fall back to the credential steps below.'
+            : 'If you are redirected to login.microsoftonline.com (the session expired), mark the step BLOCKED and say the saved session must be renewed with `session-login`; no credentials are configured.',
+        ]
+      : []),
     '1. Navigate to the D365 F&O URL.',
     '2. If redirected to login.microsoftonline.com, take a `browser_snapshot`, then call `d365_enter_credential` with field="username" and the ref of the email field (submit=true), snapshot again, and call it with field="password" and the password field ref (submit=true).',
     '   You never see the credentials and must NOT type them yourself with `browser_type`; only `d365_enter_credential` has them. If it reports no value is configured, mark the step BLOCKED.',

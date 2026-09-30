@@ -14,6 +14,7 @@ import {
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
+import { checkSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 
 const program = new Command();
@@ -31,6 +32,13 @@ program
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'}`);
     console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
+    const session = await checkSession(cfg);
+    console.log(`D365 saved session: ${session.state === 'off' ? session.detail : `${session.state.toUpperCase()} - ${session.detail}`}`);
+    if (session.state === 'expired' || session.state === 'unreadable') {
+      const fallback = cfg.D365_USERNAME && cfg.D365_PASSWORD;
+      if (fallback) console.log('  (username and password are set, so runs will fall back to them.)');
+      else issues.push(`Saved D365 session is ${session.state}: ${session.detail}`);
+    }
     console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
     const browser = await checkPlaywrightBrowser(cfg);
     if (browser.installed === false) {
@@ -74,6 +82,20 @@ program
     await saveGitHubToken(token);
     console.log(`\nSigned in. Token saved to ${DEFAULT_AUTH_FILE}`);
     console.log('Set LLM_PROVIDER=github-copilot (and optionally GITHUB_COPILOT_MODEL) to use it.');
+  });
+
+program
+  .command('session-login')
+  .description('Sign in to D365 F&O in a headed browser (MFA included) and save the session for D365_STORAGE_STATE')
+  .option('--output <file>', 'Where to save the session', undefined)
+  .action(async (opts: { output?: string }) => {
+    const cfg = loadConfig();
+    const out = opts.output ?? cfg.D365_STORAGE_STATE ?? DEFAULT_SESSION_FILE;
+    console.log(`Opening ${cfg.D365_BASE_URL ?? '(D365_BASE_URL missing)'} in a browser.`);
+    console.log('Sign in yourself (MFA included), wait for the F&O dashboard, then close the browser window to save.');
+    const saved = await interactiveSessionLogin(cfg, out);
+    console.log(`\nSession saved to ${saved} (owner-only, gitignored by default; it grants access to your account, so keep it private).`);
+    console.log(`Set D365_STORAGE_STATE=${out} in .env to use it. Run \`doctor\` to check it later.`);
   });
 
 program
