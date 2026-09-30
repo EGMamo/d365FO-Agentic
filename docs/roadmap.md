@@ -1,20 +1,119 @@
 # Roadmap: next changes to the agent
 
-Ranked suggestions from a review of Microsoft's
-[Dynamics-365-FastTrack-Implementation-Assets](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets)
-repo (snapshot 2026-09-21). That repo has no F&O UI automation, RSAT or Azure DevOps Test Plans content, so most
-items below are informed by it but need verifying against a real sandbox. The UI-shell plan is in
-[desktop-roadmap.md](desktop-roadmap.md).
+Ranked implementation plan from a review of Microsoft's
+[Dynamics-365-FastTrack-Implementation-Assets](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets) repo (snapshot 2026-09-21), including a deeper read of its
+Customer Service Playwright sample and its F&O JMeter samples. That repo has no F&O UI automation, RSAT or Azure DevOps
+Test Plans content, so several items are marked as inference and need checking against a real sandbox. The UI-shell plan
+is in [desktop-roadmap.md](desktop-roadmap.md).
 
-| # | Change | Why | FastTrack reference |
-|---|--------|-----|---------------------|
-| 1 | Document the MFA and non-MFA setup in [d365fo.md](d365fo.md): dedicated test account excluded from security defaults/Conditional Access, or `session-login` for MFA accounts. | Most common setup failure. Microsoft's own guide assumes security defaults are off for the test tenant. | [Playwright setup guide](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Documentation), [JMeter MFA sample using pre-obtained cookies](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Administration/Performance/Jmeter/Sample) |
-| 2 | Configurable per-step wait and timeout budgets, plus an F&O rule in `src/d365fo/guidance.ts` to wait for the busy indicator to clear and re-snapshot after each action. | F&O forms load asynchronously. The Customer Service sample's global idle flag does not exist in F&O, so this must be learned in a sandbox. | [Timeout enum and wait helpers](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/utils/common.ts) |
-| 3 | Keep a screenshot and Playwright trace for every failed step under `reports/`. | Fastest way to debug an agent-driven failure. | [`trace: 'on-first-retry'` config](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/playwright.config.ts) |
-| 4 | Real sandbox runs of `TC-SMOKE-LOGIN` and `TC-VENDOR-001`, feeding the learned selectors and waits into the knowledge base. | No upstream source of F&O selectors exists. | none (gap) |
-| 5 | Read the RSAT and Azure DevOps Test Plans documentation on Microsoft Learn and decide whether to import RSAT-style parameter data and shared parameters. | Largest gap for Azure DevOps users; FastTrack has nothing on it. | none (gap) |
-| 6 | Add the Release Planner MCP server as an optional third MCP server to pick regression areas per release wave. | Same stack (TypeScript, MCP), public API, no auth. | [Release Planner](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/Implementation%20Agents/Release%20Planner) |
-| 7 | Optional API-side test data setup: a `setup` block in test-case JSON, or an OData helper, so UI tests check behaviour and not data entry. Evaluate the F&O MCP server (Microsoft Learn: Dynamics 365 F&O Model Context Protocol) as the channel. | Microsoft's own agents call F&O through MCP; warehouse sample seeds data outside the UI. | [Inventory Fulfillment Agent](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents/Inventory%20Fulfillment%20Agent), [Warehouse App Task Validation](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Administration/Performance/Warehouse%20App%20Task%20Validation) |
-| 8 | Reuse FastTrack agents as end-to-end test subjects (Sales Order, User Onboarding, Compliance Advisor) in a sandbox only. | They perform real F&O writes that need independent verification. | [AI ERP Agents](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents) |
+Each item has a scope, the files likely touched, an acceptance check and the supporting FastTrack link. This file is a
+plan only; no item is implemented yet.
 
-Notes: do not copy the sample's habit of committing session files or `.env`; keep `.d365fo-session/` gitignored.
+| # | Item |
+|---|------|
+| 1 | Stronger saved-session check in `doctor` |
+| 2 | Optional live session probe |
+| 3 | MFA and non-MFA setup guide |
+| 4 | Sign-out policy |
+| 5 | Wait and timeout budgets |
+| 6 | Assertion discipline |
+| 7 | Per-run data bag |
+| 8 | Playwright trace on failed steps |
+| 9 | Real sandbox runs and knowledge seeding |
+| 10 | RSAT and Azure DevOps Test Plans study |
+| 11 | Release Planner MCP (optional) |
+| 12 | API-side test data setup (evaluate) |
+| 13 | FastTrack agents as end-to-end test subjects |
+
+## 1. Stronger saved-session check in `doctor`
+
+- **Scope:** `checkSession` also requires the F&O session cookie `DynamicsOwinAuth` for the F&O host and warns when `ms-dyn-csrftoken` is missing. Today any cookie for the host passes.
+- **Files likely touched:** `src/d365fo/session.ts`, `src/d365fo/session.test.ts`, `docs/d365fo.md`
+- **Acceptance check:** A storage state with only Entra cookies is reported as `expired` with the `session-login` hint; one with `DynamicsOwinAuth` stays `ok`. Unit tests cover both.
+- **Source:** [JMeter cookie sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx) names the three cookies. Inference: a file without `DynamicsOwinAuth` cannot be a valid F&O login.
+
+## 2. Optional live session probe
+
+- **Scope:** `doctor --probe` (and optionally before `run`) opens the F&O URL headless with the saved session and reports `expired` if it lands on `login.microsoftonline.com`. No test steps run.
+- **Files likely touched:** `src/d365fo/session.ts`, `src/cli/index.ts`, `src/mcp/playwright-browser.ts`, `docs/d365fo.md`
+- **Acceptance check:** With an expired file `doctor --probe` exits non-zero with the renewal hint; with a valid one it reports `live`. Never writes to the session file.
+- **Source:** Cookies in the [JMeter sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx) are session cookies (`expires 0`), so file age (`D365_SESSION_MAX_AGE_HOURS`) is a weak signal. Inference.
+
+## 3. MFA and non-MFA setup guide
+
+- **Scope:** Document both routes: a dedicated test account excluded from security defaults / Conditional Access, or `session-login` for MFA accounts, and what renewal looks like for scheduled runs.
+- **Files likely touched:** `docs/d365fo.md`, `README.md`
+- **Acceptance check:** A reader can choose a route and finish setup from the doc alone; the tenant-level security trade-off is stated.
+- **Source:** [Playwright setup guide](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Documentation) (security defaults off, dedicated account); the JMeter folder has [enabled login and cookie-injection variants](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample) side by side.
+
+## 4. Sign-out policy
+
+- **Scope:** Decide and document: never sign out a saved session (it would end the session we reuse); optionally sign out for password logins so F&O user sessions are freed. Note per-user session limits for parallel runs.
+- **Files likely touched:** `src/d365fo/guidance.ts`, `docs/d365fo.md` (code only if the optional sign-out is adopted)
+- **Acceptance check:** Docs state the policy; if implemented, a password-login run ends with a sign-out step and a saved-session run does not.
+- **Source:** The JMeter script ends with `/Logout` and `Services/SessionManager.svc/EndSessions` ([sample](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx)). Whether it kills the cookie is not verified.
+
+## 5. Wait and timeout budgets
+
+- **Scope:** Configurable per-step wait/timeout budgets (defaults about 30 s action, 60 s navigation, 180 s heavy pages) and an F&O rule: after every action wait for the shell/busy state to settle, then re-snapshot. A wait that fails is recorded on the step, never swallowed.
+- **Files likely touched:** `src/config/index.ts`, `src/agent/orchestrator.ts`, `src/d365fo/guidance.ts`, `src/agent/prompts.ts`
+- **Acceptance check:** Env vars documented in `.env.example`; a step whose wait times out reports the timeout in `results.json`; unit test on the budget parsing.
+- **Source:** [`TimeOut` enum and `waitUntilAppIdle`](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/utils/common.ts) (the sample ignores wait failures, which we should not copy). The F&O client polls asynchronously (`__TimerForAsyncTaskPolling` controls in the JMeter script). Values are from the sample; F&O values need sandbox tuning.
+
+## 6. Assertion discipline
+
+- **Scope:** Every test-case step with an `expected` result must end verified or explicitly `unverified`; a run cannot pass on steps that only ran without checking.
+- **Files likely touched:** `src/agent/prompts.ts`, `src/agent/orchestrator.ts`, `src/testing/types.ts`, `src/reporting/reporters.ts`
+- **Acceptance check:** A step with `expected` and no verification is shown as unverified in the report and does not count as passed; test covers the orchestrator boundary.
+- **Source:** The sample's [16 tests](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/tests) contain no real assertions (`expect(locator).toBeTruthy()` is always true), so "passing" verifies nothing.
+
+## 7. Per-run data bag
+
+- **Scope:** Values created during a run (a generated vendor account, an order number) are stored on the run and available to later steps and to the report, replacing hand-carried values.
+- **Files likely touched:** `src/testing/types.ts`, `src/core/runner.ts`, `src/agent/context.ts`, `src/reporting/reporters.ts`
+- **Acceptance check:** TC-VENDOR-001 can reuse the vendor account it generated in a later step, and it appears in `results.json`.
+- **Source:** The sample passes `CASE_NUMBER` between specs through `.env` ([`casecrud.spec.ts`](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/tests-e2e/casecrud.spec.ts)); this is the fragile pattern to replace.
+
+## 8. Playwright trace on failed steps
+
+- **Scope:** Save a Playwright trace next to the existing failure screenshot when a step fails (through the MCP server's trace option, if it supports it).
+- **Files likely touched:** `src/mcp/registry.ts`, `src/agent/orchestrator.ts`, `src/reporting/reporters.ts`
+- **Acceptance check:** A failed step links a trace file in the HTML report; passing runs create none.
+- **Source:** [`trace: 'on-first-retry'`](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/playwright.config.ts). Screenshots already exist in `src/agent/orchestrator.ts`.
+
+## 9. Real sandbox runs and knowledge seeding
+
+- **Scope:** Run TC-SMOKE-LOGIN and TC-VENDOR-001 against a real sandbox and keep the learned selectors, waits and form quirks in the knowledge base (never committed).
+- **Files likely touched:** `knowledge/kb.json` (local), `docs/d365fo.md`
+- **Acceptance check:** Both cases pass on a sandbox; a short list of confirmed F&O waits and control names is added to `docs/d365fo.md`.
+- **Source:** No upstream source: FastTrack has no F&O UI selectors. Protocol control names such as `SystemDefinedSaveButton` appear in the [JMeter script](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Administration/Performance/Jmeter/Sample/MFA_DynamicsOWinAuth_POCreation.jmx); whether they match DOM control names is an inference to check.
+
+## 10. RSAT and Azure DevOps Test Plans study
+
+- **Scope:** Read the RSAT and Test Plans docs on Microsoft Learn and decide whether to import RSAT-style parameter data and shared parameters. Output is a design note.
+- **Files likely touched:** `docs/azure-devops.md`, `src/devops/client.ts` (later)
+- **Acceptance check:** A short design note states what is supported, what is not, and the first import step.
+- **Source:** None: FastTrack has no RSAT or Test Plans content (gap).
+
+## 11. Release Planner MCP (optional)
+
+- **Scope:** Register the Release Planner MCP server as an optional MCP server so the agent can propose regression areas per release wave.
+- **Files likely touched:** `src/mcp/registry.ts`, `src/config/index.ts`, `docs/d365fo.md`
+- **Acceptance check:** With the server enabled the agent can list next-wave features for a module; disabled by default; no credentials needed.
+- **Source:** [Release Planner](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/Implementation%20Agents/Release%20Planner) (TypeScript MCP, MIT, public API).
+
+## 12. API-side test data setup (evaluate)
+
+- **Scope:** Evaluate a `setup` block in test-case JSON that seeds data through OData or the F&O MCP server, so UI tests check behaviour and not data entry. Start with a design note.
+- **Files likely touched:** `src/testing/types.ts`, `src/testing/loader.ts`, `docs/d365fo.md`
+- **Acceptance check:** Note compares OData and F&O MCP for one seeded record and names the guardrails needed (sandbox only, legal entity).
+- **Source:** [Inventory Fulfillment Agent](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents/Inventory%20Fulfillment%20Agent) (F&O over MCP), [Warehouse App Task Validation](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Administration/Performance/Warehouse%20App%20Task%20Validation) (data seeding outside the UI).
+
+## 13. FastTrack agents as end-to-end test subjects
+
+- **Scope:** Add sandbox-only test cases that verify what the Sales Order and User Onboarding agents write to F&O, and role/SoD checks from the Compliance Advisor.
+- **Files likely touched:** `examples/testcases/`, `docs/d365fo.md`
+- **Acceptance check:** One example case per agent, marked sandbox-only, with expected results stated.
+- **Source:** [AI ERP Agents](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents).
+
+Notes: do not copy the FastTrack sample's habit of committing session files or `.env`; keep `.d365fo-session/` gitignored. The four JMeter blog posts linked from its README (cookie handling tips) were not readable when this plan was written; read them before starting items 1 to 4.
