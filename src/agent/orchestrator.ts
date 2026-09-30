@@ -6,6 +6,7 @@ import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import type { KnowledgeBase } from '../knowledge/kb.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, credentialFor, redactSecrets } from '../d365fo/login.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 
 const LOCAL_TOOLS: LlmTool[] = [
@@ -180,6 +181,7 @@ export class AgentOrchestrator {
         inputSchema: t.inputSchema,
       })),
       ...LOCAL_TOOLS,
+      CREDENTIAL_TOOL,
     ];
 
     const retrieved = this.kb.retrieve(
@@ -277,6 +279,30 @@ export class AgentOrchestrator {
       ctx.steps.push(step);
       return { content: JSON.stringify({ ok: true, recorded: step.index }) };
     }
+    if (call.name === CREDENTIAL_TOOL_NAME) {
+      const secret = credentialFor(this.cfg, call.arguments.field);
+      if (!secret) {
+        return {
+          content: JSON.stringify({
+            error: `No value configured for ${String(call.arguments.field)}: set D365_USERNAME / D365_PASSWORD in .env. Mark the step BLOCKED.`,
+          }),
+        };
+      }
+      if (this.cfg.AGENT_DRY_RUN) return { content: JSON.stringify({ dryRun: true, note: 'Skipped credential entry' }) };
+      try {
+        const res = await this.mcp.callTool('playwright', 'browser_type', {
+          element: (call.arguments.element as string | undefined) ?? `${String(call.arguments.field)} field`,
+          ref: call.arguments.ref,
+          text: secret,
+          submit: Boolean(call.arguments.submit),
+        });
+        return {
+          content: redactSecrets(this.cfg, JSON.stringify(res.isError ? { error: res.content } : { ok: true, entered: call.arguments.field })),
+        };
+      } catch (e) {
+        return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
+      }
+    }
     if (call.name === 'kb_search') {
       const q = (call.arguments.query as string) ?? '';
       const k = Number(call.arguments.k ?? 5);
@@ -324,10 +350,13 @@ export class AgentOrchestrator {
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
       return {
-        content: typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError }),
+        content: redactSecrets(
+          this.cfg,
+          typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError }),
+        ),
       };
     } catch (e) {
-      return { content: JSON.stringify({ error: (e as Error).message }) };
+      return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
     }
   }
 

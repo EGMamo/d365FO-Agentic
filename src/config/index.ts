@@ -130,6 +130,9 @@ export function validateForRun(cfg: AppConfig): string[] {
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
+  if (!cfg.D365_USERNAME || !cfg.D365_PASSWORD) {
+    issues.push('D365_USERNAME and D365_PASSWORD are required so the agent can sign in to F&O');
+  }
   return issues;
 }
 
