@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { AgentOrchestrator, isMutatingBrowserTool } from './orchestrator.js';
+import { AgentOrchestrator } from './orchestrator.js';
 import type { AppConfig } from '../config/index.js';
 import type { LlmCompleteResponse } from '../llm/types.js';
 import type { TestCase } from '../testing/types.js';
@@ -30,11 +30,16 @@ const nav = (id: string): LlmCompleteResponse => ({
 });
 
 describe('dry-run classification', () => {
-  it('lets navigation and snapshots run but skips state-changing tools', () => {
-    for (const t of ['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_take_screenshot', 'browser_wait_for'])
-      assert.equal(isMutatingBrowserTool(t), false, t);
-    for (const t of ['browser_click', 'browser_type', 'browser_fill_form', 'browser_press_key', 'browser_select_option'])
-      assert.equal(isMutatingBrowserTool(t), true, t);
+  it('skips state-changing browser tools but still runs read-only ones', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const called: string[] = [];
+    const tools = ['browser_snapshot', 'browser_take_screenshot', 'browser_wait_for', 'browser_click', 'browser_type', 'browser_fill_form', 'browser_press_key', 'browser_select_option'];
+    const turns: LlmCompleteResponse[] = [
+      ...tools.map((t, i): LlmCompleteResponse => ({ text: '', stopReason: 'tool_use', toolCalls: [{ id: String(i), name: `playwright__${t}`, arguments: { i } }] })),
+      { text: '', stopReason: 'tool_use', toolCalls: [{ id: 'f', name: 'finish_test', arguments: { outcome: 'passed' } }] },
+    ];
+    await build(dir, {}, () => turns.shift()!, called).runTestCase(tc);
+    assert.deepEqual(called, ['browser_snapshot', 'browser_take_screenshot', 'browser_wait_for']);
   });
 
   it('executes browser_navigate in a dry run', async () => {

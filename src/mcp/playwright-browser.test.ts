@@ -67,7 +67,7 @@ describe('checkPlaywrightBrowser (used by doctor)', () => {
     assert.equal(status.cacheDir, '/home/u/.cache/ms-playwright');
     assert.equal(
       status.installCommand,
-      'npx -y @playwright/mcp@latest install-browser --no-progress --no-remove chrome-for-testing',
+      `npx -y ${PLAYWRIGHT_MCP_PACKAGE} install-browser --no-progress --no-remove chrome-for-testing`,
     );
   });
 
@@ -142,7 +142,8 @@ describe('ensurePlaywrightBrowser', () => {
       assert.match(e.message, /exited with code 1/);
       assert.match(e.message, /Failed to download Chrome/);
       assert.ok(!e.message.includes('line 0\n'), 'only the tail of the output is included');
-      assert.match(e.message, /npx -y @playwright\/mcp@latest install-browser .*chrome-for-testing/);
+      assert.ok(e.message.includes(`npx -y ${PLAYWRIGHT_MCP_PACKAGE} install-browser`));
+      assert.match(e.message, /chrome-for-testing/);
       assert.match(e.message, /PW_AUTO_INSTALL=false/);
       return true;
     });
@@ -188,7 +189,7 @@ describe('default executor (real child process)', () => {
 
       logs.length = 0;
       process.env.FAKE_NPX_EXIT = '7';
-      await assert.rejects(ensurePlaywrightBrowser(cfg()), /exited with code 7[\s\S]*args: -y @playwright\/mcp@latest install-browser/);
+      await assert.rejects(ensurePlaywrightBrowser(cfg()), (e: Error) => e.message.includes('exited with code 7') && e.message.includes(`args: -y ${PLAYWRIGHT_MCP_PACKAGE} install-browser`));
     } finally {
       process.env.PATH = oldPath;
       delete process.env.FAKE_NPX_EXIT;

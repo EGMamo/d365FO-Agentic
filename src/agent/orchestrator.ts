@@ -427,6 +427,6 @@ function sleep(ms: number): Promise<void> {
  * deliberately not listed: in a dry run they must still execute so the model can see a page
  * (e.g. reach the login screen) instead of looping on a skipped navigate.
  */
-export function isMutatingBrowserTool(name: string): boolean {
+function isMutatingBrowserTool(name: string): boolean {
   return /(click|type|fill|drag|press|upload|handle_dialog|select_option)/i.test(name);
 }
