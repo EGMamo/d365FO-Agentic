@@ -4,7 +4,8 @@ import type {
   LlmProvider,
   LlmToolCall,
 } from './types.js';
-import { fetchWithResilience } from '../utils/http.js';
+import { fetchWithResilience, parseRetryAfterMs } from '../utils/http.js';
+import { LlmHttpError } from './errors.js';
 
 export interface OpenAiCompatibleOptions {
   name: string;
@@ -84,7 +85,9 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         'content-type': 'application/json',
         ...(this.opts.headers ?? {}),
       };
-      if ((this.opts.authScheme ?? 'bearer') === 'bearer') {
+      if (!apiKey) {
+        // Local servers (Ollama, LM Studio, llama.cpp) need no key; do not send an empty bearer token.
+      } else if ((this.opts.authScheme ?? 'bearer') === 'bearer') {
         headers.authorization = ['Bearer', apiKey].join(' ');
       } else {
         headers[this.opts.authHeaderName ?? 'api-key'] = apiKey;
@@ -114,7 +117,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`${this.name} error ${res.status}: ${text}`);
+      throw new LlmHttpError(`${this.name} error ${res.status}: ${text}`, res.status, parseRetryAfterMs(res.headers.get('retry-after')));
     }
 
     const data = (await res.json()) as {
@@ -128,24 +131,26 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
 
-    const choice = data.choices?.[0];
-    const toolCalls: LlmToolCall[] = (choice?.message.tool_calls ?? []).map((c) => ({
-      id: c.id,
-      name: c.function.name,
-      arguments: safeParseJson(c.function.arguments),
-    }));
+    // Some servers (GitHub Copilot for Claude models) split one reply across choices: the text in the first,
+    // the tool call in a later one. Only one completion is ever requested, so merge them all.
+    const choices = data.choices ?? [];
+    const toolCalls: LlmToolCall[] = choices
+      .flatMap((c) => c.message?.tool_calls ?? [])
+      .map((c) => ({ id: c.id, name: c.function.name, arguments: safeParseJson(c.function.arguments) }));
+    const finishReason = choices.find((c) => c.finish_reason === 'tool_calls')?.finish_reason ?? choices[0]?.finish_reason;
 
+    // Some servers report finish_reason "stop" even when the model called tools; the calls are what matters.
     const stopReason: LlmCompleteResponse['stopReason'] =
-      choice?.finish_reason === 'tool_calls'
+      finishReason === 'tool_calls' || toolCalls.length > 0
         ? 'tool_use'
-        : choice?.finish_reason === 'length'
+        : finishReason === 'length'
           ? 'max_tokens'
-          : choice?.finish_reason === 'stop'
+          : finishReason === 'stop'
             ? 'end_turn'
             : 'other';
 
     return {
-      text: choice?.message.content ?? '',
+      text: choices.map((c) => c.message?.content ?? '').filter(Boolean).join('\n'),
       toolCalls,
       stopReason,
       usage: {

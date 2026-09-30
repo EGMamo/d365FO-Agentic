@@ -8,8 +8,18 @@ import type { KnowledgeBase } from '../knowledge/kb.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
+import { compactHistory } from './context.js';
+import { Guardrails } from './guardrails.js';
+import { toUnavailable } from '../llm/errors.js';
 
 const DEFAULT_MAX_REPEATED_CALLS = 3;
+const DEFAULT_CONTEXT_KEEP_RECENT = 3;
+/** An attempt that keeps hitting the guardrails is stopped instead of probing for a way around them. */
+const MAX_POLICY_BLOCKS = 5;
+const MAX_LEARNINGS = 10;
+const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
+const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
+const LIMITS = { observed: 2000, error: 2000, summary: 1000, learningSummary: 200, learningDetails: 2000, blockNote: 300 };
 
 const LOCAL_TOOLS: LlmTool[] = [
   {
@@ -80,7 +90,16 @@ interface AttemptResult {
   steps: StepResult[];
   artifacts: string[];
   learnings: string[];
+  policyBlocks: string[];
   errorMessage?: string;
+}
+
+interface DispatchResult {
+  content: string;
+  done?: boolean;
+  outcome?: StepStatus;
+  errorMessage?: string;
+  policyBlocked?: boolean;
 }
 
 export class AgentOrchestrator {
@@ -90,6 +109,8 @@ export class AgentOrchestrator {
   private browserTypeSchema?: Record<string, unknown>;
   private kb: KnowledgeBase;
   private mcpServers: string[];
+  private guardrails: Guardrails;
+  private reportedHiddenTools = false;
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -97,6 +118,7 @@ export class AgentOrchestrator {
     this.mcp = opts.mcp;
     this.kb = opts.kb;
     this.mcpServers = opts.mcpServers;
+    this.guardrails = new Guardrails(opts.cfg, opts.mcpServers);
   }
 
   async runTestCase(tc: TestCase): Promise<TestResult> {
@@ -128,10 +150,12 @@ export class AgentOrchestrator {
       steps: [],
       artifacts: [],
       learnings: [],
+      policyBlocks: [],
       errorMessage: 'No attempts were executed',
     };
 
     const previous = attempts.length > 1 ? attempts[attempts.length - 2] : undefined;
+    const policyBlocks = Array.from(new Set(attempts.flatMap((a) => a.policyBlocks))).slice(0, 20);
     const finalState: RunState =
       final.outcome === 'passed' || final.outcome === 'skipped' ? 'completed' : final.outcome === 'failed' ? 'failed' : 'blocked';
 
@@ -147,6 +171,7 @@ export class AgentOrchestrator {
       artifacts: Array.from(new Set(attempts.flatMap((a) => a.artifacts))),
       errorMessage: final.errorMessage,
       learnings: final.learnings,
+      ...(policyBlocks.length ? { policyBlocks } : {}),
       attemptCount: attempts.length,
       firstOutcome: first.outcome,
       previousOutcome: previous?.outcome,
@@ -179,8 +204,13 @@ export class AgentOrchestrator {
         console.warn(`[agent] failed to list tools for MCP server '${server}': ${(e as Error).message}`);
       }
     }
+    const { allowed: allowedTools, blocked: hiddenTools } = this.guardrails.splitTools(mcpTools);
+    if (this.cfg.AGENT_VERBOSE && hiddenTools.length && !this.reportedHiddenTools) {
+      this.reportedHiddenTools = true;
+      this.log(`hiding ${hiddenTools.length} tool(s) not on the allowlist: ${hiddenTools.map((t) => `${t.server}__${t.name}`).join(', ')}`);
+    }
     const tools: LlmTool[] = [
-      ...mcpTools.map((t) => ({
+      ...allowedTools.map((t) => ({
         name: `${t.server}__${t.name}`,
         description: `[${t.server}] ${t.description}`,
         inputSchema: t.inputSchema,
@@ -199,6 +229,7 @@ export class AgentOrchestrator {
     const steps: StepResult[] = [];
     const learnings: string[] = [];
     const artifacts: string[] = [];
+    const policyBlocks: string[] = [];
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
     let stopped = false;
@@ -208,17 +239,23 @@ export class AgentOrchestrator {
 
     try {
       for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
+        const compacted = compactHistory(messages, this.cfg.AGENT_CONTEXT_KEEP_RECENT ?? DEFAULT_CONTEXT_KEEP_RECENT);
+        if (this.cfg.AGENT_VERBOSE && compacted > 0) this.log(`context: collapsed ${compacted} older tool result(s)`);
         const response = await this.llm.complete({
           system: baseSystemPrompt(this.cfg),
           messages,
           tools,
         });
+        if (this.cfg.AGENT_VERBOSE && response.usage) {
+          const u = response.usage;
+          this.log(`tokens: in=${u.inputTokens ?? '?'} out=${u.outputTokens ?? '?'}${u.cacheReadTokens ? ` cached=${u.cacheReadTokens}` : ''}`);
+        }
 
         messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
         if (this.cfg.AGENT_VERBOSE && response.text) this.log(`model: ${response.text}`);
 
         if (response.toolCalls.length === 0) {
-          overallError = response.text || 'Model produced no tool calls and no final verdict.';
+          overallError = this.clean(response.text || 'Model produced no tool calls and no final verdict.', LIMITS.error);
           outcome = 'blocked';
           break;
         }
@@ -240,6 +277,7 @@ export class AgentOrchestrator {
             learnings,
             artifactsDir,
             artifacts,
+            policyBlocks,
           });
           if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
@@ -252,14 +290,28 @@ export class AgentOrchestrator {
             outcome = dispatched.outcome ?? 'blocked';
             overallError = dispatched.errorMessage;
             stopped = true;
+          } else if (dispatched.policyBlocked && policyBlocks.length >= MAX_POLICY_BLOCKS) {
+            outcome = 'blocked';
+            overallError = `Agent stopped: ${policyBlocks.length} tool calls were refused by the guardrails (e.g. ${policyBlocks[0]}). The run was steered outside its permitted scope.`;
+            stopped = true;
+            break;
           }
         }
 
         if (response.stopReason === 'end_turn' && !stopped) break;
       }
     } catch (e) {
+      const unavailable = toUnavailable(e);
+      if (unavailable) throw unavailable;
       outcome = 'blocked';
-      overallError = `Transient orchestration failure: ${(e as Error).message}`;
+      overallError = this.clean(`Transient orchestration failure: ${(e as Error).message}`, LIMITS.error);
+    }
+
+    if ((outcome === 'failed' || outcome === 'blocked') && !overallError) {
+      const bad = steps.find((s) => s.status === 'failed' || s.status === 'blocked');
+      overallError = bad
+        ? this.clean(`Step ${bad.index} ${bad.status}: ${bad.errorMessage ?? bad.observed ?? 'no details were reported'}`, LIMITS.error)
+        : 'The model ended the test without a reason.';
     }
 
     const finishedAt = new Date();
@@ -274,6 +326,7 @@ export class AgentOrchestrator {
       artifacts,
       errorMessage: overallError,
       learnings,
+      policyBlocks,
     };
   }
 
@@ -285,23 +338,37 @@ export class AgentOrchestrator {
       learnings: string[];
       artifactsDir: string;
       artifacts: string[];
+      policyBlocks: string[];
     },
-  ): Promise<{ content: string; done?: boolean; outcome?: StepStatus; errorMessage?: string }> {
+  ): Promise<DispatchResult> {
+    const args: Record<string, unknown> =
+      call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments : {};
+    const fail = (error: string): DispatchResult => ({ content: JSON.stringify({ error }) });
+
     if (call.name === 'report_step') {
-      const stepStart = Date.now();
+      const validIndexes = ctx.tc.steps.map((s) => s.index);
+      const index = typeof args.index === 'string' && /^\d+$/.test(args.index) ? Number(args.index) : args.index;
+      if (typeof index !== 'number' || !validIndexes.includes(index)) {
+        return fail(`Invalid step index ${JSON.stringify(index)}. Use one of: ${validIndexes.join(', ')}. Nothing was recorded.`);
+      }
+      if (!STEP_STATUSES.includes(args.status as StepStatus)) {
+        return fail(`Invalid status ${JSON.stringify(args.status)}. Use one of: ${STEP_STATUSES.join(', ')}. Nothing was recorded.`);
+      }
       const step: StepResult = {
-        index: Number(call.arguments.index ?? ctx.steps.length + 1),
-        status: (call.arguments.status as StepStatus) ?? 'blocked',
-        observed: call.arguments.observed as string | undefined,
-        errorMessage: call.arguments.errorMessage as string | undefined,
-        durationMs: Date.now() - stepStart,
+        index,
+        status: args.status as StepStatus,
+        observed: typeof args.observed === 'string' ? this.clean(args.observed, LIMITS.observed) : undefined,
+        errorMessage: typeof args.errorMessage === 'string' ? this.clean(args.errorMessage, LIMITS.error) : undefined,
+        durationMs: 0,
       };
-      ctx.steps.push(step);
+      const existing = ctx.steps.findIndex((s) => s.index === index);
+      if (existing >= 0) ctx.steps[existing] = step;
+      else ctx.steps.push(step);
       return { content: JSON.stringify({ ok: true, recorded: step.index }) };
     }
     if (call.name === CREDENTIAL_TOOL_NAME) {
-      const field = String(call.arguments.field);
-      const secret = credentialFor(this.cfg, call.arguments.field);
+      const field = String(args.field);
+      const secret = credentialFor(this.cfg, args.field);
       if (!secret) {
         return {
           content: JSON.stringify({
@@ -310,7 +377,7 @@ export class AgentOrchestrator {
         };
       }
       if (this.cfg.AGENT_DRY_RUN) return { content: JSON.stringify({ dryRun: true, note: 'Skipped credential entry' }) };
-      const ref = (call.arguments.ref ?? call.arguments.target) as string | undefined;
+      const ref = (args.ref ?? args.target) as string | undefined;
       if (!ref) {
         return { content: JSON.stringify({ error: 'Missing `ref`: take the element ref from the latest browser_snapshot and call again.' }) };
       }
@@ -320,38 +387,42 @@ export class AgentOrchestrator {
           'browser_type',
           browserTypeArgs(this.browserTypeSchema, {
             ref,
-            element: (call.arguments.element as string | undefined) ?? `${field} field`,
+            element: (args.element as string | undefined) ?? `${field} field`,
             text: secret,
-            submit: Boolean(call.arguments.submit),
+            submit: Boolean(args.submit),
           }),
         );
         const body = res.isError
           ? { error: `The credential was configured, but typing it failed: ${mcpErrorText(res.content)}` }
-          : { ok: true, entered: call.arguments.field };
+          : { ok: true, entered: args.field };
         return { content: redactSecrets(this.cfg, JSON.stringify(body)) };
       } catch (e) {
         return { content: redactSecrets(this.cfg, JSON.stringify({ error: `Typing the credential failed: ${(e as Error).message}` })) };
       }
     }
     if (call.name === 'kb_search') {
-      const q = (call.arguments.query as string) ?? '';
-      const k = Number(call.arguments.k ?? 5);
+      const q = typeof args.query === 'string' ? args.query : '';
+      const requested = Number(args.k ?? 5);
+      const k = Number.isFinite(requested) ? Math.min(20, Math.max(1, Math.trunc(requested))) : 5;
       const hits = this.kb.retrieve(q, ctx.tc.tags ?? [], k);
       return { content: JSON.stringify(hits) };
     }
     if (call.name === 'finish_test') {
-      const outcome = (call.arguments.outcome as StepStatus) ?? 'blocked';
-      const errorMessage = call.arguments.errorMessage as string | undefined;
-      const summary = (call.arguments.summary as string) ?? '';
+      if (!STEP_STATUSES.includes(args.outcome as StepStatus)) {
+        return fail(`Invalid outcome ${JSON.stringify(args.outcome)}. Use one of: ${STEP_STATUSES.join(', ')}. The test is still open; call finish_test again.`);
+      }
+      const outcome = args.outcome as StepStatus;
+      const errorMessage = typeof args.errorMessage === 'string' ? this.clean(args.errorMessage, LIMITS.error) : undefined;
+      const summary = typeof args.summary === 'string' ? this.clean(args.summary, LIMITS.summary) : '';
       if (summary) ctx.learnings.push(summary);
-      const rawLearnings = (call.arguments.learnings as
-        | Array<{ kind: 'selector' | 'recipe' | 'remediation' | 'doc'; summary: string; details: string }>
-        | undefined) ?? [];
-      for (const l of rawLearnings) {
+      const rawLearnings = Array.isArray(args.learnings) ? args.learnings.slice(0, MAX_LEARNINGS) : [];
+      for (const l of rawLearnings as Array<Record<string, unknown>>) {
+        if (!l || !LEARNING_KINDS.includes(l.kind as (typeof LEARNING_KINDS)[number])) continue;
+        if (typeof l.summary !== 'string' || typeof l.details !== 'string' || !l.summary.trim()) continue;
         this.kb.upsert({
-          kind: l.kind,
-          summary: l.summary,
-          details: l.details,
+          kind: l.kind as (typeof LEARNING_KINDS)[number],
+          summary: this.clean(l.summary, LIMITS.learningSummary),
+          details: this.clean(l.details, LIMITS.learningDetails),
           module: ctx.tc.module,
           testCaseId: ctx.tc.id,
           tags: ctx.tc.tags ?? [],
@@ -372,11 +443,23 @@ export class AgentOrchestrator {
     if (idx < 0) return { content: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
     const server = call.name.slice(0, idx);
     const toolName = call.name.slice(idx + 2);
+    const denied = this.guardrails.checkCall(server, toolName, args, ctx.tc.legalEntity);
+    if (denied) {
+      const note = this.clean(`${call.name}: ${denied}`, LIMITS.blockNote);
+      ctx.policyBlocks.push(note);
+      console.warn(`[guardrail] blocked ${note}`);
+      return {
+        content: JSON.stringify({
+          error: `Blocked by policy: ${denied}. Retrying will not help; use a permitted approach or mark the step BLOCKED.`,
+        }),
+        policyBlocked: true,
+      };
+    }
     try {
       if (this.cfg.AGENT_DRY_RUN && server === 'playwright' && isMutatingBrowserTool(toolName)) {
         return { content: JSON.stringify({ dryRun: true, note: `Skipped mutating browser tool ${toolName}` }) };
       }
-      const res = await this.mcp.callTool(server, toolName, call.arguments);
+      const res = await this.mcp.callTool(server, toolName, args);
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
       return {
@@ -388,6 +471,12 @@ export class AgentOrchestrator {
     } catch (e) {
       return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
     }
+  }
+
+  /** Model-written text is stored in reports and the knowledge base: scrub secrets and cap its size first. */
+  private clean(text: string, max: number): string {
+    const redacted = redactSecrets(this.cfg, text);
+    return redacted.length > max ? `${redacted.slice(0, max)}… [truncated]` : redacted;
   }
 
   /** One-line, truncated, secret-free progress output so a stuck run is visible. */
@@ -428,5 +517,5 @@ function sleep(ms: number): Promise<void> {
  * (e.g. reach the login screen) instead of looping on a skipped navigate.
  */
 function isMutatingBrowserTool(name: string): boolean {
-  return /(click|type|fill|drag|press|upload|handle_dialog|select_option)/i.test(name);
+  return /(click|type|fill|drag|drop|press|upload|handle_dialog|select_option|evaluate|run_code|route|_set|_delete|_clear)/i.test(name);
 }

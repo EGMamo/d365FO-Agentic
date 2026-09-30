@@ -45,6 +45,8 @@ export interface TestResult {
   artifacts: string[]; // absolute paths to screenshots / traces / logs
   errorMessage?: string;
   learnings?: string[];
+  /** Tool calls the guardrails refused (disallowed tool, off-limits URL, wrong legal entity). */
+  policyBlocks?: string[];
   attemptCount?: number;
   firstOutcome?: StepStatus;
   previousOutcome?: StepStatus;

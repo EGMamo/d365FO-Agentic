@@ -13,7 +13,8 @@ const tc: TestCase = { id: 'T1', source: 'local', title: 'login', steps: [{ inde
 function build(dir: string, over: Partial<AppConfig>, next: () => LlmCompleteResponse, called: string[]) {
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: true, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20,
-    AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir, ...over,
+    AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir,
+    D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF', ...over,
   } as AppConfig;
   const llm = { name: 'fake', async complete() { return next(); } };
   const mcp = {
@@ -21,7 +22,7 @@ function build(dir: string, over: Partial<AppConfig>, next: () => LlmCompleteRes
     async callTool(_s: string, tool: string) { called.push(tool); return { content: 'page', isError: false }; },
   };
   const kb = { retrieve: () => [], upsert() {}, async save() {} };
-  return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: [] } as never);
+  return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never);
 }
 
 const nav = (id: string): LlmCompleteResponse => ({

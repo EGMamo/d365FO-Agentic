@@ -22,10 +22,12 @@ artifacts/
 traces/
 screenshots/
 videos/
+.playwright-mcp/
 
 # Knowledge base (local, machine-specific)
 knowledge/kb.local.json
 knowledge/index/
+knowledge/
 
 # OS / editor
 .DS_Store

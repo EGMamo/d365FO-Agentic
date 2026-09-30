@@ -5,6 +5,7 @@ export interface ResilientRequestOptions {
 }
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_RETRY_AFTER_MS = 30_000;
 
 export async function fetchWithResilience(
   url: string,
@@ -20,9 +21,12 @@ export async function fetchWithResilience(
       const response = await fetch(url, { ...init, signal: controller.signal });
       if (response.ok) return response;
       if (attempt <= opts.maxRetries && RETRYABLE_STATUS.has(response.status)) {
-        await safeDrain(response);
-        await sleep(backoffDelay(opts.retryBaseMs, attempt));
-        continue;
+        const delay = retryDelayMs(response, opts.retryBaseMs, attempt);
+        if (delay !== undefined) {
+          await safeDrain(response);
+          await sleep(delay);
+          continue;
+        }
       }
       return response;
     } catch (error) {
@@ -35,6 +39,25 @@ export async function fetchWithResilience(
       clearTimeout(timeout);
     }
   }
+}
+
+/** Parses a Retry-After header (seconds or an HTTP date) into milliseconds, or undefined when absent, garbage, or already past. */
+export function parseRetryAfterMs(header: string | null | undefined, now: number = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - now;
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
+ * How long to wait before retrying: exponential backoff, stretched to the server's Retry-After when that is longer.
+ * Returns undefined when the server asks for more than we will sit through (30s): retrying would only fail again.
+ */
+export function retryDelayMs(response: Pick<Response, 'headers'>, base: number, attempt: number, now: number = Date.now()): number | undefined {
+  const backoff = backoffDelay(base, attempt);
+  const asked = parseRetryAfterMs(response.headers.get('retry-after'), now);
+  if (asked === undefined) return backoff;
+  return asked > MAX_RETRY_AFTER_MS ? undefined : Math.max(backoff, asked);
 }
 
 function backoffDelay(base: number, attempt: number): number {

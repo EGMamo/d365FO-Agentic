@@ -4,6 +4,16 @@ import { createGitHubCopilotProvider, resolveGitHubToken } from './github-copilo
 import { OpenAiCompatibleProvider } from './openai-compatible.js';
 import type { LlmProvider } from './types.js';
 
+const LOCAL_MIN_TIMEOUT_MS = 300_000;
+
+export function isLoopbackUrl(url: string): boolean {
+  try {
+    return ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Instantiates the LLM provider selected by config. Fails fast when required
  * credentials are missing so users don't discover it mid-run.
@@ -17,6 +27,7 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         model: cfg.LLM_MODEL,
         maxTokens: cfg.LLM_MAX_TOKENS,
         temperature: cfg.LLM_TEMPERATURE,
+        promptCache: cfg.LLM_PROMPT_CACHE,
       });
     }
     case 'openai': {
@@ -63,6 +74,22 @@ export function createLlmProvider(cfg: AppConfig): LlmProvider {
         maxTokens: cfg.LLM_MAX_TOKENS,
         temperature: cfg.LLM_TEMPERATURE,
         timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
+        maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
+        retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
+      });
+    }
+    case 'openai-compatible': {
+      if (!cfg.OPENAI_COMPATIBLE_MODEL) throw new Error('OPENAI_COMPATIBLE_MODEL is required (e.g. the name shown by `ollama list`)');
+      const base = cfg.OPENAI_COMPATIBLE_BASE_URL.replace(/\/+$/, '');
+      return new OpenAiCompatibleProvider({
+        name: 'openai-compatible',
+        baseUrl: `${base}/chat/completions`,
+        apiKey: cfg.OPENAI_COMPATIBLE_API_KEY ?? '',
+        model: cfg.OPENAI_COMPATIBLE_MODEL,
+        maxTokens: cfg.LLM_MAX_TOKENS,
+        temperature: cfg.LLM_TEMPERATURE,
+        // Inference on this machine can take minutes for a large prompt; do not cut it off at the hosted-API default.
+        timeoutMs: isLoopbackUrl(base) ? Math.max(cfg.LLM_HTTP_TIMEOUT_MS, LOCAL_MIN_TIMEOUT_MS) : cfg.LLM_HTTP_TIMEOUT_MS,
         maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
         retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
       });

@@ -10,7 +10,7 @@ LLM_MODEL=claude-opus-4-5-20251101
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Uses the official `@anthropic-ai/sdk` and its native tool-use format.
+Uses the official `@anthropic-ai/sdk` and its native tool-use format. Prompt caching is on by default (`LLM_PROMPT_CACHE=false` disables it): the system prompt with the tool schemas, and the conversation so far, are cached between turns. With `AGENT_VERBOSE=true` each turn logs `cached=<tokens>` when the cache hits; prompts below the model's minimum cacheable size are simply not cached.
 
 ## OpenAI
 
@@ -61,6 +61,35 @@ LLM_PROVIDER=github-models
 GITHUB_TOKEN=ghp_...
 GITHUB_MODELS_MODEL=gpt-4o
 ```
+
+## Local or any OpenAI-compatible model
+
+Runs the agent against a model on your own machine (Ollama, LM Studio, llama.cpp, vLLM) or any hosted OpenAI-style chat endpoint. Page content then never leaves the machine, which is useful for F&O data. Nothing needs an API key locally.
+
+```
+LLM_PROVIDER=openai-compatible
+OPENAI_COMPATIBLE_MODEL=qwen3:14b            # the name shown by `ollama list`
+# OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1   # default (Ollama)
+# OPENAI_COMPATIBLE_API_KEY=                 # only for hosted endpoints
+LLM_MAX_TOKENS=8192
+```
+
+| Server | `OPENAI_COMPATIBLE_BASE_URL` |
+| --- | --- |
+| Ollama (default) | `http://localhost:11434/v1` |
+| LM Studio | `http://localhost:1234/v1` |
+| llama.cpp `llama-server` | `http://localhost:8080/v1` |
+
+`doctor` checks that the server answers and lists the model. What decides whether it works:
+
+- **Tool calling.** The model must support it (`ollama show <model>` lists `tools` under capabilities). The agent drives the browser purely through tool calls.
+- **Context window of at least 32k tokens.** F&O page snapshots are large. Ollama's `/v1` endpoint cannot set the window per request, so set it on the server (`OLLAMA_CONTEXT_LENGTH=32768`, or the slider in the Ollama app), then check `ollama ps`. Too small truncates the prompt silently; **too large is just as bad**: a 262144-token window pushed a 27B model to 31 GB on a 24 GB Mac, split between CPU and GPU, roughly 10x slower. You want `100% GPU` in `ollama ps`.
+- **Thinking models** spend output tokens on reasoning before they call a tool. Use `LLM_MAX_TOKENS=8192` or more, or the reply can be cut off before the tool call.
+- **Small windows:** set `AGENT_CONTEXT_KEEP_RECENT=1` so only the latest page snapshot stays in the prompt.
+- **Model size.** Multi-step browsing is hard for small models; expect to want roughly 14B+ parameters. A 27B (IQ3) model on an M4 Pro (24 GB) completed a login smoke test at about 20 s per turn with a 32k window.
+- **Timeouts.** For a server on this machine the request timeout is at least 5 minutes (`LLM_HTTP_TIMEOUT_MS` can only raise it), since a cold model load plus a long prompt can be slow.
+
+The guardrails (tool allowlist, navigation limits, production block) apply to every model. Weaker models are easier to steer with injected page text, so they matter more here, not less.
 
 ## Adding a new provider
 

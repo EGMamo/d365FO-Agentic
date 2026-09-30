@@ -48,7 +48,7 @@ export interface LlmCompleteResponse {
   text: string;
   toolCalls: LlmToolCall[];
   stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'other';
-  usage?: { inputTokens?: number; outputTokens?: number };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
 }
 
 export interface LlmProvider {

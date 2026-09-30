@@ -3,19 +3,34 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveGitHubToken } from '../llm/github-copilot.js';
+import { productionIssue } from '../d365fo/environment.js';
 
 /**
  * Central configuration loaded from environment variables. All secrets and
  * endpoints live in `.env` so the agent stays portable.
  */
-const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models', 'github-copilot']);
+const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models', 'github-copilot', 'openai-compatible']);
 const stepStatusEnum = z.enum(['passed', 'failed', 'skipped', 'blocked']);
+const csvList = z
+  .string()
+  .default('')
+  .transform((v) =>
+    v
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+  );
 
 const envSchema = z.object({
   LLM_PROVIDER: providerEnum.default('anthropic'),
   LLM_MODEL: z.string().default('claude-opus-4-5-20251101'),
   LLM_MAX_TOKENS: z.coerce.number().int().positive().default(4096),
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.1),
+  // Anthropic only: cache the system prompt, tool schemas and conversation prefix between turns.
+  LLM_PROMPT_CACHE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
 
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
@@ -28,6 +43,13 @@ const envSchema = z.object({
   GITHUB_MODELS_MODEL: z.string().default('gpt-4o'),
   GITHUB_COPILOT_TOKEN: z.string().optional(),
   GITHUB_COPILOT_MODEL: z.string().default('gpt-4.1'),
+  // Any OpenAI-compatible chat endpoint: a local Ollama / LM Studio / llama.cpp / vLLM server, or a hosted one.
+  OPENAI_COMPATIBLE_BASE_URL: z.string().default('http://localhost:11434/v1'),
+  OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
+  OPENAI_COMPATIBLE_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
 
   AZDO_ORG_URL: z.string().optional(),
   AZDO_PROJECT: z.string().optional(),
@@ -44,6 +66,11 @@ const envSchema = z.object({
   D365_USERNAME: z.string().optional(),
   D365_PASSWORD: z.string().optional(),
   D365_COMPANY: z.string().default('USMF'),
+  // Declare what the environment is; otherwise it is guessed from the host (see d365fo/environment.ts).
+  D365_ENVIRONMENT_TYPE: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() || undefined : v),
+    z.enum(['sandbox', 'production', 'dev']).optional(),
+  ),
   // Optional: sign in with a saved browser session instead of a password. Created by `session-login`.
   D365_STORAGE_STATE: z
     .string()
@@ -75,6 +102,15 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() !== 'false'),
   AGENT_MAX_STEPS: z.coerce.number().int().positive().default(40),
   AGENT_MAX_REPEATED_CALLS: z.coerce.number().int().min(0).default(3),
+  // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
+  AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
+  // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.
+  AGENT_ALLOW_PRODUCTION: z
+    .string()
+    .default('false')
+    .transform((v) => v.toLowerCase() === 'true'),
+  AGENT_ALLOWED_HOSTS: csvList.transform((v) => v.map((h) => h.toLowerCase())),
+  AGENT_ALLOWED_TOOLS_EXTRA: csvList,
   AGENT_RELOOP_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
   AGENT_RELOOP_RETRY_ON: z
     .string()
@@ -140,9 +176,15 @@ export function validateForRun(cfg: AppConfig): string[] {
         issues.push('No GitHub Copilot credentials: set GITHUB_COPILOT_TOKEN or run `d365fo-agent copilot-login`');
       }
       break;
+    case 'openai-compatible':
+      if (!cfg.OPENAI_COMPATIBLE_MODEL) issues.push('OPENAI_COMPATIBLE_MODEL is required for provider=openai-compatible (e.g. the name shown by `ollama list`)');
+      if (!isHttpUrl(cfg.OPENAI_COMPATIBLE_BASE_URL)) issues.push(`OPENAI_COMPATIBLE_BASE_URL is not a valid http(s) URL: ${cfg.OPENAI_COMPATIBLE_BASE_URL}`);
+      break;
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
+  const prod = productionIssue(cfg);
+  if (prod) issues.push(prod);
   const hasPassword = !!cfg.D365_USERNAME && !!cfg.D365_PASSWORD;
   if (!hasPassword) {
     if (!cfg.D365_STORAGE_STATE) {
@@ -152,6 +194,23 @@ export function validateForRun(cfg: AppConfig): string[] {
     }
   }
   return issues;
+}
+
+/**
+ * A hint for the most common mix-up: LLM_MODEL only applies to the anthropic provider, every other provider
+ * reads its own variable, so setting LLM_MODEL silently changes nothing.
+ */
+export function ignoredModelHint(cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const ownVariable: Partial<Record<AppConfig['LLM_PROVIDER'], string>> = {
+    openai: 'OPENAI_MODEL',
+    'azure-openai': 'AZURE_OPENAI_DEPLOYMENT',
+    'github-models': 'GITHUB_MODELS_MODEL',
+    'github-copilot': 'GITHUB_COPILOT_MODEL',
+    'openai-compatible': 'OPENAI_COMPATIBLE_MODEL',
+  };
+  const own = ownVariable[cfg.LLM_PROVIDER];
+  if (!own || !env.LLM_MODEL?.trim() || env[own]?.trim()) return undefined;
+  return `LLM_MODEL=${env.LLM_MODEL.trim()} is ignored: it only applies to provider=anthropic. Provider ${cfg.LLM_PROVIDER} uses ${own}, which is not set, so it runs ${activeModel(cfg)}.`;
 }
 
 /** The model the selected provider will actually use (each provider reads its own variable). */
@@ -167,5 +226,15 @@ export function activeModel(cfg: AppConfig): string {
       return cfg.GITHUB_MODELS_MODEL;
     case 'github-copilot':
       return cfg.GITHUB_COPILOT_MODEL;
+    case 'openai-compatible':
+      return cfg.OPENAI_COMPATIBLE_MODEL ?? '(missing)';
+  }
+}
+
+function isHttpUrl(v: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(v).protocol);
+  } catch {
+    return false;
   }
 }

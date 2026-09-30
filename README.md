@@ -8,6 +8,7 @@ The agent is **LLM-agnostic** and ships with adapters for:
 - **Azure OpenAI**
 - **GitHub Copilot** (uses your Copilot subscription — see [Providers](docs/providers.md#github-copilot))
 - **GitHub Models**
+- **Local or any OpenAI-compatible model** — Ollama, LM Studio, llama.cpp, vLLM (see [Providers](docs/providers.md#local-or-any-openai-compatible-model))
 
 It maintains a **local knowledge base** so it can learn selectors, recipes, and remediations across runs.
 
@@ -61,15 +62,19 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 
 | Variable | Purpose |
 | --- | --- |
-| `LLM_PROVIDER` | `anthropic` (default), `openai`, `azure-openai`, `github-models`, `github-copilot` |
+| `LLM_PROVIDER` | `anthropic` (default), `openai`, `azure-openai`, `github-models`, `github-copilot`, `openai-compatible` (local models) |
 | `ANTHROPIC_API_KEY` | Required when provider is `anthropic` |
+| `OPENAI_COMPATIBLE_MODEL` / `OPENAI_COMPATIBLE_BASE_URL` | Provider `openai-compatible`: model name and server URL (default Ollama, `http://localhost:11434/v1`) |
 | `GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_MODEL` | Provider `github-copilot`: token (or run `copilot-login` to save one) and model |
 | `D365_BASE_URL` | Your F&O sandbox URL |
 | `D365_USERNAME` / `D365_PASSWORD` | Test account credentials (non-MFA recommended for automated runs) |
+| `D365_ENVIRONMENT_TYPE` | Declare `sandbox` / `production` / `dev`; empty guesses from the URL (see [Grounding & safety](#grounding--safety)) |
 | `D365_STORAGE_STATE` | Optional saved browser session (see [docs/d365fo.md](docs/d365fo.md#signing-in-with-a-saved-session-optional)); replaces the password when set |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
 | `PW_BROWSER` / `PW_AUTO_INSTALL` | Playwright browser (`chromium` default) and whether to download it automatically when missing (default `true`) |
+| `AGENT_ALLOW_PRODUCTION` / `AGENT_ALLOWED_HOSTS` / `AGENT_ALLOWED_TOOLS_EXTRA` | Guardrail overrides (production runs, extra navigable hosts, extra MCP tools) |
+| `AGENT_CONTEXT_KEEP_RECENT` / `LLM_PROMPT_CACHE` | Prompt size and cost: how many recent page snapshots stay verbatim, and Anthropic prompt caching |
 | `AGENT_RELOOP_MAX_RETRIES` / `AGENT_RELOOP_RETRY_ON` | Retry controls for failed/blocked outcomes |
 | `LLM_HTTP_TIMEOUT_MS` / `LLM_HTTP_MAX_RETRIES` | LLM timeout and retry resilience |
 | `AZDO_HTTP_TIMEOUT_MS` / `AZDO_HTTP_MAX_RETRIES` | Azure DevOps timeout and retry resilience |
@@ -80,11 +85,16 @@ Local test cases are JSON files following [`src/testing/types.ts`](src/testing/t
 
 ## Grounding & safety
 
-The agent is prompted as a **QA persona** that:
-- Cites Microsoft Learn when making product-behavior claims.
-- Only calls whitelisted MCP tools (`browser_*`, `microsoft_docs_*`, `kb_*`, `report_step`, `finish_test`).
-- Refuses to perform destructive actions outside the configured legal entity.
-- Runs in **dry-run** mode when `AGENT_DRY_RUN=true` or `--dry-run` is passed.
+The agent is prompted as a **QA persona** that cites Microsoft Learn for product-behaviour claims and treats page, tool and knowledge-base content as untrusted data. The prompt is not the control, though. These guardrails are enforced in code:
+
+- **Production block.** `run` refuses an environment that is, or looks like, production. Only LCS-managed sandboxes (`<name>.sandbox.operations…`) are recognised from the host; Power Platform (unified) environments use the same host format for sandbox and production, so declare them with `D365_ENVIRONMENT_TYPE=sandbox`. `AGENT_ALLOW_PRODUCTION=true` is the explicit override.
+- **Tool allowlist.** Only a safe subset of the Playwright and Learn MCP tools is shown to the model, and calls to anything else are refused at dispatch. That keeps cookie/storage dumps, arbitrary JS, file access and network internals out of reach of a prompt-injected page. Opt tools in with `AGENT_ALLOWED_TOOLS_EXTRA`.
+- **Navigation and legal entity.** Model-requested navigation is limited to the F&O host and Microsoft sign-in (extend with `AGENT_ALLOWED_HOSTS`), and `cmp=` company links must match the test's legal entity (`legalEntity` in the test case, else `D365_COMPANY`). Redirects the browser follows on its own are not intercepted.
+- **Scrubbed, bounded results.** Configured secrets and token-shaped strings are redacted, and sizes capped, before model-written text reaches reports, the knowledge base or Azure DevOps. Invalid tool arguments are rejected instead of recorded.
+- **Audit trail.** Every refused call is listed under `policyBlocks` in `results.json` and in the HTML report; an attempt that keeps probing the guardrails is stopped.
+- **Dry-run** (`AGENT_DRY_RUN=true` / `--dry-run`) skips state-changing browser tools.
+
+Redaction cannot recognise arbitrary business data (customer names, amounts) that a page shows, so treat `reports/` and `knowledge/` as sensitive.
 
 ## Documentation
 

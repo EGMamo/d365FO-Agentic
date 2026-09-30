@@ -3,6 +3,7 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fetchWithResilience, type ResilientRequestOptions } from '../utils/http.js';
+import { LlmHttpError } from './errors.js';
 import { OpenAiCompatibleProvider } from './openai-compatible.js';
 import type { LlmProvider } from './types.js';
 
@@ -168,10 +169,11 @@ export class CopilotSessionAuth {
     );
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(
+      throw new LlmHttpError(
         `GitHub Copilot token exchange failed (HTTP ${res.status}): ${text}\n` +
           'Check that this account has an active Copilot subscription and that the token came from ' +
           '`d365fo-agent copilot-login` (personal access tokens are not accepted).',
+        res.status,
       );
     }
     const data = (await res.json()) as { token?: string; expires_at?: number; endpoints?: { api?: string } };

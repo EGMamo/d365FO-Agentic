@@ -52,6 +52,8 @@ jobs:
           AZDO_TEST_PLAN_ID: ${{ inputs.planId }}
           AZDO_TEST_SUITE_ID: ${{ inputs.suiteId }}
           D365_BASE_URL: ${{ secrets.D365_BASE_URL }}
+          # Set the repo variable to `sandbox` for Power Platform (unified) sandboxes, whose host looks like production.
+          D365_ENVIRONMENT_TYPE: ${{ vars.D365_ENVIRONMENT_TYPE }}
           D365_USERNAME: ${{ secrets.D365_USERNAME }}
           D365_PASSWORD: ${{ secrets.D365_PASSWORD }}
         run: node dist/cli/index.js doctor
@@ -68,6 +70,8 @@ jobs:
           AZDO_TEST_PLAN_ID: ${{ inputs.planId }}
           AZDO_TEST_SUITE_ID: ${{ inputs.suiteId }}
           D365_BASE_URL: ${{ secrets.D365_BASE_URL }}
+          # Set the repo variable to `sandbox` for Power Platform (unified) sandboxes, whose host looks like production.
+          D365_ENVIRONMENT_TYPE: ${{ vars.D365_ENVIRONMENT_TYPE }}
           D365_USERNAME: ${{ secrets.D365_USERNAME }}
           D365_PASSWORD: ${{ secrets.D365_PASSWORD }}
           PW_HEADLESS: 'true'

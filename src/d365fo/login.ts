@@ -34,12 +34,34 @@ export function credentialFor(cfg: AppConfig, field: unknown): string | undefine
   return undefined;
 }
 
-/** Replaces any occurrence of the configured credentials in `text` with `***`. */
-export function redactSecrets(cfg: AppConfig, text: string): string {
+const SECRET_KEYS = [
+  'D365_PASSWORD',
+  'D365_USERNAME',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENAI_COMPATIBLE_API_KEY',
+  'AZURE_OPENAI_API_KEY',
+  'GITHUB_TOKEN',
+  'GITHUB_COPILOT_TOKEN',
+  'AZDO_PAT',
+] as const;
+
+// Token shapes that can show up in page text or errors even when they are not configured values.
+const TOKEN_PATTERNS = [
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWT
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/gi,
+  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
+  /\bsk-[A-Za-z0-9_-]{20,}/g,
+];
+
+/** Replaces any configured secret, and anything shaped like an access token, in `text` with `***`. */
+export function redactSecrets(cfg: Partial<Record<(typeof SECRET_KEYS)[number], string | undefined>>, text: string): string {
   let out = text;
-  for (const secret of [cfg.D365_PASSWORD, cfg.D365_USERNAME]) {
+  for (const key of SECRET_KEYS) {
+    const secret = cfg[key];
     if (secret) out = out.split(secret).join('***');
   }
+  for (const pattern of TOKEN_PATTERNS) out = out.replace(pattern, '***');
   return out;
 }
 

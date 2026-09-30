@@ -2,7 +2,8 @@
 import { Command } from 'commander';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { activeModel, loadConfig, validateForRun } from '../config/index.js';
+import { activeModel, ignoredModelHint, loadConfig, validateForRun } from '../config/index.js';
+import { dotenvFileProblems } from '../config/dotenv-check.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import {
@@ -16,6 +17,9 @@ import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
 import { checkSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
+import { checkModelEndpoint } from '../llm/endpoint.js';
+import { isLoopbackUrl } from '../llm/index.js';
+import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
 
 const program = new Command();
 program
@@ -29,8 +33,30 @@ program
   .action(async () => {
     const cfg = loadConfig();
     const issues = validateForRun(cfg);
+    for (const p of dotenvFileProblems()) issues.push(p.message);
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
-    console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'}`);
+    const modelHint = ignoredModelHint(cfg);
+    if (modelHint) console.log(`  WARNING: ${modelHint}`);
+    if (cfg.LLM_PROVIDER === 'openai-compatible') {
+      const url = cfg.OPENAI_COMPATIBLE_BASE_URL;
+      const ep = await checkModelEndpoint(url, cfg.OPENAI_COMPATIBLE_API_KEY);
+      if (!ep.reachable) {
+        console.log(`LLM endpoint: NOT REACHABLE at ${url} (${ep.error})`);
+        issues.push(`Cannot reach the LLM endpoint at ${url}. Start the server (Ollama: open the app or run \`ollama serve\`; LM Studio: start its local server).`);
+      } else {
+        console.log(`LLM endpoint: reachable at ${url} (${ep.models.length} model(s) listed${ep.error ? `; ${ep.error}` : ''})`);
+        const model = cfg.OPENAI_COMPATIBLE_MODEL;
+        if (model && ep.models.length && !ep.models.includes(model)) {
+          console.log(`  WARNING: model '${model}' is not in the server's list: ${ep.models.slice(0, 8).join(', ')}`);
+        }
+      }
+      if (isLoopbackUrl(url)) {
+        console.log('  Local models: the agent needs a context window of at least 32k tokens (Ollama: OLLAMA_CONTEXT_LENGTH=32768 or more; check with `ollama ps`).');
+        if (cfg.LLM_MAX_TOKENS < 8192) console.log('  Thinking models spend output tokens on reasoning: consider LLM_MAX_TOKENS=8192 or more.');
+      }
+    }
+    console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'} [${describeEnvironment(cfg)}${cfg.AGENT_ALLOW_PRODUCTION ? '; production runs allowed' : ''}]`);
+    console.log(`Guardrails: navigation limited to ${allowedHosts(cfg).join(', ')}; ${cfg.AGENT_ALLOWED_TOOLS_EXTRA.length} extra tool grant(s)`);
     console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
     const session = await checkSession(cfg);
     console.log(`D365 saved session: ${session.state === 'off' ? session.detail : `${session.state.toUpperCase()} - ${session.detail}`}`);
@@ -140,6 +166,7 @@ program
     reloopCooldownMs?: number;
   }) => {
     const cfg = loadConfig();
+    const warnings: string[] = [];
     if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
     if (opts.reloopMaxRetries !== undefined && !Number.isNaN(opts.reloopMaxRetries)) {
       cfg.AGENT_RELOOP_MAX_RETRIES = Math.max(0, opts.reloopMaxRetries);
@@ -156,10 +183,16 @@ program
         );
     }
     const issues = validateForRun(cfg);
+    // A credential cut off at a "#" would be typed into the sign-in page and can lock the account after a few tries.
+    for (const p of dotenvFileProblems()) (p.secret ? issues : warnings).push(p.message);
+    for (const w of warnings) console.warn(`warning: ${w}`);
     if (issues.length) {
       for (const i of issues) console.error(`config: ${i}`);
       process.exit(1);
     }
+    console.log(`LLM: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
+    const modelHint = ignoredModelHint(cfg);
+    if (modelHint) console.warn(`warning: ${modelHint}`);
 
     const execution = await executeTestRun(cfg, {
       plan: opts.plan,
@@ -177,6 +210,11 @@ program
       return;
     }
     console.log(`\nReports:\n  ${execution.reportPaths.html}\n  ${execution.reportPaths.json}\n  ${execution.reportPaths.junit}`);
+    if (execution.aborted) {
+      console.error(`\nThe run was aborted by an LLM provider problem, not by the tests: ${execution.aborted}`);
+      if (opts.upload) console.error('Results were not uploaded to Azure DevOps. Fix the cause and run again.');
+      process.exitCode = 1;
+    }
     if (execution.upload) console.log(`Uploaded to Azure DevOps run #${execution.upload.runId}: ${execution.upload.url}`);
   });
 

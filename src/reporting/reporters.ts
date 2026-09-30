@@ -36,7 +36,7 @@ function toJUnit(results: TestResult[]): string {
   const cases = results
     .map((r) => {
       const t = (r.durationMs / 1000).toFixed(3);
-      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}`;
+      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}`;
       let body = '';
       if (r.outcome === 'failed') {
         body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}">${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
@@ -68,7 +68,9 @@ function toHtml(results: TestResult[]): string {
   <td>${xmlEscape(`${r.firstOutcome ?? r.outcome} → ${r.outcome}`)}</td>
   <td>${(r.durationMs / 1000).toFixed(2)}s</td>
   <td>${r.steps.length}</td>
-  <td>${r.errorMessage ? xmlEscape(r.errorMessage) : ''}</td>
+  <td>${r.errorMessage ? xmlEscape(r.errorMessage) : ''}${
+    r.policyBlocks?.length ? `<div class="guard">Guardrails refused ${r.policyBlocks.length} call(s):<br>${r.policyBlocks.map(xmlEscape).join('<br>')}</div>` : ''
+  }</td>
 </tr>`,
     )
     .join('');
@@ -98,6 +100,7 @@ th{background:#fafafa}
 .badge.failed{background:#d64545}
 .badge.blocked{background:#c07a1f}
 .badge.skipped{background:#7a7a80}
+.guard{margin-top:6px;padding:6px 8px;border-left:3px solid #c07a1f;background:#fff8ec;font-size:12px}
 </style></head><body>
 <h1>d365fo-agentic — test run</h1>
 <div class="summary">

@@ -6,22 +6,44 @@ import type {
   LlmToolCall,
 } from './types.js';
 
+const EPHEMERAL = { cache_control: { type: 'ephemeral' } } as const;
+
+/** The slice of the SDK client this adapter uses; tests inject a fake. */
+export interface AnthropicClientLike {
+  messages: { create(params: never): Promise<Anthropic.Message> };
+}
+
 /**
  * Anthropic Claude adapter. Uses the official SDK's tool-use protocol and
  * projects it onto the shared `LlmProvider` shape.
+ *
+ * With `promptCache` on, two cache breakpoints are set: the system prompt (which
+ * also covers the tool schemas that precede it) and the last message block, so
+ * each turn re-reads the previous turn's prefix at the cached-token rate instead
+ * of paying full price for the whole history. Prompts under the model's minimum
+ * cacheable size are simply not cached.
  */
 export class AnthropicProvider implements LlmProvider {
   readonly name = 'anthropic';
-  private client: Anthropic;
+  private client: AnthropicClientLike;
   private model: string;
   private defaultMaxTokens: number;
   private defaultTemperature: number;
+  private promptCache: boolean;
 
-  constructor(opts: { apiKey: string; model: string; maxTokens: number; temperature: number }) {
-    this.client = new Anthropic({ apiKey: opts.apiKey });
+  constructor(opts: {
+    apiKey: string;
+    model: string;
+    maxTokens: number;
+    temperature: number;
+    promptCache?: boolean;
+    client?: AnthropicClientLike;
+  }) {
+    this.client = opts.client ?? (new Anthropic({ apiKey: opts.apiKey }) as unknown as AnthropicClientLike);
     this.model = opts.model;
     this.defaultMaxTokens = opts.maxTokens;
     this.defaultTemperature = opts.temperature;
+    this.promptCache = opts.promptCache ?? true;
   }
 
   async complete(req: LlmCompleteRequest): Promise<LlmCompleteResponse> {
@@ -54,18 +76,22 @@ export class AnthropicProvider implements LlmProvider {
       }
     }
 
-    const response = await this.client.messages.create({
+    if (this.promptCache) markLastBlock(anthropicMessages);
+
+    // cache_control is accepted by the API but missing from this SDK version's non-beta request types.
+    const params = {
       model: this.model,
       max_tokens: req.maxTokens ?? this.defaultMaxTokens,
       temperature: req.temperature ?? this.defaultTemperature,
-      system: req.system,
+      system: req.system ? [{ type: 'text', text: req.system, ...(this.promptCache ? EPHEMERAL : {}) }] : undefined,
       messages: anthropicMessages,
       tools: (req.tools ?? []).map((t) => ({
         name: t.name,
         description: t.description,
         input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
       })),
-    });
+    };
+    const response = await this.client.messages.create(params as never);
 
     let text = '';
     const toolCalls: LlmToolCall[] = [];
@@ -96,7 +122,26 @@ export class AnthropicProvider implements LlmProvider {
       usage: {
         inputTokens: response.usage?.input_tokens,
         outputTokens: response.usage?.output_tokens,
+        cacheReadTokens: cacheTokens(response.usage, 'cache_read_input_tokens'),
+        cacheWriteTokens: cacheTokens(response.usage, 'cache_creation_input_tokens'),
       },
     };
   }
+}
+
+function cacheTokens(usage: unknown, key: 'cache_read_input_tokens' | 'cache_creation_input_tokens'): number | undefined {
+  const v = (usage as Record<string, unknown> | undefined)?.[key];
+  return typeof v === 'number' ? v : undefined;
+}
+
+/** Puts a cache breakpoint on the last non-empty block of the last message. */
+function markLastBlock(messages: Anthropic.MessageParam[]): void {
+  const last = messages.at(-1);
+  if (!last) return;
+  if (typeof last.content === 'string') {
+    if (last.content) last.content = [{ type: 'text', text: last.content, ...EPHEMERAL }] as never;
+    return;
+  }
+  const block = [...last.content].reverse().find((b) => !(b.type === 'text' && !b.text));
+  if (block) Object.assign(block, EPHEMERAL);
 }
