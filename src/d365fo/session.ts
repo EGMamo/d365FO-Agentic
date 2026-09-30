@@ -18,17 +18,14 @@ export interface SessionStatus {
   path?: string;
   ageHours?: number;
   detail: string;
-  /** Set when the file looks usable but lacks the F&O session cookie (see F_AND_O_SESSION_COOKIE). */
-  warning?: string;
+  /** Non-fatal findings, e.g. a missing anti-forgery cookie. Never contain cookie values. */
+  warnings?: string[];
 }
 
-/**
- * The F&O client's session cookie. FastTrack's F&O JMeter sample injects it (with `ms-dyn-csrftoken` and
- * `ms-dyn-affinity`) to skip the interactive login. A saved session with only Microsoft sign-in cookies
- * is therefore unlikely to open the F&O client. Treated as a warning, not an error, because the cookie
- * name is taken from that sample and has not been confirmed on every F&O deployment.
- */
-export const F_AND_O_SESSION_COOKIE = 'DynamicsOwinAuth';
+/** The F&O session cookie. A storage state without it cannot be a valid F&O login (Entra cookies alone are not enough). */
+export const F_AND_O_AUTH_COOKIE = 'DynamicsOwinAuth';
+/** Anti-forgery cookie the F&O web client sends; its absence is only a warning. */
+export const F_AND_O_CSRF_COOKIE = 'ms-dyn-csrftoken';
 
 /** Absolute path of the saved session when it is configured *and* present, else undefined. */
 export function activeSessionFile(cfg: Pick<AppConfig, 'D365_STORAGE_STATE'>): string | undefined {
@@ -81,10 +78,6 @@ export async function checkSession(
   }
 
   const ageHours = (now - mtimeMs) / 3_600_000;
-  const missingSessionCookie = (list: StoredCookie[]): string | undefined =>
-    list.some((c) => c.name === F_AND_O_SESSION_COOKIE)
-      ? undefined
-      : `no ${F_AND_O_SESSION_COOKIE} cookie for the F&O host; the saved session may only hold Microsoft sign-in cookies. Run \`d365fo-agent session-login\` and wait for the F&O dashboard before closing the window`;
   const age = `saved ${ageHours < 1 ? 'less than an hour' : `${Math.floor(ageHours)}h`} ago`;
   let host: string | undefined;
   try {
@@ -96,84 +89,89 @@ export async function checkSession(
   if (relevant.length === 0) {
     return { state: 'expired', path, ageHours, detail: `no cookies for ${host ?? 'the D365 host'} in the saved session (${age}); run \`d365fo-agent session-login\`` };
   }
+  const hasCookie = (name: string) => relevant.some((c) => c.name?.toLowerCase() === name.toLowerCase());
+  if (!hasCookie(F_AND_O_AUTH_COOKIE)) {
+    return {
+      state: 'expired',
+      path,
+      ageHours,
+      detail: `no ${F_AND_O_AUTH_COOKIE} cookie for ${host ?? 'the D365 host'} in the saved session (${age}); the sign-in did not complete on F&O. Run \`d365fo-agent session-login\` and close the window only after the F&O dashboard has loaded`,
+    };
+  }
+  const warnings = hasCookie(F_AND_O_CSRF_COOKIE) ? undefined : [`no ${F_AND_O_CSRF_COOKIE} cookie in the saved session; F&O may reject requests until it is issued`];
   const nowSec = now / 1000;
   const dated = relevant.filter((c) => typeof c.expires === 'number' && c.expires > 0);
   if (dated.length > 0 && dated.every((c) => (c.expires as number) <= nowSec)) {
     return { state: 'expired', path, ageHours, detail: `all dated cookies have expired (${age}); run \`d365fo-agent session-login\`` };
   }
-  const warning = missingSessionCookie(relevant);
   if (ageHours > cfg.D365_SESSION_MAX_AGE_HOURS) {
     return {
-      warning,
       state: 'stale',
       path,
       ageHours,
       detail: `${age}, older than D365_SESSION_MAX_AGE_HOURS=${cfg.D365_SESSION_MAX_AGE_HOURS}; it may have expired, re-run \`d365fo-agent session-login\` if runs land on the sign-in page`,
+      warnings,
     };
   }
-  return { state: 'ok', path, ageHours, warning, detail: `${age}; looks valid (the server may still have revoked it)` };
+  return { state: 'ok', path, ageHours, detail: `${age}; looks valid (the server may still have revoked it)`, warnings };
 }
 
-export type ProbeState = 'live' | 'signed-out' | 'unknown';
+export type ProbeState = 'live' | 'expired' | 'unreachable' | 'skipped';
 
 export interface ProbeResult {
   state: ProbeState;
   detail: string;
 }
 
-type Fetcher = (url: string, init: RequestInit) => Promise<Pick<Response, 'status' | 'headers'>>;
+export type ProbeFetch = (url: string, init: { headers: Record<string, string>; redirect: 'manual'; signal: AbortSignal }) => Promise<{ status: number; headers: { get(name: string): string | null } }>;
 
 /**
- * Best-effort live check: sends the saved session's cookies for the F&O host in one GET (no redirects
- * followed) and looks at where the server sends us. A redirect to a Microsoft sign-in host means the
- * session is no longer accepted. Nothing is written and cookie values are never returned or logged.
- * Best-effort only: the expected redirect behaviour is inferred, not confirmed on a real F&O environment.
+ * Live check of the saved session. F&O session cookies carry no expiry, so file
+ * age says little; instead ask the server. One GET of the F&O URL with only the
+ * cookies for that host, redirects not followed: a redirect to
+ * login.microsoftonline.com means the session is no longer accepted. Read-only:
+ * the session file is never written and cookie values are never printed.
  */
 export async function probeSession(
   cfg: Pick<AppConfig, 'D365_STORAGE_STATE' | 'D365_BASE_URL'>,
-  fetcher: Fetcher = (url, init) => fetch(url, init),
-  now: number = Date.now(),
+  fetchFn: ProbeFetch = fetch as unknown as ProbeFetch,
+  timeoutMs = 15_000,
 ): Promise<ProbeResult> {
-  if (!cfg.D365_STORAGE_STATE || !cfg.D365_BASE_URL) return { state: 'unknown', detail: 'no saved session or D365_BASE_URL configured' };
-  let host: string;
-  try {
-    host = new URL(cfg.D365_BASE_URL).hostname.toLowerCase();
-  } catch {
-    return { state: 'unknown', detail: 'D365_BASE_URL is not a valid URL' };
-  }
+  if (!cfg.D365_STORAGE_STATE || !cfg.D365_BASE_URL) return { state: 'skipped', detail: 'needs D365_STORAGE_STATE and D365_BASE_URL' };
+  let url: URL;
   let cookies: StoredCookie[];
   try {
-    const parsed = JSON.parse(await readFile(resolve(cfg.D365_STORAGE_STATE), 'utf8')) as { cookies?: StoredCookie[] };
-    cookies = Array.isArray(parsed.cookies) ? parsed.cookies : [];
+    url = new URL(cfg.D365_BASE_URL);
+    cookies = (JSON.parse(await readFile(resolve(cfg.D365_STORAGE_STATE), 'utf8')) as { cookies?: StoredCookie[] }).cookies ?? [];
   } catch {
-    return { state: 'unknown', detail: 'the saved session file could not be read' };
+    return { state: 'skipped', detail: 'saved session or D365_BASE_URL could not be read' };
   }
+  const host = url.hostname.toLowerCase();
   const header = cookies
     .filter((c) => c.name && c.value !== undefined && c.domain && hostMatches(c.domain, host))
-    .filter((c) => !(typeof c.expires === 'number' && c.expires > 0 && c.expires <= now / 1000))
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
-  if (!header) return { state: 'signed-out', detail: 'the saved session has no usable cookies for the F&O host' };
-  let res: Pick<Response, 'status' | 'headers'>;
   try {
-    res = await fetcher(cfg.D365_BASE_URL, { redirect: 'manual', headers: { cookie: header }, signal: AbortSignal.timeout(15_000) });
+    const res = await fetchFn(url.toString(), { headers: { cookie: header }, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      let target: string;
+      try {
+        target = new URL(location, url).hostname.toLowerCase();
+      } catch {
+        target = '';
+      }
+      if (target.endsWith('login.microsoftonline.com') || target.endsWith('login.live.com')) {
+        return { state: 'expired', detail: 'the server redirected to the Microsoft sign-in page; run `d365fo-agent session-login`' };
+      }
+      return { state: 'live', detail: `the server accepted the session (redirected within ${target || 'the environment'})` };
+    }
+    if (res.status === 401 || res.status === 403) return { state: 'expired', detail: `the server answered ${res.status}; run \`d365fo-agent session-login\`` };
+    if (res.status >= 200 && res.status < 300) return { state: 'live', detail: 'the server accepted the session' };
+    return { state: 'unreachable', detail: `unexpected HTTP ${res.status} from ${host}` };
   } catch (e) {
-    return { state: 'unknown', detail: `could not reach the F&O host (${e instanceof Error ? e.message : String(e)})` };
+    return { state: 'unreachable', detail: `could not reach ${host}: ${e instanceof Error ? e.message : String(e)}` };
   }
-  if (res.status >= 300 && res.status < 400) {
-    let target = '';
-    try {
-      target = new URL(res.headers.get('location') ?? '', cfg.D365_BASE_URL).hostname.toLowerCase();
-    } catch {
-      target = '';
-    }
-    if (/(^|\.)login\.(microsoftonline|windows)\.(com|net)$/.test(target) || /(^|\.)sts\./.test(target)) {
-      return { state: 'signed-out', detail: `the F&O host redirected to a sign-in page (${target}); run \`d365fo-agent session-login\`` };
-    }
-    return { state: 'unknown', detail: `the F&O host redirected to ${target || 'another location'}; cannot tell whether the session is accepted` };
-  }
-  if (res.status === 200) return { state: 'live', detail: 'the F&O host answered without sending you to sign in' };
-  return { state: 'unknown', detail: `the F&O host answered HTTP ${res.status}` };
 }
 
 export function sessionLoginArgs(cfg: Pick<AppConfig, 'PW_BROWSER'>, url: string, out: string): string[] {

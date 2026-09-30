@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { validateForRun, type AppConfig } from '../config/index.js';
 import { buildDefaultManager } from '../mcp/registry.js';
 import { d365SystemGuidance } from './guidance.js';
-import { activeSessionFile, checkSession, interactiveSessionLogin, probeSession, sessionLoginArgs } from './session.js';
+import { activeSessionFile, checkSession, interactiveSessionLogin, probeSession, sessionLoginArgs, type ProbeFetch } from './session.js';
 
 const NOW = Date.UTC(2026, 0, 10, 12);
 const base = { D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_SESSION_MAX_AGE_HOURS: 12 };
@@ -20,7 +20,7 @@ async function saved(cookies: unknown, ageHours = 1) {
   await utimes(path, t, t);
   return path;
 }
-const cookie = (over: object = {}) => ({ name: 'a', value: 'v', domain: 'x.sandbox.operations.dynamics.com', expires: -1, ...over });
+const cookie = (over: object = {}) => ({ name: 'DynamicsOwinAuth', value: 'v', domain: 'x.sandbox.operations.dynamics.com', expires: -1, ...over });
 
 describe('checkSession', () => {
   it('is off when unset', async () => {
@@ -49,59 +49,26 @@ describe('checkSession', () => {
     const p = await saved([cookie({ domain: '.dynamics.com' })]);
     assert.equal((await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW)).state, 'ok');
   });
+  it('is expired when only Entra cookies are present (no DynamicsOwinAuth)', async () => {
+    const p = await saved([cookie({ name: 'ESTSAUTH' }), cookie({ name: 'ms-dyn-csrftoken' })]);
+    const s = await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW);
+    assert.equal(s.state, 'expired');
+    assert.match(s.detail, /session-login/);
+  });
+  it('ignores a DynamicsOwinAuth cookie that belongs to another host', async () => {
+    const p = await saved([cookie({ domain: '.other.example' }), cookie({ name: 'ESTSAUTH' })]);
+    assert.equal((await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW)).state, 'expired');
+  });
+  it('warns, without failing, when ms-dyn-csrftoken is missing', async () => {
+    const s = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie()]) }, NOW);
+    assert.equal(s.state, 'ok');
+    assert.match(s.warnings?.[0] ?? '', /ms-dyn-csrftoken/);
+    const full = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie(), cookie({ name: 'ms-dyn-csrftoken' })]) }, NOW);
+    assert.equal(full.warnings, undefined);
+  });
   it('is stale past the max age', async () => {
     const p = await saved([cookie()], 30);
     assert.equal((await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW)).state, 'stale');
-  });
-});
-
-describe('checkSession F&O session cookie', () => {
-  it('warns when only sign-in cookies are saved, and not when DynamicsOwinAuth is present', async () => {
-    const without = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie({ name: 'ESTSAUTH' })]) }, NOW);
-    assert.equal(without.state, 'ok');
-    assert.match(without.warning ?? '', /DynamicsOwinAuth/);
-    const withIt = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie({ name: 'DynamicsOwinAuth' })]) }, NOW);
-    assert.equal(withIt.warning, undefined);
-  });
-  it('keeps the warning on a stale session and never echoes cookie values', async () => {
-    const s = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie({ name: 'x', value: 'TOPSECRET' })], 30) }, NOW);
-    assert.equal(s.state, 'stale');
-    assert.ok(s.warning);
-    assert.ok(!JSON.stringify(s).includes('TOPSECRET'));
-  });
-});
-
-describe('probeSession', () => {
-  const headers = (location?: string) => new Headers(location ? { location } : {});
-  const cfgFor = async (cookies: unknown) => ({ ...base, D365_STORAGE_STATE: await saved(cookies) });
-
-  it('sends only cookies for the F&O host, without following redirects', async () => {
-    const cfg = await cfgFor([cookie({ name: 'DynamicsOwinAuth', value: 'V1' }), cookie({ name: 'other', value: 'V2', domain: '.other.example' })]);
-    let seen: RequestInit | undefined;
-    const r = await probeSession(cfg, async (_u, init) => ((seen = init), { status: 200, headers: headers() }), NOW);
-    assert.equal(r.state, 'live');
-    assert.equal(seen?.redirect, 'manual');
-    assert.equal((seen?.headers as Record<string, string>).cookie, 'DynamicsOwinAuth=V1');
-    assert.ok(!JSON.stringify(r).includes('V1'));
-  });
-  it('reports signed-out when the host redirects to a Microsoft sign-in page', async () => {
-    const cfg = await cfgFor([cookie({ name: 'DynamicsOwinAuth' })]);
-    const r = await probeSession(cfg, async () => ({ status: 302, headers: headers('https://login.microsoftonline.com/tenant/oauth2/authorize?x=1') }), NOW);
-    assert.equal(r.state, 'signed-out');
-    assert.match(r.detail, /session-login/);
-  });
-  it('is unknown for other redirects, other statuses and network errors', async () => {
-    const cfg = await cfgFor([cookie({ name: 'DynamicsOwinAuth' })]);
-    assert.equal((await probeSession(cfg, async () => ({ status: 302, headers: headers('/somewhere') }), NOW)).state, 'unknown');
-    assert.equal((await probeSession(cfg, async () => ({ status: 503, headers: headers() }), NOW)).state, 'unknown');
-    assert.equal((await probeSession(cfg, async () => { throw new Error('boom'); }, NOW)).state, 'unknown');
-  });
-  it('makes no request when there are no usable cookies', async () => {
-    const cfg = await cfgFor([cookie({ domain: '.other.example' })]);
-    let called = false;
-    const r = await probeSession(cfg, async () => ((called = true), { status: 200, headers: headers() }), NOW);
-    assert.equal(r.state, 'signed-out');
-    assert.equal(called, false);
   });
 });
 
@@ -135,9 +102,8 @@ describe('using the saved session', () => {
     assert.match(d365SystemGuidance(cfg({ D365_STORAGE_STATE: p })), /BLOCKED and say the saved session must be renewed/);
     assert.match(d365SystemGuidance(cfg({ D365_STORAGE_STATE: p, D365_USERNAME: 'u', D365_PASSWORD: 'p' })), /fall back to the credential steps/);
     assert.ok(!d365SystemGuidance(cfg({})).includes('saved, already signed-in'));
-  });
-  it('tells the model not to sign out', () => {
-    assert.match(d365SystemGuidance(cfg({})), /Do not sign out/);
+    assert.match(d365SystemGuidance(cfg({ D365_STORAGE_STATE: p })), /Never sign out/);
+    assert.ok(!d365SystemGuidance(cfg({})).includes('Never sign out'));
   });
   it('activeSessionFile ignores a missing file', () => {
     assert.equal(activeSessionFile({ D365_STORAGE_STATE: '/nope.json' }), undefined);
@@ -165,5 +131,34 @@ describe('interactiveSessionLogin', () => {
       interactiveSessionLogin({ PW_BROWSER: 'chromium', D365_BASE_URL: base.D365_BASE_URL }, out, async () => 0),
       /No session was saved/,
     );
+  });
+});
+
+describe('probeSession', () => {
+  const reply = (status: number, location?: string): ProbeFetch => async () => ({ status, headers: { get: (n) => (n === 'location' && location ? location : null) } });
+  const cfgFor = async () => ({ ...base, D365_STORAGE_STATE: await saved([cookie({ value: 'TOPSECRET' }), cookie({ name: 'ESTSAUTH', domain: '.login.microsoftonline.com', value: 'OTHER' })]) });
+
+  it('is skipped without a saved session', async () => {
+    assert.equal((await probeSession({ ...base, D365_STORAGE_STATE: undefined })).state, 'skipped');
+  });
+  it('is expired when redirected to the Microsoft sign-in page', async () => {
+    const r = await probeSession(await cfgFor(), reply(302, 'https://login.microsoftonline.com/common/oauth2/authorize?x=1'));
+    assert.equal(r.state, 'expired');
+    assert.match(r.detail, /session-login/);
+  });
+  it('is live on 200 or on a redirect within the environment', async () => {
+    assert.equal((await probeSession(await cfgFor(), reply(200))).state, 'live');
+    assert.equal((await probeSession(await cfgFor(), reply(302, '/?cmp=USMF'))).state, 'live');
+  });
+  it('is unreachable when the request fails, and never echoes cookie values', async () => {
+    const r = await probeSession(await cfgFor(), async () => { throw new Error('ECONNRESET'); });
+    assert.equal(r.state, 'unreachable');
+    assert.ok(!JSON.stringify(r).includes('TOPSECRET'));
+  });
+  it('sends only cookies for the F&O host and never follows redirects', async () => {
+    let seen: { cookie?: string; redirect?: string } = {};
+    await probeSession(await cfgFor(), async (_u, init) => { seen = { cookie: init.headers.cookie, redirect: init.redirect }; return { status: 200, headers: { get: () => null } }; });
+    assert.equal(seen.cookie, 'DynamicsOwinAuth=TOPSECRET');
+    assert.equal(seen.redirect, 'manual');
   });
 });

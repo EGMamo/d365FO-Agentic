@@ -18,6 +18,7 @@ export function d365SystemGuidance(cfg: AppConfig): string {
           cfg.D365_USERNAME && cfg.D365_PASSWORD
             ? 'If you are redirected to login.microsoftonline.com anyway (the session expired), fall back to the credential steps below.'
             : 'If you are redirected to login.microsoftonline.com (the session expired), mark the step BLOCKED and say the saved session must be renewed with `session-login`; no credentials are configured.',
+          'Never sign out, log off or end the session (user menu, /Logout, End sessions): the saved session is reused by later runs and signing out would invalidate it.',
         ]
       : []),
     '1. Navigate to the D365 F&O URL.',
@@ -35,9 +36,6 @@ export function d365SystemGuidance(cfg: AppConfig): string {
     '- Prefer the top search box ("Ctrl+/" or the magnifier icon) with a menu-item label for deterministic navigation.',
     '- Detail forms follow a header/lines pattern; use tab captions (General, Setup, etc.) to reveal fields.',
     '- Grid rows are keyboard-focusable; use ArrowDown / Tab to move; avoid brittle x/y clicks.',
-    '',
-    'Session:',
-    '- Do not sign out at the end of a test. Leave the session open: signing out can end a saved session that later runs reuse.',
     '',
     'Safety rules:',
     '- Only perform destructive actions (post, confirm, delete) inside the configured legal entity.',

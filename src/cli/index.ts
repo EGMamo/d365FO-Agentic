@@ -15,7 +15,7 @@ import {
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
-import { checkSession, DEFAULT_SESSION_FILE, interactiveSessionLogin, probeSession } from '../d365fo/session.js';
+import { checkSession, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { checkModelEndpoint } from '../llm/endpoint.js';
 import { isLoopbackUrl } from '../llm/index.js';
@@ -30,7 +30,7 @@ program
 program
   .command('doctor')
   .description('Validate configuration and MCP server connectivity')
-  .option('--probe', 'also send one request with the saved session to see whether the F&O host still accepts it (best effort)')
+  .option('--probe', 'Also ask the F&O server whether the saved session is still accepted (one HTTP request, no browser)')
   .action(async (opts: { probe?: boolean }) => {
     const cfg = loadConfig();
     const issues = validateForRun(cfg);
@@ -61,18 +61,16 @@ program
     console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
     const session = await checkSession(cfg);
     console.log(`D365 saved session: ${session.state === 'off' ? session.detail : `${session.state.toUpperCase()} - ${session.detail}`}`);
-    if (session.warning) console.log(`  WARNING: ${session.warning}`);
-    if (opts.probe && session.state !== 'off' && session.state !== 'missing' && session.state !== 'unreadable') {
-      const probe = await probeSession(cfg);
-      console.log(`D365 session probe: ${probe.state.toUpperCase()} - ${probe.detail}`);
-      if (probe.state === 'signed-out' && !(cfg.D365_USERNAME && cfg.D365_PASSWORD)) {
-        issues.push(`Saved D365 session is no longer accepted: ${probe.detail}`);
-      }
-    }
     if (session.state === 'expired' || session.state === 'unreadable') {
       const fallback = cfg.D365_USERNAME && cfg.D365_PASSWORD;
       if (fallback) console.log('  (username and password are set, so runs will fall back to them.)');
       else issues.push(`Saved D365 session is ${session.state}: ${session.detail}`);
+    }
+    for (const w of session.warnings ?? []) console.log(`  WARNING: ${w}`);
+    if (opts.probe && session.state !== 'off') {
+      const probe = await probeSession(cfg);
+      console.log(`D365 session probe: ${probe.state.toUpperCase()} - ${probe.detail}`);
+      if (probe.state === 'expired' && !(cfg.D365_USERNAME && cfg.D365_PASSWORD)) issues.push(`Saved D365 session is no longer accepted: ${probe.detail}`);
     }
     console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
     const browser = await checkPlaywrightBrowser(cfg);
