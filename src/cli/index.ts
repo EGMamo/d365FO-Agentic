@@ -123,7 +123,7 @@ program
   .option('--suite <id>', 'Azure DevOps test suite id')
   .option('--local <dir>', 'Load local test cases from a directory instead')
   .option('--case <id>', 'Filter to a single test-case id')
-  .option('--dry-run', 'Skip mutating browser actions (planning only)')
+  .option('--dry-run', 'Skip state-changing browser actions (click/type/fill/...); navigation and snapshots still run')
   .option('--upload', 'Upload results to Azure DevOps after the run')
   .option('--reloop-max-retries <n>', 'Retries per case after first attempt', Number.parseInt)
   .option('--reloop-retry-on <csv>', 'Outcomes to retry (comma-separated)', 'failed,blocked')
