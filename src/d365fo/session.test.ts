@@ -64,8 +64,14 @@ describe('using the saved session', () => {
     assert.deepEqual(validateForRun(cfg({ D365_STORAGE_STATE: p })), []);
   });
   it('still requires credentials when the session file is missing', () => {
-    assert.equal(validateForRun(cfg({ D365_STORAGE_STATE: '/nope.json' })).length, 1);
-    assert.equal(validateForRun(cfg({})).length, 1);
+    for (const c of [cfg({ D365_STORAGE_STATE: '/nope.json' }), cfg({})]) {
+      const issues = validateForRun(c);
+      assert.equal(issues.length, 1);
+      assert.ok(issues[0].includes('D365_USERNAME') && issues[0].includes('D365_PASSWORD'));
+    }
+  });
+  it('accepts configured credentials without a session file', () => {
+    assert.deepEqual(validateForRun(cfg({ D365_USERNAME: 'u', D365_PASSWORD: 'p' })), []);
   });
   it('launches Playwright with the storage state only when a file is supplied', async () => {
     const args = (m: unknown) => (m as { specs: Map<string, { args: string[] }> }).specs.get('playwright')!.args;

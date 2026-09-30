@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { AgentOrchestrator } from './orchestrator.js';
 import { baseSystemPrompt } from './prompts.js';
-import { validateForRun, type AppConfig } from '../config/index.js';
+import type { AppConfig } from '../config/index.js';
 import { CREDENTIAL_TOOL_NAME, browserTypeArgs } from '../d365fo/login.js';
 import type { LlmCompleteRequest, LlmCompleteResponse } from '../llm/types.js';
 import type { TestCase } from '../testing/types.js';
@@ -82,12 +82,10 @@ describe('D365 login credentials', () => {
     for (const s of sent) assert.ok(!s.includes(SECRET_PASS) && !s.includes(SECRET_USER), s);
   });
 
-  it('uses whichever ref key the installed browser_type schema declares', () => {
-    const newer = { properties: { element: {}, target: {}, text: {}, submit: {} } };
-    const older = { properties: { element: {}, ref: {}, text: {}, submit: {} } };
-    assert.deepEqual(browserTypeArgs(newer, { ref: 'e1', element: 'Email', text: 't', submit: true }), { target: 'e1', text: 't', submit: true, element: 'Email' });
-    assert.deepEqual(browserTypeArgs(older, { ref: 'e1', element: 'Email', text: 't' }), { ref: 'e1', text: 't', submit: false, element: 'Email' });
-    assert.ok('target' in browserTypeArgs(undefined, { ref: 'e1', text: 't' }));
+  it('sends only what the browser_type schema allows, defaulting to target', () => {
+    const schema = { properties: { ref: {}, text: {}, submit: {} } };
+    assert.deepEqual(browserTypeArgs(schema, { ref: 'e1', element: 'Email', text: 't' }), { ref: 'e1', text: 't', submit: false });
+    assert.deepEqual(browserTypeArgs(undefined, { ref: 'e1', element: 'Email', text: 't' }), { target: 'e1', text: 't', submit: false, element: 'Email' });
   });
 
   it('sends ref to an older server and reports a real typing failure without leaking secrets', async () => {
@@ -122,11 +120,5 @@ describe('D365 login credentials', () => {
     const last = sent.join('\n');
     assert.ok(last.includes('typing it failed') && !last.includes('No value'), last);
     assert.ok(!last.includes(SECRET_PASS));
-  });
-
-  it('reports a clear error when credentials are missing', () => {
-    const issues = validateForRun(cfg({ D365_USERNAME: undefined, D365_PASSWORD: undefined }));
-    assert.ok(issues.some((i) => i.includes('D365_USERNAME') && i.includes('D365_PASSWORD')));
-    assert.ok(!validateForRun(cfg()).some((i) => i.includes('D365_USERNAME')));
   });
 });
