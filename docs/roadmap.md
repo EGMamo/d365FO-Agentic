@@ -1,0 +1,20 @@
+# Roadmap: next changes to the agent
+
+Ranked suggestions from a review of Microsoft's
+[Dynamics-365-FastTrack-Implementation-Assets](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets)
+repo (snapshot 2026-09-21). That repo has no F&O UI automation, RSAT or Azure DevOps Test Plans content, so most
+items below are informed by it but need verifying against a real sandbox. The UI-shell plan is in
+[desktop-roadmap.md](desktop-roadmap.md).
+
+| # | Change | Why | FastTrack reference |
+|---|--------|-----|---------------------|
+| 1 | Document the MFA and non-MFA setup in [d365fo.md](d365fo.md): dedicated test account excluded from security defaults/Conditional Access, or `session-login` for MFA accounts. | Most common setup failure. Microsoft's own guide assumes security defaults are off for the test tenant. | [Playwright setup guide](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Documentation), [JMeter MFA sample using pre-obtained cookies](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Administration/Performance/Jmeter/Sample) |
+| 2 | Configurable per-step wait and timeout budgets, plus an F&O rule in `src/d365fo/guidance.ts` to wait for the busy indicator to clear and re-snapshot after each action. | F&O forms load asynchronously. The Customer Service sample's global idle flag does not exist in F&O, so this must be learned in a sandbox. | [Timeout enum and wait helpers](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/utils/common.ts) |
+| 3 | Keep a screenshot and Playwright trace for every failed step under `reports/`. | Fastest way to debug an agent-driven failure. | [`trace: 'on-first-retry'` config](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/blob/master/Customer%20Service/Customer%20Service/Testing/Automation/Playwright/Samples/automation/playwright.config.ts) |
+| 4 | Real sandbox runs of `TC-SMOKE-LOGIN` and `TC-VENDOR-001`, feeding the learned selectors and waits into the knowledge base. | No upstream source of F&O selectors exists. | none (gap) |
+| 5 | Read the RSAT and Azure DevOps Test Plans documentation on Microsoft Learn and decide whether to import RSAT-style parameter data and shared parameters. | Largest gap for Azure DevOps users; FastTrack has nothing on it. | none (gap) |
+| 6 | Add the Release Planner MCP server as an optional third MCP server to pick regression areas per release wave. | Same stack (TypeScript, MCP), public API, no auth. | [Release Planner](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/Implementation%20Agents/Release%20Planner) |
+| 7 | Optional API-side test data setup: a `setup` block in test-case JSON, or an OData helper, so UI tests check behaviour and not data entry. Evaluate the F&O MCP server (Microsoft Learn: Dynamics 365 F&O Model Context Protocol) as the channel. | Microsoft's own agents call F&O through MCP; warehouse sample seeds data outside the UI. | [Inventory Fulfillment Agent](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents/Inventory%20Fulfillment%20Agent), [Warehouse App Task Validation](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Administration/Performance/Warehouse%20App%20Task%20Validation) |
+| 8 | Reuse FastTrack agents as end-to-end test subjects (Sales Order, User Onboarding, Compliance Advisor) in a sandbox only. | They perform real F&O writes that need independent verification. | [AI ERP Agents](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents) |
+
+Notes: do not copy the sample's habit of committing session files or `.env`; keep `.d365fo-session/` gitignored.
