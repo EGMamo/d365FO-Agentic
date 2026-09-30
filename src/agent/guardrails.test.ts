@@ -70,3 +70,14 @@ describe('checkCall', () => {
     assert.equal(g.checkCall('learn', 'microsoft_docs_fetch', { url: 'https://learn.microsoft.com/en-us/dynamics365/' }), undefined);
   });
 });
+
+describe('release-planner tools', () => {
+  it('allows only its three read-only query tools, and only when the server is enabled', () => {
+    const cfg = { D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_COMPANY: 'USMF' };
+    const on = new Guardrails(cfg, ['playwright', 'learn', 'release-planner']);
+    for (const t of ['search_release_plans', 'list_products', 'get_release_wave_summary']) assert.equal(on.checkCall('release-planner', t, {}), undefined);
+    assert.match(on.checkCall('release-planner', 'delete_everything', {}) ?? '', /not on the agent's tool allowlist/);
+    const off = new Guardrails(cfg, ['playwright', 'learn']);
+    assert.match(off.checkCall('release-planner', 'list_products', {}) ?? '', /not enabled/);
+  });
+});

@@ -22,7 +22,7 @@ export interface SessionStatus {
   warnings?: string[];
 }
 
-/** The F&O session cookie. A storage state without it cannot be a valid F&O login (Entra cookies alone are not enough). */
+/** The F&O session cookie named in FastTrack's JMeter sample. Its absence is a warning, since the name is unconfirmed on a real deployment. */
 export const F_AND_O_AUTH_COOKIE = 'DynamicsOwinAuth';
 /** Anti-forgery cookie the F&O web client sends; its absence is only a warning. */
 export const F_AND_O_CSRF_COOKIE = 'ms-dyn-csrftoken';
@@ -90,15 +90,12 @@ export async function checkSession(
     return { state: 'expired', path, ageHours, detail: `no cookies for ${host ?? 'the D365 host'} in the saved session (${age}); run \`d365fo-agent session-login\`` };
   }
   const hasCookie = (name: string) => relevant.some((c) => c.name?.toLowerCase() === name.toLowerCase());
+  // Warnings only: the cookie names come from FastTrack's JMeter sample and are not confirmed on every F&O deployment.
+  const warnings: string[] = [];
   if (!hasCookie(F_AND_O_AUTH_COOKIE)) {
-    return {
-      state: 'expired',
-      path,
-      ageHours,
-      detail: `no ${F_AND_O_AUTH_COOKIE} cookie for ${host ?? 'the D365 host'} in the saved session (${age}); the sign-in did not complete on F&O. Run \`d365fo-agent session-login\` and close the window only after the F&O dashboard has loaded`,
-    };
+    warnings.push(`no ${F_AND_O_AUTH_COOKIE} cookie for ${host ?? 'the D365 host'} in the saved session; if runs land on the sign-in page, the sign-in may not have reached F&O. Run \`d365fo-agent session-login\` and close the window only after the F&O dashboard has loaded`);
   }
-  const warnings = hasCookie(F_AND_O_CSRF_COOKIE) ? undefined : [`no ${F_AND_O_CSRF_COOKIE} cookie in the saved session; F&O may reject requests until it is issued`];
+  if (!hasCookie(F_AND_O_CSRF_COOKIE)) warnings.push(`no ${F_AND_O_CSRF_COOKIE} cookie in the saved session; F&O may reject requests until it is issued`);
   const nowSec = now / 1000;
   const dated = relevant.filter((c) => typeof c.expires === 'number' && c.expires > 0);
   if (dated.length > 0 && dated.every((c) => (c.expires as number) <= nowSec)) {
@@ -110,10 +107,10 @@ export async function checkSession(
       path,
       ageHours,
       detail: `${age}, older than D365_SESSION_MAX_AGE_HOURS=${cfg.D365_SESSION_MAX_AGE_HOURS}; it may have expired, re-run \`d365fo-agent session-login\` if runs land on the sign-in page`,
-      warnings,
+      warnings: warnings.length ? warnings : undefined,
     };
   }
-  return { state: 'ok', path, ageHours, detail: `${age}; looks valid (the server may still have revoked it)`, warnings };
+  return { state: 'ok', path, ageHours, detail: `${age}; looks valid (the server may still have revoked it)`, warnings: warnings.length ? warnings : undefined };
 }
 
 export type ProbeState = 'live' | 'expired' | 'unreachable' | 'skipped';

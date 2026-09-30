@@ -36,7 +36,7 @@ function toJUnit(results: TestResult[]): string {
   const cases = results
     .map((r) => {
       const t = (r.durationMs / 1000).toFixed(3);
-      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}`;
+      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}${r.timeouts?.length ? `; timeouts=${r.timeouts.length}` : ''}`;
       let body = '';
       if (r.outcome === 'failed') {
         body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}">${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
@@ -70,6 +70,10 @@ function toHtml(results: TestResult[]): string {
   <td>${r.steps.length}</td>
   <td>${r.errorMessage ? xmlEscape(r.errorMessage) : ''}${
     r.policyBlocks?.length ? `<div class="guard">Guardrails refused ${r.policyBlocks.length} call(s):<br>${r.policyBlocks.map(xmlEscape).join('<br>')}</div>` : ''
+  }${r.timeouts?.length ? `<div class="guard">Timed out ${r.timeouts.length} time(s):<br>${r.timeouts.map(xmlEscape).join('<br>')}</div>` : ''}${
+    r.steps.some((st) => st.verified === false) ? `<div class="guard">Unverified step(s): ${r.steps.filter((st) => st.verified === false).map((st) => st.index).join(', ')}</div>` : ''
+  }${
+    r.data && Object.keys(r.data).length ? `<div class="data">Recorded values:<br>${Object.entries(r.data).map(([k, v]) => `${xmlEscape(k)} = ${xmlEscape(v)}`).join('<br>')}</div>` : ''
   }</td>
 </tr>`,
     )
@@ -100,6 +104,7 @@ th{background:#fafafa}
 .badge.failed{background:#d64545}
 .badge.blocked{background:#c07a1f}
 .badge.skipped{background:#7a7a80}
+.data{margin-top:6px;padding:6px 8px;border-left:3px solid #4a6fa5;background:#f1f5fb;font-size:12px}
 .guard{margin-top:6px;padding:6px 8px;border-left:3px solid #c07a1f;background:#fff8ec;font-size:12px}
 </style></head><body>
 <h1>d365fo-agentic — test run</h1>

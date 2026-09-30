@@ -28,6 +28,8 @@ export interface StepResult {
   index: number;
   status: StepStatus;
   observed?: string;
+  /** For a passed step with an expected result: true when the agent checked it against the page. */
+  verified?: boolean;
   errorMessage?: string;
   screenshotPath?: string;
   durationMs: number;
@@ -47,6 +49,10 @@ export interface TestResult {
   learnings?: string[];
   /** Tool calls the guardrails refused (disallowed tool, off-limits URL, wrong legal entity). */
   policyBlocks?: string[];
+  /** Tool calls that exceeded their time budget (AGENT_TOOL_TIMEOUT_MS / AGENT_NAV_TIMEOUT_MS). */
+  timeouts?: string[];
+  /** Values the agent saved with `record_value` (created ids, generated numbers). Never secrets. */
+  data?: Record<string, string>;
   attemptCount?: number;
   firstOutcome?: StepStatus;
   previousOutcome?: StepStatus;

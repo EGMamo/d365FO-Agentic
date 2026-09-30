@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
+import { finishTrace, snapshotFiles, traceOutputDir, tracingEnabled } from '../mcp/playwright-trace.js';
 import { join } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 import type { LlmProvider } from '../llm/index.js';
@@ -19,7 +20,8 @@ const MAX_POLICY_BLOCKS = 5;
 const MAX_LEARNINGS = 10;
 const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
 const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
-const LIMITS = { observed: 2000, error: 2000, summary: 1000, learningSummary: 200, learningDetails: 2000, blockNote: 300 };
+const MAX_DATA_KEYS = 20;
+const LIMITS = { dataKey: 60, dataValue: 500, observed: 2000, error: 2000, summary: 1000, learningSummary: 200, learningDetails: 2000, blockNote: 300 };
 
 const LOCAL_TOOLS: LlmTool[] = [
   {
@@ -34,8 +36,28 @@ const LOCAL_TOOLS: LlmTool[] = [
         status: { type: 'string', enum: ['passed', 'failed', 'skipped', 'blocked'] },
         observed: { type: 'string', description: 'What actually happened' },
         errorMessage: { type: 'string' },
+        verified: {
+          type: 'boolean',
+          description:
+            'Required when status is "passed" and the step has an expected result. true only if you checked the expected result against a fresh page snapshot (quote what you saw in `observed`); false if you could not check it.',
+        },
       },
     },
+  },
+  {
+    name: 'record_value',
+    description:
+      'Save a value created or discovered during this run (a generated vendor account, an order number) so later steps and the report can use it. Never store secrets. Use `recall_values` to read them back.',
+    inputSchema: {
+      type: 'object',
+      required: ['key', 'value'],
+      properties: { key: { type: 'string' }, value: { type: 'string' } },
+    },
+  },
+  {
+    name: 'recall_values',
+    description: 'Return every value saved with `record_value` in this run.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'finish_test',
@@ -91,6 +113,8 @@ interface AttemptResult {
   artifacts: string[];
   learnings: string[];
   policyBlocks: string[];
+  timeouts: string[];
+  data: Record<string, string>;
   errorMessage?: string;
 }
 
@@ -151,11 +175,14 @@ export class AgentOrchestrator {
       artifacts: [],
       learnings: [],
       policyBlocks: [],
+      timeouts: [],
+      data: {},
       errorMessage: 'No attempts were executed',
     };
 
     const previous = attempts.length > 1 ? attempts[attempts.length - 2] : undefined;
     const policyBlocks = Array.from(new Set(attempts.flatMap((a) => a.policyBlocks))).slice(0, 20);
+    const timeouts = Array.from(new Set(attempts.flatMap((a) => a.timeouts))).slice(0, 20);
     const finalState: RunState =
       final.outcome === 'passed' || final.outcome === 'skipped' ? 'completed' : final.outcome === 'failed' ? 'failed' : 'blocked';
 
@@ -172,6 +199,8 @@ export class AgentOrchestrator {
       errorMessage: final.errorMessage,
       learnings: final.learnings,
       ...(policyBlocks.length ? { policyBlocks } : {}),
+      ...(timeouts.length ? { timeouts } : {}),
+      ...(Object.keys(final.data).length ? { data: final.data } : {}),
       attemptCount: attempts.length,
       firstOutcome: first.outcome,
       previousOutcome: previous?.outcome,
@@ -225,11 +254,24 @@ export class AgentOrchestrator {
       5,
     );
 
+    let traceBefore: Set<string> | undefined;
+    if (tracingEnabled(this.cfg) && this.mcpServers.includes('playwright')) {
+      try {
+        traceBefore = await snapshotFiles(traceOutputDir(this.cfg));
+        await this.mcp.callTool('playwright', 'browser_start_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
+      } catch (e) {
+        traceBefore = undefined;
+        console.warn(`[agent] could not start a Playwright trace (${(e as Error).message}); continuing without one`);
+      }
+    }
+
     const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved) }];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
     const artifacts: string[] = [];
     const policyBlocks: string[] = [];
+    const timeouts: string[] = [];
+    const data: Record<string, string> = {};
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
     let stopped = false;
@@ -278,6 +320,8 @@ export class AgentOrchestrator {
             artifactsDir,
             artifacts,
             policyBlocks,
+            timeouts,
+            data,
           });
           if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
@@ -314,6 +358,23 @@ export class AgentOrchestrator {
         : 'The model ended the test without a reason.';
     }
 
+    if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN) {
+      const unverified = unverifiedSteps(tc, steps);
+      if (unverified.length) {
+        outcome = 'blocked';
+        overallError = `Not counted as passed: step ${unverified.join(', ')} ${unverified.length > 1 ? 'have' : 'has'} an expected result that was not verified against the page. Nothing was checked, so no pass is claimed.`;
+      }
+    }
+
+    if (traceBefore) {
+      try {
+        await this.mcp.callTool('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
+        artifacts.push(...(await finishTrace(this.cfg, traceBefore, outcome)));
+      } catch (e) {
+        console.warn(`[agent] could not finish the Playwright trace: ${(e as Error).message}`);
+      }
+    }
+
     const finishedAt = new Date();
     const runState: RunState = outcome === 'failed' ? 'failed' : outcome === 'blocked' ? 'blocked' : 'completed';
     return {
@@ -327,6 +388,8 @@ export class AgentOrchestrator {
       errorMessage: overallError,
       learnings,
       policyBlocks,
+      timeouts,
+      data,
     };
   }
 
@@ -339,6 +402,8 @@ export class AgentOrchestrator {
       artifactsDir: string;
       artifacts: string[];
       policyBlocks: string[];
+      timeouts: string[];
+      data: Record<string, string>;
     },
   ): Promise<DispatchResult> {
     const args: Record<string, unknown> =
@@ -354,9 +419,14 @@ export class AgentOrchestrator {
       if (!STEP_STATUSES.includes(args.status as StepStatus)) {
         return fail(`Invalid status ${JSON.stringify(args.status)}. Use one of: ${STEP_STATUSES.join(', ')}. Nothing was recorded.`);
       }
+      const expected = ctx.tc.steps.find((s) => s.index === index)?.expected;
+      if (expected && args.status === 'passed' && typeof args.verified !== 'boolean') {
+        return fail(`Step ${index} has an expected result (${this.clean(expected, 200)}). Check it against a fresh browser_snapshot, then call report_step again with verified=true (quote what you saw in \`observed\`), or verified=false if you could not check it. Nothing was recorded.`);
+      }
       const step: StepResult = {
         index,
         status: args.status as StepStatus,
+        ...(typeof args.verified === 'boolean' ? { verified: args.verified } : {}),
         observed: typeof args.observed === 'string' ? this.clean(args.observed, LIMITS.observed) : undefined,
         errorMessage: typeof args.errorMessage === 'string' ? this.clean(args.errorMessage, LIMITS.error) : undefined,
         durationMs: 0,
@@ -366,6 +436,15 @@ export class AgentOrchestrator {
       else ctx.steps.push(step);
       return { content: JSON.stringify({ ok: true, recorded: step.index }) };
     }
+    if (call.name === 'record_value') {
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      const value = typeof args.value === 'string' ? args.value : '';
+      if (!key || !value) return fail('Both `key` and `value` are required, as non-empty strings. Nothing was recorded.');
+      if (!(key in ctx.data) && Object.keys(ctx.data).length >= MAX_DATA_KEYS) return fail(`At most ${MAX_DATA_KEYS} values can be recorded per run. Nothing was recorded.`);
+      ctx.data[this.clean(key, LIMITS.dataKey)] = this.clean(value, LIMITS.dataValue);
+      return { content: JSON.stringify({ ok: true, recorded: key }) };
+    }
+    if (call.name === 'recall_values') return { content: JSON.stringify(ctx.data) };
     if (call.name === CREDENTIAL_TOOL_NAME) {
       const field = String(args.field);
       const secret = credentialFor(this.cfg, args.field);
@@ -459,7 +538,7 @@ export class AgentOrchestrator {
       if (this.cfg.AGENT_DRY_RUN && server === 'playwright' && isMutatingBrowserTool(toolName)) {
         return { content: JSON.stringify({ dryRun: true, note: `Skipped mutating browser tool ${toolName}` }) };
       }
-      const res = await this.mcp.callTool(server, toolName, args);
+      const res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
       return {
@@ -469,8 +548,25 @@ export class AgentOrchestrator {
         ),
       };
     } catch (e) {
+      if (isTimeoutError(e)) {
+        const ms = this.toolTimeoutMs(toolName, args);
+        const note = this.clean(`${call.name} exceeded ${Math.round(ms / 1000)}s`, LIMITS.blockNote);
+        ctx.timeouts.push(note);
+        return {
+          content: JSON.stringify({
+            error: `${call.name} timed out after ${Math.round(ms / 1000)}s. The page may still be loading or a dialog may be open: take a fresh browser_snapshot before retrying.`,
+          }),
+        };
+      }
       return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
     }
+  }
+
+  /** Time budget for one tool call: navigation gets the longer budget, and an explicit wait is never cut short. */
+  private toolTimeoutMs(tool: string, args: Record<string, unknown>): number {
+    const base = tool === 'browser_navigate' ? this.cfg.AGENT_NAV_TIMEOUT_MS : this.cfg.AGENT_TOOL_TIMEOUT_MS;
+    const budget = base ?? 60000;
+    return tool === 'browser_wait_for' && typeof args.time === 'number' ? Math.max(budget, args.time * 1000 + 5000) : budget;
   }
 
   /** Model-written text is stored in reports and the knowledge base: scrub secrets and cap its size first. */
@@ -518,4 +614,21 @@ function sleep(ms: number): Promise<void> {
  */
 function isMutatingBrowserTool(name: string): boolean {
   return /(click|type|fill|drag|drop|press|upload|handle_dialog|select_option|evaluate|run_code|route|_set|_delete|_clear)/i.test(name);
+}
+
+function isTimeoutError(e: unknown): boolean {
+  const err = e as { code?: unknown; message?: unknown };
+  return err?.code === -32001 || /request timed out|timed out/i.test(String(err?.message ?? ''));
+}
+
+/** Steps with an expected result that were not both reported as passed and marked verified (or not reported at all). */
+export function unverifiedSteps(tc: TestCase, steps: StepResult[]): number[] {
+  return tc.steps
+    .filter((t) => t.expected)
+    .filter((t) => {
+      const r = steps.find((s) => s.index === t.index);
+      if (!r) return true;
+      return r.status === 'passed' && r.verified !== true;
+    })
+    .map((t) => t.index);
 }

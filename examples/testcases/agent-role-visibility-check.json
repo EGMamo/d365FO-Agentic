@@ -1,0 +1,23 @@
+{
+  "id": "TC-AGENT-SEC-001",
+  "title": "A restricted role cannot open a form outside its duties",
+  "module": "System administration",
+  "area": "System administration\\Security",
+  "priority": 3,
+  "tags": ["sandbox-only", "security", "read-only"],
+  "preconditions": "SANDBOX ONLY. Sign in as a test user whose only role is '{restrictedRole}' (saved session or dedicated account). Replace {menuItem} with a menu item that role must not have access to, for example a vendor payment journal for a role without AP duties. Read-only: do not change any data.",
+  "legalEntity": "USMF",
+  "steps": [
+    { "index": 1, "action": "Log into D365 F&O." },
+    {
+      "index": 2,
+      "action": "Use the navigation search to look for '{menuItem}'.",
+      "expected": "The menu item is not offered in the results."
+    },
+    {
+      "index": 3,
+      "action": "Confirm the navigation pane shows no module that the role should not see.",
+      "expected": "Only modules that belong to '{restrictedRole}' are listed."
+    }
+  ]
+}

@@ -77,7 +77,7 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
     llm,
     mcp,
     kb,
-    mcpServers: ['playwright', 'learn'],
+    mcpServers: ['playwright', 'learn', ...(cfg.RELEASE_PLANNER_MCP_URL ? ['release-planner'] : [])],
   });
 
   let results: TestResult[] = [];

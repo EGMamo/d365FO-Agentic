@@ -1,0 +1,29 @@
+{
+  "id": "TC-AGENT-SO-001",
+  "title": "Verify the sales order created by the Sales Order Agent matches its source email",
+  "module": "Sales and marketing",
+  "area": "Sales\\Sales orders",
+  "priority": 2,
+  "tags": ["sandbox-only", "agent-verification", "sales-order-agent"],
+  "preconditions": "SANDBOX ONLY. The FastTrack Sales Order Agent has processed a test email in this environment. Replace {customer} and {orderRef} with the customer account and the reference from that email. The agent writes real sales orders, so never run this against production.",
+  "legalEntity": "USMF",
+  "steps": [
+    { "index": 1, "action": "Log into D365 F&O and switch to the USMF legal entity." },
+    { "index": 2, "action": "Navigate to Modules > Sales and marketing > Sales orders > All sales orders." },
+    {
+      "index": 3,
+      "action": "Filter the grid by Customer account = '{customer}' and find the order carrying the reference '{orderRef}'.",
+      "expected": "Exactly one sales order is found for that customer and reference."
+    },
+    {
+      "index": 4,
+      "action": "Open the order and compare the line items and quantities with the source email.",
+      "expected": "Every line in the email exists on the order with the same item and quantity, and there are no extra lines."
+    },
+    {
+      "index": 5,
+      "action": "Record the sales order number with record_value and close the order without changing it.",
+      "expected": "The order is unchanged and no dialog is left open."
+    }
+  ]
+}

@@ -80,9 +80,10 @@ export class McpManager {
     server: string,
     tool: string,
     args: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<{ content: unknown; isError: boolean }> {
     const client = await this.connect(server);
-    const res = await client.callTool({ name: tool, arguments: args });
+    const res = await client.callTool({ name: tool, arguments: args }, undefined, timeoutMs ? { timeout: timeoutMs } : undefined);
     return {
       content: res.content,
       isError: Boolean(res.isError),

@@ -49,15 +49,17 @@ describe('checkSession', () => {
     const p = await saved([cookie({ domain: '.dynamics.com' })]);
     assert.equal((await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW)).state, 'ok');
   });
-  it('is expired when only Entra cookies are present (no DynamicsOwinAuth)', async () => {
+  it('warns, without failing, when only Entra cookies are present (no DynamicsOwinAuth)', async () => {
     const p = await saved([cookie({ name: 'ESTSAUTH' }), cookie({ name: 'ms-dyn-csrftoken' })]);
     const s = await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW);
-    assert.equal(s.state, 'expired');
-    assert.match(s.detail, /session-login/);
+    assert.equal(s.state, 'ok');
+    assert.match(s.warnings?.join(' ') ?? '', /DynamicsOwinAuth[\s\S]*session-login/);
   });
   it('ignores a DynamicsOwinAuth cookie that belongs to another host', async () => {
     const p = await saved([cookie({ domain: '.other.example' }), cookie({ name: 'ESTSAUTH' })]);
-    assert.equal((await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW)).state, 'expired');
+    const s = await checkSession({ ...base, D365_STORAGE_STATE: p }, NOW);
+    assert.equal(s.state, 'ok');
+    assert.match(s.warnings?.join(' ') ?? '', /DynamicsOwinAuth/);
   });
   it('warns, without failing, when ms-dyn-csrftoken is missing', async () => {
     const s = await checkSession({ ...base, D365_STORAGE_STATE: await saved([cookie()]) }, NOW);
