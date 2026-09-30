@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { AgentOrchestrator } from './orchestrator.js';
 import { baseSystemPrompt } from './prompts.js';
 import { validateForRun, type AppConfig } from '../config/index.js';
-import { CREDENTIAL_TOOL_NAME } from '../d365fo/login.js';
+import { CREDENTIAL_TOOL_NAME, browserTypeArgs } from '../d365fo/login.js';
 import type { LlmCompleteRequest, LlmCompleteResponse } from '../llm/types.js';
 import type { TestCase } from '../testing/types.js';
 
@@ -74,12 +74,54 @@ describe('D365 login credentials', () => {
 
     assert.equal(res.outcome, 'passed');
     assert.ok(toolsSeen.includes(CREDENTIAL_TOOL_NAME));
-    assert.deepEqual(typed.map((t) => [t.ref, t.text, t.submit]), [
+    assert.deepEqual(typed.map((t) => [t.target, t.text, t.submit]), [
       ['e1', SECRET_USER, true],
       ['e2', SECRET_PASS, true],
     ]);
     assert.ok(sent.length >= 2);
     for (const s of sent) assert.ok(!s.includes(SECRET_PASS) && !s.includes(SECRET_USER), s);
+  });
+
+  it('uses whichever ref key the installed browser_type schema declares', () => {
+    const newer = { properties: { element: {}, target: {}, text: {}, submit: {} } };
+    const older = { properties: { element: {}, ref: {}, text: {}, submit: {} } };
+    assert.deepEqual(browserTypeArgs(newer, { ref: 'e1', element: 'Email', text: 't', submit: true }), { target: 'e1', text: 't', submit: true, element: 'Email' });
+    assert.deepEqual(browserTypeArgs(older, { ref: 'e1', element: 'Email', text: 't' }), { ref: 'e1', text: 't', submit: false, element: 'Email' });
+    assert.ok('target' in browserTypeArgs(undefined, { ref: 'e1', text: 't' }));
+  });
+
+  it('sends ref to an older server and reports a real typing failure without leaking secrets', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const seen: Array<Record<string, unknown>> = [];
+    const turns: LlmCompleteResponse[] = [
+      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: CREDENTIAL_TOOL_NAME, arguments: { field: 'password', ref: 'e9' } }] },
+      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '2', name: 'finish_test', arguments: { outcome: 'blocked' } }] },
+    ];
+    const sent: string[] = [];
+    const llm = {
+      name: 'fake',
+      async complete(req: LlmCompleteRequest): Promise<LlmCompleteResponse> {
+        for (const m of req.messages) if (m.role === 'tool') sent.push(m.content);
+        return turns.shift()!;
+      },
+    };
+    const mcp = {
+      async listTools() {
+        return [{ server: 'playwright', name: 'browser_type', description: '', inputSchema: { properties: { element: {}, ref: {}, text: {}, submit: {} } } }];
+      },
+      async callTool(_s: string, _t: string, args: Record<string, unknown>) {
+        seen.push(args);
+        return { content: [{ type: 'text', text: `bad element, text was ${String(args.text)}` }], isError: true };
+      },
+    };
+    const kb = { retrieve: () => [], upsert() {}, async save() {} };
+    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, kb, mcpServers: ['playwright'] } as never);
+    await orch.runTestCase(tc);
+    assert.equal(seen[0].ref, 'e9');
+    assert.ok(!('target' in seen[0]));
+    const last = sent.join('\n');
+    assert.ok(last.includes('typing it failed') && !last.includes('No value'), last);
+    assert.ok(!last.includes(SECRET_PASS));
   });
 
   it('reports a clear error when credentials are missing', () => {

@@ -22,7 +22,7 @@ export function d365SystemGuidance(cfg: AppConfig): string {
       : []),
     '1. Navigate to the D365 F&O URL.',
     '2. If redirected to login.microsoftonline.com, take a `browser_snapshot`, then call `d365_enter_credential` with field="username" and the ref of the email field (submit=true), snapshot again, and call it with field="password" and the password field ref (submit=true).',
-    '   You never see the credentials and must NOT type them yourself with `browser_type`; only `d365_enter_credential` has them. If it reports no value is configured, mark the step BLOCKED.',
+    '   You never see the credentials and must NOT type them yourself with `browser_type`; only `d365_enter_credential` has them. Only if it says no value is configured for the field, mark the step BLOCKED; if it reports that typing failed, read the error, take a fresh snapshot and retry.',
     '3. If prompted to stay signed in, click "No".',
     '4. Wait for the F&O client dashboard (accessibility landmark: "navigation" with app name) to be visible.',
     '',
