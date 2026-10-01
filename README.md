@@ -26,6 +26,21 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
+## Desktop icon and settings app
+
+No terminal needed after a one-time setup:
+
+```bash
+npm install
+npm run launcher:install   # builds, then puts a "D365FO Agent" icon on your desktop
+```
+
+Double-click the icon: it starts a small local web app and opens it in your browser (macOS `.command`, Windows `.lnk`, Linux `.desktop`). Close the window it opens to stop. `npm run ui` does the same from a terminal; `npm run launcher:remove` removes the icon.
+
+In the app you can create, edit, duplicate and delete **named profiles** (one per environment, for example "Sandbox UAT" and "Dev"), choose the one in use, and press **Check setup** to run `doctor` against it. Secrets are masked in the browser. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). The server listens on `127.0.0.1` only and requires a per-machine token.
+
+The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
+
 ## Quick start
 
 ```bash
@@ -95,6 +110,8 @@ The agent is prompted as a **QA persona** that cites Microsoft Learn for product
 - **Navigation and legal entity.** Model-requested navigation is limited to the F&O host and Microsoft sign-in (extend with `AGENT_ALLOWED_HOSTS`), and `cmp=` company links must match the test's legal entity (`legalEntity` in the test case, else `D365_COMPANY`). Redirects the browser follows on its own are not intercepted.
 - **Scrubbed, bounded results.** Configured secrets and token-shaped strings are redacted, and sizes capped, before model-written text reaches reports, the knowledge base or Azure DevOps. Invalid tool arguments are rejected instead of recorded.
 - **Audit trail.** Every refused call is listed under `policyBlocks` in `results.json` and in the HTML report; an attempt that keeps probing the guardrails is stopped.
+- **Run limits per attempt.** A page, menu item or path that cannot be opened is never retried (navigating to it again is refused), the step is reported blocked and the run moves on, and the test is not re-run by the reloop; after `AGENT_MAX_UNREACHABLE_TARGETS` (3) different missing pages it stops. MFA prompts and refused sign-ins stop the test at once (`AGENT_STOP_ON_AUTH_FAILURE`). Also bounded: wall-clock time (`AGENT_TEST_TIMEOUT_MS`), tokens (`AGENT_MAX_TOKENS_PER_TEST`), failing tool calls in a row (`AGENT_MAX_CONSECUTIVE_ERRORS`), identical calls in a row (`AGENT_MAX_REPEATED_CALLS`) and model turns (`AGENT_MAX_STEPS`). `0` turns a limit off.
+- **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
 - **Dry-run** (`AGENT_DRY_RUN=true` / `--dry-run`) skips state-changing browser tools.
 
 Redaction cannot recognise arbitrary business data (customer names, amounts) that a page shows, so treat `reports/` and `knowledge/` as sensitive.

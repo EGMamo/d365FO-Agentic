@@ -12,6 +12,7 @@ import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 import { compactHistory } from './context.js';
 import { Guardrails } from './guardrails.js';
 import { toUnavailable } from '../llm/errors.js';
+import { AttemptGuard, destructiveClick, detectAuthProblem, detectUnreachable, type RunStop } from './run-guard.js';
 
 const DEFAULT_MAX_REPEATED_CALLS = 3;
 const DEFAULT_CONTEXT_KEEP_RECENT = 3;
@@ -36,6 +37,12 @@ const LOCAL_TOOLS: LlmTool[] = [
         status: { type: 'string', enum: ['passed', 'failed', 'skipped', 'blocked'] },
         observed: { type: 'string', description: 'What actually happened' },
         errorMessage: { type: 'string' },
+        cause: {
+          type: 'string',
+          enum: ['not_found', 'no_access', 'sign_in', 'other'],
+          description:
+            'Why a failed or blocked step could not be done. not_found: a page, menu item, path or record named in the test case does not exist. no_access: the user lacks permission. sign_in: sign-in needs MFA or was refused. These stop pointless retries.',
+        },
         verified: {
           type: 'boolean',
           description:
@@ -116,6 +123,8 @@ interface AttemptResult {
   timeouts: string[];
   data: Record<string, string>;
   errorMessage?: string;
+  /** A retry of the whole test cannot change the outcome (missing target, sign-in, spent budget). */
+  nonRetryable?: boolean;
 }
 
 interface DispatchResult {
@@ -124,6 +133,10 @@ interface DispatchResult {
   outcome?: StepStatus;
   errorMessage?: string;
   policyBlocked?: boolean;
+  /** The call failed, for the consecutive-error limit. */
+  errored?: boolean;
+  /** A run limit was hit: the attempt ends here. */
+  stop?: RunStop;
 }
 
 export class AgentOrchestrator {
@@ -155,7 +168,7 @@ export class AgentOrchestrator {
       const result = await this.runAttempt(tc);
       attempts.push(result);
 
-      if (!shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) {
+      if (result.nonRetryable || !shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) {
         state = result.outcome === 'passed' || result.outcome === 'skipped' ? 'completed' : result.runState;
         break;
       }
@@ -278,16 +291,26 @@ export class AgentOrchestrator {
     const maxRepeats = this.cfg.AGENT_MAX_REPEATED_CALLS ?? DEFAULT_MAX_REPEATED_CALLS;
     let lastCallKey: string | undefined;
     let repeats = 0;
+    const guard = new AttemptGuard(this.cfg);
+    const flags = { nonRetryable: false };
 
     try {
       for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
         const compacted = compactHistory(messages, this.cfg.AGENT_CONTEXT_KEEP_RECENT ?? DEFAULT_CONTEXT_KEEP_RECENT);
         if (this.cfg.AGENT_VERBOSE && compacted > 0) this.log(`context: collapsed ${compacted} older tool result(s)`);
+        const overBudget = guard.checkBudgets();
+        if (overBudget) {
+          outcome = 'blocked';
+          overallError = overBudget.message;
+          flags.nonRetryable ||= !overBudget.retryable;
+          break;
+        }
         const response = await this.llm.complete({
           system: baseSystemPrompt(this.cfg),
           messages,
           tools,
         });
+        guard.recordUsage(response.usage);
         if (this.cfg.AGENT_VERBOSE && response.usage) {
           const u = response.usage;
           this.log(`tokens: in=${u.inputTokens ?? '?'} out=${u.outputTokens ?? '?'}${u.cacheReadTokens ? ` cached=${u.cacheReadTokens}` : ''}`);
@@ -322,6 +345,8 @@ export class AgentOrchestrator {
             policyBlocks,
             timeouts,
             data,
+            guard,
+            flags,
           });
           if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
@@ -330,10 +355,17 @@ export class AgentOrchestrator {
             toolCallId: call.id,
             toolName: call.name,
           });
+          const stop = dispatched.stop ?? (dispatched.done ? undefined : guard.recordToolResult(Boolean(dispatched.errored)));
           if (dispatched.done) {
             outcome = dispatched.outcome ?? 'blocked';
             overallError = dispatched.errorMessage;
             stopped = true;
+          } else if (stop) {
+            outcome = 'blocked';
+            overallError = stop.message;
+            flags.nonRetryable ||= !stop.retryable;
+            stopped = true;
+            break;
           } else if (dispatched.policyBlocked && policyBlocks.length >= MAX_POLICY_BLOCKS) {
             outcome = 'blocked';
             overallError = `Agent stopped: ${policyBlocks.length} tool calls were refused by the guardrails (e.g. ${policyBlocks[0]}). The run was steered outside its permitted scope.`;
@@ -390,6 +422,7 @@ export class AgentOrchestrator {
       policyBlocks,
       timeouts,
       data,
+      ...(flags.nonRetryable ? { nonRetryable: true } : {}),
     };
   }
 
@@ -404,11 +437,13 @@ export class AgentOrchestrator {
       policyBlocks: string[];
       timeouts: string[];
       data: Record<string, string>;
+      guard: AttemptGuard;
+      flags: { nonRetryable: boolean };
     },
   ): Promise<DispatchResult> {
     const args: Record<string, unknown> =
       call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments : {};
-    const fail = (error: string): DispatchResult => ({ content: JSON.stringify({ error }) });
+    const fail = (error: string): DispatchResult => ({ content: JSON.stringify({ error }), errored: true });
 
     if (call.name === 'report_step') {
       const validIndexes = ctx.tc.steps.map((s) => s.index);
@@ -434,6 +469,14 @@ export class AgentOrchestrator {
       const existing = ctx.steps.findIndex((s) => s.index === index);
       if (existing >= 0) ctx.steps[existing] = step;
       else ctx.steps.push(step);
+      if (args.status === 'failed' || args.status === 'blocked') {
+        if (args.cause === 'not_found' || args.cause === 'no_access') {
+          ctx.flags.nonRetryable = true;
+        } else if (args.cause === 'sign_in') {
+          const stop = ctx.guard.authStop({ kind: 'mfa', evidence: step.observed ?? 'reported by the model' });
+          if (stop) return { content: JSON.stringify({ ok: true, recorded: step.index }), stop };
+        }
+      }
       return { content: JSON.stringify({ ok: true, recorded: step.index }) };
     }
     if (call.name === 'record_value') {
@@ -519,10 +562,23 @@ export class AgentOrchestrator {
     }
 
     const idx = call.name.indexOf('__');
-    if (idx < 0) return { content: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
+    if (idx < 0) return fail(`Unknown tool: ${call.name}`);
     const server = call.name.slice(0, idx);
     const toolName = call.name.slice(idx + 2);
-    const denied = this.guardrails.checkCall(server, toolName, args, ctx.tc.legalEntity);
+    if (server === 'playwright' && toolName === 'browser_navigate' && typeof args.url === 'string') {
+      const again = ctx.guard.previouslyFailed(args.url);
+      if (again) {
+        return {
+          content: JSON.stringify({ error: `${again}. Do not look for another route to it. Report the step as blocked with cause "not_found" and continue with the next step that does not depend on it, or call finish_test.` }),
+          errored: true,
+        };
+      }
+    }
+    const destructive =
+      server === 'playwright' && !ctx.guard.allowDestructive ? destructiveClick(toolName, args) : undefined;
+    const denied =
+      this.guardrails.checkCall(server, toolName, args, ctx.tc.legalEntity) ??
+      (destructive ? `${destructive}; destructive actions are off (set AGENT_ALLOW_DESTRUCTIVE=true to allow them)` : undefined);
     if (denied) {
       const note = this.clean(`${call.name}: ${denied}`, LIMITS.blockNote);
       ctx.policyBlocks.push(note);
@@ -541,24 +597,37 @@ export class AgentOrchestrator {
       const res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
-      return {
-        content: redactSecrets(
-          this.cfg,
-          typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError }),
-        ),
-      };
+      const text = typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError });
+      const content = redactSecrets(this.cfg, text);
+      if (server === 'playwright') {
+        const problem = detectAuthProblem(text);
+        const authStop = problem && ctx.guard.authStop(problem);
+        if (authStop) return { content, errored: true, stop: authStop };
+        if (toolName === 'browser_navigate' && typeof args.url === 'string' && detectUnreachable(text, Boolean(res.isError))) {
+          const stop = ctx.guard.recordUnreachable(args.url, res.isError ? this.clean(mcpErrorText(res.content), 120) : 'the page reported it was not found');
+          return {
+            content: JSON.stringify({
+              error: `${args.url} could not be opened. Do not retry it or look for another route. Report the step as blocked with cause "not_found" and continue with the next step that does not depend on it, or call finish_test.`,
+            }),
+            errored: true,
+            stop,
+          };
+        }
+      }
+      return { content, ...(res.isError ? { errored: true } : {}) };
     } catch (e) {
       if (isTimeoutError(e)) {
         const ms = this.toolTimeoutMs(toolName, args);
         const note = this.clean(`${call.name} exceeded ${Math.round(ms / 1000)}s`, LIMITS.blockNote);
         ctx.timeouts.push(note);
         return {
+          errored: true,
           content: JSON.stringify({
             error: `${call.name} timed out after ${Math.round(ms / 1000)}s. The page may still be loading or a dialog may be open: take a fresh browser_snapshot before retrying.`,
           }),
         };
       }
-      return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })) };
+      return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })), errored: true };
     }
   }
 

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './load-env.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
@@ -110,6 +110,22 @@ const envSchema = z.object({
   AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   AGENT_NAV_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
   AGENT_MAX_REPEATED_CALLS: z.coerce.number().int().min(0).default(3),
+  // Run limits per attempt (0 disables a limit): wall-clock time, tokens, failing tool calls in a row,
+  // and how many different pages may be missing before the test is stopped.
+  AGENT_TEST_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
+  AGENT_MAX_TOKENS_PER_TEST: z.coerce.number().int().min(0).default(1000000),
+  AGENT_MAX_CONSECUTIVE_ERRORS: z.coerce.number().int().min(0).default(5),
+  AGENT_MAX_UNREACHABLE_TARGETS: z.coerce.number().int().min(0).default(3),
+  // Stop at once when sign-in needs MFA or the credentials are refused (retrying can lock the account).
+  AGENT_STOP_ON_AUTH_FAILURE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // Clicks on controls labelled delete/remove/purge/void are refused unless this is true.
+  AGENT_ALLOW_DESTRUCTIVE: z
+    .string()
+    .default('false')
+    .transform((v) => v.toLowerCase() === 'true'),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
   // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.

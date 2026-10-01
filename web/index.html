@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D365FO Agent</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1b1f27; --muted:#667085; --line:#d9dde4; --accent:#2563eb; --accent-text:#fff; --danger:#b42318; --ok:#067647; --warn-bg:#fff4e5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151b; --panel:#1b2029; --text:#e7eaf0; --muted:#98a2b3; --line:#2f3644; --accent:#5b8def; --accent-text:#0b1220; --danger:#f97066; --ok:#47cd89; --warn-bg:#3a2a12; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:.75rem; padding:.8rem 1.25rem; background:var(--panel); border-bottom:1px solid var(--line); }
+  header img { width:30px; height:30px; }
+  header h1 { font-size:1.05rem; margin:0; }
+  header .sub { color:var(--muted); font-size:.85rem; margin-left:auto; }
+  .layout { display:grid; grid-template-columns:280px 1fr; gap:1.25rem; padding:1.25rem; max-width:1200px; margin:0 auto; }
+  @media (max-width:760px) { .layout { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:1rem; }
+  h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 .6rem; }
+  .profile { display:flex; align-items:center; gap:.5rem; width:100%; text-align:left; padding:.55rem .7rem; border:1px solid transparent; border-radius:8px; background:none; color:inherit; font:inherit; cursor:pointer; }
+  .profile:hover { background:var(--bg); }
+  .profile[aria-current="true"] { border-color:var(--accent); background:var(--bg); }
+  .badge { margin-left:auto; font-size:.72rem; padding:.1rem .45rem; border-radius:99px; background:var(--accent); color:var(--accent-text); }
+  button.btn { font:inherit; padding:.5rem .9rem; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; }
+  button.btn:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:var(--accent-text); border-color:var(--accent); font-weight:600; }
+  button.danger { color:var(--danger); }
+  button:disabled { opacity:.5; cursor:default; }
+  .actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem; align-items:center; }
+  .actions h3 { margin:0 auto 0 0; font-size:1.15rem; }
+  fieldset { border:0; padding:0; margin:0 0 1.25rem; }
+  legend { font-weight:600; margin-bottom:.5rem; padding:0; }
+  .field { display:grid; grid-template-columns:220px 1fr; gap:.25rem .75rem; align-items:center; margin-bottom:.55rem; }
+  @media (max-width:760px) { .field { grid-template-columns:1fr; } }
+  .field label { font-size:.9rem; }
+  .field .help { grid-column:2; color:var(--muted); font-size:.8rem; margin-top:-.15rem; }
+  @media (max-width:760px) { .field .help { grid-column:1; } }
+  input[type=text], input[type=password], select { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  input:focus, select:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .custom { display:grid; grid-template-columns:1fr 1.5fr auto; gap:.5rem; margin-bottom:.5rem; }
+  .empty { color:var(--muted); padding:2rem 1rem; text-align:center; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:.75rem; overflow:auto; max-height:320px; white-space:pre-wrap; font-size:.8rem; }
+  .note { background:var(--warn-bg); border-radius:8px; padding:.6rem .8rem; font-size:.85rem; margin-bottom:1rem; }
+  #toast { position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:.6rem 1rem; border-radius:8px; opacity:0; pointer-events:none; transition:opacity .2s; max-width:90vw; }
+  #toast.show { opacity:1; }
+  dialog { border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--text); padding:1.25rem; width:min(420px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  dialog label { display:block; margin:.6rem 0 .25rem; font-size:.9rem; }
+  dialog .row { display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem; }
+  .err { color:var(--danger); font-size:.85rem; min-height:1.2em; margin-top:.5rem; }
+</style>
+</head>
+<body>
+<header>
+  <img src="/icon.svg" alt="">
+  <h1>D365FO Agent</h1>
+  <span class="sub" id="homeInfo"></span>
+</header>
+<main class="layout">
+  <aside class="panel">
+    <h2>Profiles</h2>
+    <div id="list"></div>
+    <div class="actions" style="margin:.75rem 0 0">
+      <button class="btn primary" id="newBtn" type="button">+ New profile</button>
+    </div>
+    <p class="help" id="activeInfo" style="color:var(--muted);font-size:.82rem;margin:.9rem 0 .4rem"></p>
+    <button class="btn" id="noneBtn" type="button" hidden>Use the .env file instead</button>
+  </aside>
+  <section class="panel" id="editor" aria-live="polite"></section>
+</main>
+
+<dialog id="newDlg">
+  <form method="dialog" id="newForm">
+    <h2 style="margin:0">New profile</h2>
+    <label for="newName">Name</label>
+    <input type="text" id="newName" maxlength="60" placeholder="e.g. Sandbox UAT" required autocomplete="off">
+    <label for="newFrom">Start from</label>
+    <select id="newFrom"></select>
+    <div class="err" id="newErr" role="alert"></div>
+    <div class="row">
+      <button class="btn" type="button" id="newCancel">Cancel</button>
+      <button class="btn primary" type="submit">Create</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast" role="status"></div>
+
+<script>
+'use strict';
+const MASK = '••••••••';
+const SECRET = /PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|_KEY$|_PAT$/i;
+let state = { profiles: [], active: null, catalog: [], home: '' };
+let current = null; // { name, entries: [{key,value}] }
+
+const $ = (id) => document.getElementById(id);
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== false) e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
+  return e;
+}
+async function api(path, method = 'GET', body) {
+  const res = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-requested-with': 'd365fo-ui' }, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
+  return data;
+}
+let toastTimer;
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3200); }
+const fail = (e) => toast(e.message || String(e));
+
+async function refresh(select) {
+  state = await api('/api/state');
+  $('homeInfo').textContent = 'Saved in ' + state.home;
+  $('activeInfo').textContent = state.active
+    ? 'Runs use "' + state.active + '".'
+    : 'No profile selected: runs use the .env file in the project folder.';
+  $('noneBtn').hidden = !state.active;
+  renderList();
+  if (select === null) { current = null; return renderEditor(); }
+  const name = select || (current && state.profiles.some((p) => p.name === current.name) ? current.name : (state.active || (state.profiles[0] && state.profiles[0].name)));
+  if (name) await open(name); else { current = null; renderEditor(); }
+}
+function renderList() {
+  const list = $('list'); list.replaceChildren();
+  if (!state.profiles.length) list.append(el('p', { class: 'empty' }, 'No profiles yet. Create one to get started.'));
+  for (const p of state.profiles) {
+    list.append(el('button', { class: 'profile', type: 'button', 'aria-current': current && current.name === p.name ? 'true' : 'false', onclick: () => open(p.name).catch(fail) },
+      p.name, p.active ? el('span', { class: 'badge' }, 'In use') : null));
+  }
+}
+async function open(name) {
+  const data = await api('/api/profiles/' + encodeURIComponent(name));
+  current = { name, entries: data.entries };
+  renderList(); renderEditor();
+}
+function fieldInput(spec, value) {
+  const id = 'f_' + spec.key;
+  let input;
+  if (spec.options) {
+    input = el('select', { id, 'data-key': spec.key }, spec.options.map((o) => el('option', { value: o }, o === '' ? '(default)' : o)));
+    if (value && !spec.options.includes(value)) input.append(el('option', { value }, value));
+    input.value = value || '';
+  } else {
+    input = el('input', { id, 'data-key': spec.key, type: spec.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', placeholder: spec.placeholder || '' });
+    input.value = value || '';
+    if (spec.secret && value === MASK) input.addEventListener('focus', () => input.select());
+  }
+  return el('div', { class: 'field' }, el('label', { for: id }, spec.label), input,
+    (spec.help || (spec.secret && value === MASK)) ? el('div', { class: 'help' }, [spec.help, spec.secret && value === MASK ? 'A value is saved. Type to replace it, or clear the box to remove it.' : ''].filter(Boolean).join(' ')) : null);
+}
+function customRow(key, value) {
+  const k = el('input', { type: 'text', placeholder: 'VARIABLE_NAME', 'aria-label': 'Variable name', 'data-ck': '1', spellcheck: 'false' }); k.value = key;
+  const v = el('input', { type: SECRET.test(key) ? 'password' : 'text', placeholder: 'value', 'aria-label': 'Value', 'data-cv': '1', autocomplete: 'off', spellcheck: 'false' }); v.value = value;
+  k.addEventListener('input', () => { v.type = SECRET.test(k.value) ? 'password' : 'text'; });
+  const row = el('div', { class: 'custom' }, k, v, el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove variable', onclick: () => row.remove() }, '×'));
+  return row;
+}
+function renderEditor() {
+  const ed = $('editor'); ed.replaceChildren();
+  if (!current) { ed.append(el('p', { class: 'empty' }, 'Create a profile to set up an environment: its F&O address, sign-in, AI model and safety limits.')); return; }
+  const known = new Set(state.catalog.map((f) => f.key));
+  const values = new Map(current.entries.map((e) => [e.key, e.value]));
+  const isActive = state.active === current.name;
+  ed.append(el('div', { class: 'actions' },
+    el('h3', {}, current.name),
+    el('button', { class: 'btn', type: 'button', disabled: isActive, onclick: () => use(current.name).catch(fail) }, isActive ? 'In use' : 'Use this profile'),
+    el('button', { class: 'btn', type: 'button', onclick: () => checkSetup().catch(fail) }, 'Check setup'),
+    el('button', { class: 'btn', type: 'button', onclick: () => openNew(current.name) }, 'Duplicate'),
+    el('button', { class: 'btn danger', type: 'button', onclick: () => remove().catch(fail) }, 'Delete')));
+  if (!isActive) ed.append(el('div', { class: 'note' }, state.active ? 'Runs currently use "' + state.active + '". Choose "Use this profile" to switch to this one.' : 'Not in use yet. Choose "Use this profile" so runs read these settings instead of the .env file.'));
+  const form = el('form', { id: 'form' });
+  const groups = [...new Set(state.catalog.map((f) => f.group))];
+  for (const g of groups) {
+    const fs = el('fieldset', {}, el('legend', {}, g));
+    for (const spec of state.catalog.filter((f) => f.group === g)) fs.append(fieldInput(spec, values.get(spec.key)));
+    form.append(fs);
+  }
+  const customs = el('div', { id: 'customs' });
+  for (const e of current.entries) if (!known.has(e.key)) customs.append(customRow(e.key, e.value));
+  form.append(el('fieldset', {}, el('legend', {}, 'Other variables'), customs,
+    el('button', { class: 'btn', type: 'button', onclick: () => customs.append(customRow('', '')) }, '+ Add variable')));
+  form.append(el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save changes')));
+  form.addEventListener('submit', (ev) => { ev.preventDefault(); save().catch(fail); });
+  ed.append(form, el('div', { id: 'checkOut' }));
+}
+function collect() {
+  const entries = [];
+  for (const i of document.querySelectorAll('#form [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value });
+  for (const row of document.querySelectorAll('#customs .custom')) {
+    const key = row.querySelector('[data-ck]').value.trim(); const value = row.querySelector('[data-cv]').value;
+    if (key) entries.push({ key, value });
+  }
+  return entries;
+}
+async function save() { await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries: collect() }); toast('Saved'); await open(current.name); }
+async function use(name) { await api('/api/active', 'POST', { name }); toast('"' + name + '" is now in use'); await refresh(name); }
+async function remove() {
+  if (!confirm('Delete the profile "' + current.name + '"? Its saved settings and secrets are removed from this computer.')) return;
+  await api('/api/profiles/' + encodeURIComponent(current.name), 'DELETE'); toast('Deleted'); current = null; await refresh();
+}
+async function checkSetup() {
+  await save();
+  const out = $('checkOut'); out.replaceChildren(el('p', {}, 'Checking… this can take a few seconds.'));
+  const r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/check', 'POST');
+  out.replaceChildren(el('h2', {}, r.exitCode === 0 ? 'Setup looks good' : 'Things to fix'), el('pre', {}, r.output || '(no output)'));
+}
+function openNew(from) {
+  $('newName').value = ''; $('newErr').textContent = '';
+  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'Blank profile'));
+  for (const p of state.profiles) sel.append(el('option', { value: p.name }, 'Copy of ' + p.name));
+  sel.value = from || '';
+  $('newDlg').showModal(); $('newName').focus();
+}
+$('newBtn').addEventListener('click', () => openNew());
+$('noneBtn').addEventListener('click', () => api('/api/active', 'POST', {}).then(() => { toast('Runs now use the .env file'); return refresh(); }).catch(fail));
+$('newCancel').addEventListener('click', () => $('newDlg').close());
+$('newForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const name = $('newName').value.trim(), copyFrom = $('newFrom').value;
+  try { await api('/api/profiles', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [] }); $('newDlg').close(); toast('Created'); await refresh(name); }
+  catch (e) { $('newErr').textContent = e.message; }
+});
+refresh().catch(fail);
+</script>
+</body>
+</html>

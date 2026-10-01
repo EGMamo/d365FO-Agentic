@@ -10,7 +10,7 @@ export interface DotenvProblem {
 }
 
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][\w.-]*)\s*=\s*(.*)$/;
-const SECRET_NAME = /PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|_KEY$|_PAT$/i;
+export const SECRET_NAME = /PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|_KEY$|_PAT$/i;
 
 /**
  * Finds unquoted values whose "#" the .env parser will treat as the start of a comment. A password such as
