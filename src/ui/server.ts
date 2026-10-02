@@ -1,14 +1,16 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { defaultRepoRoot } from '../launcher/install.js';
 import { FIELD_CATALOG } from '../profiles/catalog.js';
 import { serverFile, tokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
+import { loadLocalTestCases } from '../testing/loader.js';
 
 /**
  * Local web UI for managing profiles. It binds to the loopback interface only and is meant to be opened from the
@@ -20,6 +22,20 @@ export const DEFAULT_PORT = 4365;
 const COOKIE = 'd365fo_ui';
 const MAX_BODY = 256 * 1024;
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
+const MAX_LINES = 5000;
+const ID = /^[\w.-]{1,64}$/;
+
+interface RunState {
+  id: number;
+  status: 'running' | 'passed' | 'failed' | 'stopped';
+  args: string[];
+  startedAt: string;
+  finishedAt?: string;
+  exitCode?: number | null;
+  lines: string[];
+  child?: ChildProcess;
+  stopRequested?: boolean;
+}
 
 export interface UiServerOptions {
   home: string;
@@ -93,9 +109,14 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   }
 }
 
+/** Secret values of a profile, used to scrub child-process output before it reaches the browser. */
+async function profileSecrets(store: ProfileStore, name: string): Promise<string[]> {
+  return (await store.read(name, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value);
+}
+
 /** Runs `doctor` against a profile and returns its output with that profile's secrets scrubbed. */
 async function runDoctor(store: ProfileStore, name: string, cliPath: string): Promise<{ exitCode: number | null; output: string }> {
-  const secrets = (await store.read(name, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value);
+  const secrets = await profileSecrets(store, name);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cliPath, 'doctor'], {
       env: { ...process.env, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
@@ -127,6 +148,130 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const host = opts.host ?? '127.0.0.1';
   let port = opts.port ?? DEFAULT_PORT;
   const cliPath = opts.cliPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'index.js');
+  const repoRoot = defaultRepoRoot();
+  let run: RunState | undefined;
+  let runSeq = 0;
+  const listeners = new Set<ServerResponse>();
+
+  const broadcast = (event: string, data: unknown): void => {
+    const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of listeners) res.write(msg);
+  };
+  const publicRun = (r: RunState) => ({ id: r.id, status: r.status, args: r.args, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+
+  /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
+  function runCli(args: string[], active?: string): ChildProcess {
+    const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' };
+    if (active) {
+      env.D365FO_PROFILE = active;
+      env.D365FO_AGENT_HOME = store.home;
+    }
+    return spawn(process.execPath, [cliPath, ...args], {
+      cwd: repoRoot,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+  }
+
+  async function startRun(body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
+    if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
+    const args = ['run'];
+    const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+    if (body.source === 'local') {
+      const dir = str('local');
+      if (!dir) return { error: 'Choose a local test-case directory' };
+      args.push('--local', dir);
+    } else {
+      const plan = str('plan');
+      const suite = str('suite');
+      for (const [name, v] of [['plan', plan], ['suite', suite]]) if (v && !ID.test(v)) return { error: `Invalid ${name} id` };
+      if (plan) args.push('--plan', plan);
+      if (suite) args.push('--suite', suite);
+    }
+    const caseId = str('caseId');
+    if (caseId) {
+      if (!ID.test(caseId)) return { error: 'Invalid case id' };
+      args.push('--case', caseId);
+    }
+    if (body.dryRun === true) args.push('--dry-run');
+    if (body.upload === true) args.push('--upload');
+    if (body.retries !== undefined && body.retries !== '') {
+      const n = Number(body.retries);
+      if (!Number.isInteger(n) || n < 0 || n > 10) return { error: 'Retries must be 0-10' };
+      args.push('--reloop-max-retries', String(n));
+    }
+
+    const active = await store.getActive();
+    const secrets = active ? await profileSecrets(store, active) : [];
+    const state: RunState = { id: ++runSeq, status: 'running', args, startedAt: new Date().toISOString(), lines: [] };
+    run = state;
+    const push = (line: string): void => {
+      let clean = line;
+      for (const s of secrets) clean = clean.split(s).join('***');
+      state.lines.push(clean);
+      if (state.lines.length > MAX_LINES) state.lines.splice(0, state.lines.length - MAX_LINES);
+      broadcast('line', { id: state.id, line: clean });
+    };
+    push(`$ d365fo-agent ${args.join(' ')}`);
+    const child = runCli(args, active);
+    state.child = child;
+    for (const stream of [child.stdout, child.stderr]) {
+      let buf = '';
+      stream?.setEncoding('utf8');
+      stream?.on('data', (chunk: string) => {
+        buf += chunk;
+        const parts = buf.split(/\r?\n/);
+        buf = parts.pop() ?? '';
+        for (const p of parts) push(p);
+      });
+      stream?.on('end', () => buf && push(buf));
+    }
+    child.on('error', (e) => push(`Failed to start: ${e.message}`));
+    child.on('close', (code) => {
+      state.exitCode = code;
+      state.finishedAt = new Date().toISOString();
+      state.status = state.stopRequested ? 'stopped' : code === 0 ? 'passed' : 'failed';
+      state.child = undefined;
+      broadcast('status', publicRun(state));
+    });
+    broadcast('status', publicRun(state));
+    return { run: publicRun(state) };
+  }
+
+  function stopRun(): boolean {
+    const child = run?.child;
+    if (!run || !child?.pid) return false;
+    run.stopRequested = true;
+    // The run spawns MCP servers and a browser; signal the whole process group.
+    const kill = (sig: NodeJS.Signals): void => {
+      try {
+        if (process.platform === 'win32') child.kill(sig);
+        else process.kill(-child.pid!, sig);
+      } catch {
+        /* already gone */
+      }
+    };
+    kill('SIGTERM');
+    setTimeout(() => run?.child === child && kill('SIGKILL'), 5000).unref();
+    return true;
+  }
+
+  /** Reads a report written by the CLI, honouring REPORT_DIR from the active profile. */
+  async function reportFile(name: 'report.html' | 'results.json'): Promise<string | undefined> {
+    let reportDir = 'reports';
+    const active = await store.getActive();
+    if (active) {
+      try {
+        const entry = (await store.read(active, true)).find((e) => e.key === 'REPORT_DIR');
+        if (entry?.value) reportDir = entry.value;
+      } catch {
+        /* fall back to the default */
+      }
+    }
+    const path = join(repoRoot, reportDir, name);
+    return existsSync(path) ? readFile(path, 'utf8') : undefined;
+  }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const hostHeader = (req.headers.host ?? '').toLowerCase();
@@ -185,6 +330,41 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
           return send(res, 200, { deleted: name });
         }
       }
+      if (method === 'GET' && url.pathname === '/api/cases') {
+        const local = url.searchParams.get('local');
+        if (!local) return send(res, 200, []);
+        const cases = await loadLocalTestCases(resolve(repoRoot, local));
+        return send(res, 200, cases.map((c) => ({ id: c.id, title: c.title, steps: c.steps.length, legalEntity: c.legalEntity })));
+      }
+      if (method === 'POST' && url.pathname === '/api/run') {
+        const result = await startRun(await readJson(req));
+        return send(res, result.busy ? 409 : result.error ? 400 : 200, result);
+      }
+      if (method === 'POST' && url.pathname === '/api/run/stop') {
+        return send(res, 200, { stopped: stopRun() });
+      }
+      if (method === 'GET' && url.pathname === '/api/run') {
+        return send(res, 200, run ? { ...publicRun(run), lines: run.lines } : null);
+      }
+      if (method === 'GET' && url.pathname === '/api/run/events') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+        res.write(': connected\n\n');
+        listeners.add(res);
+        const ping = setInterval(() => res.write(': ping\n\n'), 15000);
+        req.on('close', () => {
+          clearInterval(ping);
+          listeners.delete(res);
+        });
+        return;
+      }
+      if (method === 'GET' && url.pathname === '/api/results') {
+        const raw = await reportFile('results.json');
+        return raw ? send(res, 200, raw, { 'Content-Type': 'application/json; charset=utf-8' }) : send(res, 200, null);
+      }
+      if (method === 'GET' && url.pathname === '/report') {
+        const html = await reportFile('report.html');
+        return html ? send(res, 200, html) : send(res, 404, { error: 'No report yet. Run some tests first.' });
+      }
       return send(res, 404, { error: 'Not found.' });
     } catch (e) {
       if (e instanceof ProfileError) return send(res, e.status, { error: e.message });
@@ -221,7 +401,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     token,
     url,
     openUrl: `${url}?token=${token}`,
-    close: () => new Promise((resolve) => (server.closeAllConnections?.(), server.close(() => resolve()))),
+    close: () =>
+      new Promise((resolve) => {
+        stopRun();
+        for (const l of listeners) l.end();
+        server.closeAllConnections?.();
+        server.close(() => resolve());
+      }),
   };
 }
 
