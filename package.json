@@ -14,6 +14,9 @@
     "dev": "tsc -p tsconfig.json --watch",
     "start": "node dist/cli/index.js",
     "agent": "node dist/cli/index.js",
+    "ui": "npm run build && node dist/cli/index.js ui",
+    "launcher:install": "npm run build && node dist/cli/index.js install-launcher",
+    "launcher:remove": "node dist/cli/index.js uninstall-launcher",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "npm run build && node --test \"dist/**/*.test.js\""
   },

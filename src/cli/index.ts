@@ -20,12 +20,18 @@ import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { checkModelEndpoint } from '../llm/endpoint.js';
 import { isLoopbackUrl } from '../llm/index.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
+import { profileSelection } from '../config/load-env.js';
+import { agentHome } from '../profiles/paths.js';
+import { DEFAULT_PORT, findRunningUi, loadOrCreateToken, startUiServer } from '../ui/server.js';
+import { openBrowser } from '../ui/open.js';
+import { defaultRepoRoot, desktopDirectory, installLauncher, uninstallLauncher, type LauncherContext } from '../launcher/install.js';
 
 const program = new Command();
 program
   .name('d365fo-agent')
   .description('Portable AI agent for D365 F&O regression and unit testing')
-  .version('0.1.0');
+  .version('0.1.0')
+  .option('--profile <name>', 'Use a saved settings profile (created in the web UI) instead of the .env file');
 
 program
   .command('doctor')
@@ -35,6 +41,7 @@ program
     const cfg = loadConfig();
     const issues = validateForRun(cfg);
     for (const p of dotenvFileProblems()) issues.push(p.message);
+    console.log(profileSelection.name ? `Settings profile: ${profileSelection.name}` : 'Settings profile: none (using .env)');
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     const modelHint = ignoredModelHint(cfg);
     if (modelHint) console.log(`  WARNING: ${modelHint}`);
@@ -274,6 +281,49 @@ program
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
   return discoverTestCases(cfg, opts);
 }
+
+program
+  .command('ui')
+  .description('Start the local settings web app and open it in your browser')
+  .option('--port <n>', `Port to listen on (default ${DEFAULT_PORT})`, Number.parseInt)
+  .option('--no-open', 'Do not open the browser')
+  .action(async (opts: { port?: number; open: boolean }) => {
+    const home = agentHome();
+    const existing = await findRunningUi(home, await loadOrCreateToken(home));
+    if (existing) {
+      console.log(`The settings app is already running: ${existing.split('?')[0]}`);
+      if (opts.open) await openBrowser(existing);
+      return;
+    }
+    const ui = await startUiServer({ home, port: opts.port });
+    console.log(`Settings app running at ${ui.url} (this computer only). Press Ctrl+C to stop.`);
+    console.log(`Profiles are stored in ${home}`);
+    if (opts.open && !(await openBrowser(ui.openUrl))) console.log(`Could not open a browser. Open this address yourself: ${ui.openUrl}`);
+    const stop = (): void => void ui.close().then(() => process.exit(0));
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
+
+async function launcherContext(): Promise<LauncherContext> {
+  return { platform: process.platform, repoRoot: defaultRepoRoot(), nodePath: process.execPath, home: agentHome(), desktop: await desktopDirectory() };
+}
+
+program
+  .command('install-launcher')
+  .description('Put a D365FO Agent icon on your desktop that starts the settings app and opens it in your browser')
+  .action(async () => {
+    const plan = await installLauncher(await launcherContext());
+    console.log(`Created ${plan.entry}`);
+    console.log('Double-click it to start the settings app. Close its window to stop.');
+  });
+
+program
+  .command('uninstall-launcher')
+  .description('Remove the desktop icon (saved profiles are kept)')
+  .action(async () => {
+    const removed = await uninstallLauncher(await launcherContext());
+    console.log(removed.length ? `Removed:\n${removed.map((p) => `  ${p}`).join('\n')}` : 'Nothing to remove.');
+  });
 
 program.parseAsync(process.argv).catch((e) => {
   console.error(e);
