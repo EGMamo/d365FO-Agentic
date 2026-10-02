@@ -146,15 +146,27 @@ let cached: AppConfig | undefined;
 
 export function loadConfig(): AppConfig {
   if (cached) return cached;
-  const parsed = envSchema.safeParse(process.env);
+  cached = parseConfig(process.env);
+  return cached;
+}
+
+/** Validates an arbitrary environment map (e.g. a `.env` being edited) without touching the cached config. */
+export function parseConfig(env: Record<string, string | undefined>): AppConfig {
+  const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  cached = parsed.data;
-  return cached;
+  return parsed.data;
+}
+
+/** Per-key validation problems for an environment map; empty when it is valid. */
+export function configProblems(env: Record<string, string | undefined>): Array<{ key: string; message: string }> {
+  const parsed = envSchema.safeParse(env);
+  if (parsed.success) return [];
+  return parsed.error.issues.map((i) => ({ key: String(i.path[0] ?? ''), message: i.message }));
 }
 
 /**

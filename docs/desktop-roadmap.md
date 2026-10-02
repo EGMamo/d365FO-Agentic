@@ -6,7 +6,7 @@ This project now keeps execution logic in a reusable core engine (`src/core/runn
 
 - **Core Engine**: orchestration, reloop policy, providers, reporting.
 - **Adapters**: MCP, Azure DevOps, filesystem.
-- **Interfaces**: CLI (current) and desktop shell (next).
+- **Interfaces**: CLI, local web UI (`d365fo-agent ui`, `src/ui/`), and desktop shell (next).
 
 ## Desktop scope
 
@@ -22,5 +22,6 @@ A desktop shell (Electron or Tauri) should:
 ## Migration phases
 
 1. **Completed foundation**: core run engine extracted and retry-aware reporting added.
-2. **Desktop interface**: implement shell UI that invokes core engine APIs.
-3. **Hardening**: add secure secret storage, run controls, and packaging.
+2. **Local web UI (done)**: `d365fo-agent ui` serves a token-protected page on 127.0.0.1 covering items 1–5 above. Runs start as child processes of the CLI so they pick up the current `.env` and can be stopped cleanly.
+3. **Desktop interface**: wrap the web UI in Electron/Tauri (start the same server, load its URL in a window).
+4. **Hardening**: add secure secret storage, run controls, and packaging.

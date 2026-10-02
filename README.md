@@ -23,7 +23,8 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
 - Self-learning knowledge base (`knowledge/kb.json`) with keyword retrieval.
 - Dry-run mode that plans without mutating the target environment.
-- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
+- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `ui`.
+- Local web UI (`ui`) to edit settings, start/stop runs with a live log, and browse results.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Quick start
@@ -51,6 +52,14 @@ node dist/cli/index.js run --plan 1234 --suite 5678 --upload
 # 6. Run with retries (reloop)
 node dist/cli/index.js run --local examples/testcases --reloop-max-retries 2 --reloop-retry-on failed,blocked
 ```
+
+Prefer a browser to the terminal? Start the local UI:
+
+```bash
+node dist/cli/index.js ui            # opens http://127.0.0.1:4173/?token=… (use --port, --no-open)
+```
+
+It edits `.env` for you (secrets are never shown back, values with `#` or spaces are quoted correctly, the file is saved with mode 600), runs `doctor`, starts and stops runs with a live log, and shows the latest results and HTML report. Every run reads the current `.env`, so settings changes take effect on the next run without restarting or rebuilding. Only code changes (or a `git pull`) need `npm run build`. The UI listens on 127.0.0.1 only and requires the token from the printed link.
 
 Reports are written to `./reports` and the knowledge base to `./knowledge/kb.json`.
 

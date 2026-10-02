@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { startUiServer } from '../ui/server.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { activeModel, ignoredModelHint, loadConfig, validateForRun } from '../config/index.js';
@@ -270,6 +273,36 @@ program
       console.log(data);
     }
   });
+
+program
+  .command('ui')
+  .description('Open a local web UI to edit settings (.env), run tests with a live log, and view results')
+  .option('--port <n>', 'Port on 127.0.0.1 (0 = any free port)', '4173')
+  .option('--no-open', 'Do not open the browser automatically')
+  .action(async (opts: { port: string; open: boolean }) => {
+    const port = Number.parseInt(opts.port, 10);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid --port: ${opts.port}`);
+    const ui = await startUiServer({
+      port,
+      envPath: resolve('.env'),
+      cliPath: fileURLToPath(import.meta.url),
+      cwd: process.cwd(),
+    });
+    console.log(`D365 F&O Agent UI: ${ui.url}`);
+    console.log('Only reachable from this machine. The link contains an access token; do not share it. Ctrl+C to stop.');
+    if (opts.open) openBrowser(ui.url);
+    const shutdown = () => void ui.close().then(() => process.exit(0));
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
+
+function openBrowser(url: string): void {
+  const [cmd, args] =
+    process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]] : ['xdg-open', [url]];
+  const child = spawn(cmd, args as string[], { stdio: 'ignore', detached: true });
+  child.on('error', () => console.log('Could not open a browser; open the URL above yourself.'));
+  child.unref();
+}
 
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
   return discoverTestCases(cfg, opts);
