@@ -26,6 +26,16 @@ export function d365SystemGuidance(cfg: AppConfig): string {
     '   You never see the credentials and must NOT type them yourself with `browser_type`; only `d365_enter_credential` has them. Only if it says no value is configured for the field, mark the step BLOCKED; if it reports that typing failed, read the error, take a fresh snapshot and retry.',
     '3. If prompted to stay signed in, click "No".',
     '4. Wait for the F&O client dashboard (accessibility landmark: "navigation" with app name) to be visible.',
+    ...(cfg.D365_TENANT_ID && cfg.D365_CLIENT_ID && cfg.D365_CLIENT_SECRET
+      ? [
+          '',
+          'Data checks:',
+          '- `d365_odata_query` reads F&O data entities with an app registration (read-only). Use it to confirm a record a step created or changed exists with the expected values, and quote the row in `observed`.',
+          ...(!cfg.D365_USERNAME && !cfg.D365_PASSWORD && !activeSessionFile(cfg)
+            ? ['- No user sign-in is configured, so the browser cannot open F&O. Do steps that are data checks with `d365_odata_query`; mark steps that need the F&O pages BLOCKED with cause "other" and say that no user sign-in is configured.']
+            : []),
+        ]
+      : []),
     '',
     'Company (legal entity) selection:',
     '- The current company appears in the top navigation bar as a code (e.g. USMF).',

@@ -19,6 +19,7 @@ import { checkSession, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLog
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { checkModelEndpoint } from '../llm/endpoint.js';
 import { isLoopbackUrl } from '../llm/index.js';
+import { D365ODataClient, hasAppRegistration } from '../d365fo/entra.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
 import { profileSelection } from '../config/load-env.js';
 import { agentHome } from '../profiles/paths.js';
@@ -66,6 +67,13 @@ program
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'} [${describeEnvironment(cfg)}${cfg.AGENT_ALLOW_PRODUCTION ? '; production runs allowed' : ''}]`);
     console.log(`Guardrails: navigation limited to ${allowedHosts(cfg).join(', ')}; ${cfg.AGENT_ALLOWED_TOOLS_EXTRA.length} extra tool grant(s)`);
     console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
+    if (hasAppRegistration(cfg) && cfg.D365_BASE_URL) {
+      const app = await new D365ODataClient(cfg).check();
+      console.log(`D365 app registration: ${app.ok ? 'OK' : 'FAILED'} - ${app.detail}`);
+      if (!app.ok) issues.push(`Entra app registration: ${app.detail}`);
+    } else {
+      console.log('D365 app registration: not configured (optional)');
+    }
     const session = await checkSession(cfg);
     console.log(`D365 saved session: ${session.state === 'off' ? session.detail : `${session.state.toUpperCase()} - ${session.detail}`}`);
     if (session.state === 'expired' || session.state === 'unreadable') {

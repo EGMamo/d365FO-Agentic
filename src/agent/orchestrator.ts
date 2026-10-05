@@ -7,6 +7,7 @@ import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import type { KnowledgeBase } from '../knowledge/kb.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import { D365ODataClient, hasAppRegistration, ODATA_TOOL, ODATA_TOOL_NAME } from '../d365fo/entra.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 import { compactHistory } from './context.js';
@@ -148,6 +149,7 @@ export class AgentOrchestrator {
   private mcpServers: string[];
   private guardrails: Guardrails;
   private reportedHiddenTools = false;
+  private odata?: D365ODataClient;
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -156,6 +158,7 @@ export class AgentOrchestrator {
     this.kb = opts.kb;
     this.mcpServers = opts.mcpServers;
     this.guardrails = new Guardrails(opts.cfg, opts.mcpServers);
+    if (hasAppRegistration(opts.cfg) && opts.cfg.D365_BASE_URL) this.odata = new D365ODataClient(opts.cfg);
   }
 
   async runTestCase(tc: TestCase): Promise<TestResult> {
@@ -259,6 +262,7 @@ export class AgentOrchestrator {
       })),
       ...LOCAL_TOOLS,
       CREDENTIAL_TOOL,
+      ...(this.odata ? [ODATA_TOOL] : []),
     ];
 
     const retrieved = this.kb.retrieve(
@@ -520,6 +524,21 @@ export class AgentOrchestrator {
         return { content: redactSecrets(this.cfg, JSON.stringify(body)) };
       } catch (e) {
         return { content: redactSecrets(this.cfg, JSON.stringify({ error: `Typing the credential failed: ${(e as Error).message}` })) };
+      }
+    }
+    if (call.name === ODATA_TOOL_NAME) {
+      if (!this.odata) return fail('No Entra app registration is configured (D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET).');
+      try {
+        const out = await this.odata.query({
+          entity: String(args.entity ?? ''),
+          filter: typeof args.filter === 'string' ? args.filter : undefined,
+          select: typeof args.select === 'string' ? args.select : undefined,
+          top: typeof args.top === 'number' ? args.top : undefined,
+          crossCompany: args.crossCompany === true,
+        });
+        return { content: redactSecrets(this.cfg, out), errored: out.startsWith('{"error"') };
+      } catch (e) {
+        return fail(redactSecrets(this.cfg, (e as Error).message));
       }
     }
     if (call.name === 'kb_search') {
