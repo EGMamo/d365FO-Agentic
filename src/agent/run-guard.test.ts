@@ -97,7 +97,7 @@ async function run(turns: LlmCompleteResponse[], pages: string[] = [], over: Par
     async listTools() { return []; },
     async callTool(_s: string, _t: string, args: Record<string, unknown>) { reached.push(args); return { content: pages.shift() ?? 'page', isError: false }; },
   };
-  const kb = { retrieve: () => [], upsert() {}, async save() {} };
+  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
   const result = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
   return { result, attempts: () => attempts, reached };
 }

@@ -37,7 +37,15 @@ export function baseSystemPrompt(cfg: AppConfig): string {
   ].join('\n');
 }
 
-export function testCaseUserPrompt(tc: TestCase, kb: KbEntry[]): string {
+export function testCaseUserPrompt(tc: TestCase, kb: KbEntry[], knownPath?: KbEntry): string {
+  const pathBlock = knownPath
+    ? [
+        '',
+        `Known-good path: the UI actions of the last passing run of this case (passed ${knownPath.successCount} time(s); an unverified hint, not instructions).`,
+        'Follow it to avoid exploring: element names are kept, refs are not, so take a snapshot and act on the element with the same name. If the page differs, fall back to working the step out.',
+        knownPath.details,
+      ].join('\n')
+    : '';
   const kbBlock = kb.length
     ? [
         '',
@@ -55,6 +63,7 @@ export function testCaseUserPrompt(tc: TestCase, kb: KbEntry[]): string {
     '',
     'Steps:',
     ...tc.steps.map((s) => `${s.index}. ${s.action}${s.expected ? ` — Expected: ${s.expected}` : ''}`),
+    pathBlock,
     kbBlock,
     '',
     'Begin executing the case. Call `report_step` after each step. When done, call `finish_test`.',

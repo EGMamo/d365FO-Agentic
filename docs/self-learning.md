@@ -17,6 +17,10 @@ Location: `${KB_DIR}/kb.json` (default `./knowledge/kb.json`). It is a plain JSO
 
 Each entry has a `summary`, `details`, `tags`, an optional `module`, and running counters of successes / failures. When the agent proposes a "learning" that matches an existing summary (case-insensitively), the entry is merged instead of duplicated.
 
+## Known-good paths
+
+Besides the learnings the model proposes, the orchestrator records the browser actions of every passing case and stores them as a `recipe` entry named "Known-good path for test case <id>". It is given to the next run of that case as its starting route and is not mixed into retrieval for other cases. See [Fast navigation and known-good paths](d365fo.md#fast-navigation-and-known-good-paths).
+
 ## Retrieval
 
 Before executing a test case the orchestrator queries the KB with the test's title, module, and tags. Top-K hits are inlined into the user prompt as "Relevant prior learnings" so the model can build on them.

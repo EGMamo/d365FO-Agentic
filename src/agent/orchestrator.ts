@@ -5,10 +5,11 @@ import type { AppConfig } from '../config/index.js';
 import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
-import type { KnowledgeBase } from '../knowledge/kb.js';
+import { knownPathSummary, type KnowledgeBase } from '../knowledge/kb.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { D365ODataClient, hasAppRegistration, ODATA_TOOL, ODATA_TOOL_NAME } from '../d365fo/entra.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
+import { isMenuItemName, loadMenuItems, menuItemUrl, openMenuItemTool, OPEN_MENU_ITEM_TOOL_NAME, resolveMenuItem, type MenuItem } from '../d365fo/navigation.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 import { compactHistory } from './context.js';
 import { Guardrails } from './guardrails.js';
@@ -23,6 +24,10 @@ const MAX_LEARNINGS = 10;
 const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
 const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
 const MAX_DATA_KEYS = 20;
+/** Lines kept in a recorded known-good path. */
+const MAX_PATH_LINES = 60;
+/** Text F&O shows on its blocking overlay while a form loads or a request is processed. */
+const FNO_BUSY_TEXT = 'Please wait';
 const LIMITS = { dataKey: 60, dataValue: 500, observed: 2000, error: 2000, summary: 1000, learningSummary: 200, learningDetails: 2000, blockNote: 300 };
 
 const LOCAL_TOOLS: LlmTool[] = [
@@ -150,6 +155,7 @@ export class AgentOrchestrator {
   private guardrails: Guardrails;
   private reportedHiddenTools = false;
   private odata?: D365ODataClient;
+  private menuItems?: MenuItem[];
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -254,6 +260,8 @@ export class AgentOrchestrator {
       this.reportedHiddenTools = true;
       this.log(`hiding ${hiddenTools.length} tool(s) not on the allowlist: ${hiddenTools.map((t) => `${t.server}__${t.name}`).join(', ')}`);
     }
+    const canOpenPages = this.mcpServers.includes('playwright') && Boolean(this.cfg.D365_BASE_URL);
+    if (canOpenPages) this.menuItems ??= await loadMenuItems(this.cfg.KB_DIR ?? './knowledge');
     const tools: LlmTool[] = [
       ...allowedTools.map((t) => ({
         name: `${t.server}__${t.name}`,
@@ -263,6 +271,7 @@ export class AgentOrchestrator {
       ...LOCAL_TOOLS,
       CREDENTIAL_TOOL,
       ...(this.odata ? [ODATA_TOOL] : []),
+      ...(canOpenPages && this.menuItems ? [openMenuItemTool(this.menuItems)] : []),
     ];
 
     const retrieved = this.kb.retrieve(
@@ -282,13 +291,15 @@ export class AgentOrchestrator {
       }
     }
 
-    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved) }];
+    const knownPath = this.kb.recipeFor(tc.id);
+    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved, knownPath) }];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
     const artifacts: string[] = [];
     const policyBlocks: string[] = [];
     const timeouts: string[] = [];
     const data: Record<string, string> = {};
+    const path: string[] = [];
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
     let stopped = false;
@@ -349,6 +360,7 @@ export class AgentOrchestrator {
             policyBlocks,
             timeouts,
             data,
+            path,
             guard,
             flags,
           });
@@ -402,6 +414,10 @@ export class AgentOrchestrator {
       }
     }
 
+    if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN && path.some((l) => !l.startsWith('-- '))) {
+      await this.saveKnownPath(tc, path);
+    }
+
     if (traceBefore) {
       try {
         await this.mcp.callTool('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
@@ -441,6 +457,8 @@ export class AgentOrchestrator {
       policyBlocks: string[];
       timeouts: string[];
       data: Record<string, string>;
+      /** Successful UI actions of this attempt, saved as the case's known-good path if it passes. */
+      path: string[];
       guard: AttemptGuard;
       flags: { nonRetryable: boolean };
     },
@@ -473,6 +491,7 @@ export class AgentOrchestrator {
       const existing = ctx.steps.findIndex((s) => s.index === index);
       if (existing >= 0) ctx.steps[existing] = step;
       else ctx.steps.push(step);
+      ctx.path.push(`-- step ${index} ${step.status}`);
       if (args.status === 'failed' || args.status === 'blocked') {
         if (args.cause === 'not_found' || args.cause === 'no_access') {
           ctx.flags.nonRetryable = true;
@@ -541,6 +560,7 @@ export class AgentOrchestrator {
         return fail(redactSecrets(this.cfg, (e as Error).message));
       }
     }
+    if (call.name === OPEN_MENU_ITEM_TOOL_NAME) return this.openMenuItem(call, args, ctx);
     if (call.name === 'kb_search') {
       const q = typeof args.query === 'string' ? args.query : '';
       const requested = Number(args.k ?? 5);
@@ -633,6 +653,10 @@ export class AgentOrchestrator {
           };
         }
       }
+      if (server === 'playwright' && !res.isError) {
+        const line = pathLine(toolName, args);
+        if (line) ctx.path.push(this.clean(line, 200));
+      }
       return { content, ...(res.isError ? { errored: true } : {}) };
     } catch (e) {
       if (isTimeoutError(e)) {
@@ -647,6 +671,78 @@ export class AgentOrchestrator {
         };
       }
       return { content: redactSecrets(this.cfg, JSON.stringify({ error: (e as Error).message })), errored: true };
+    }
+  }
+
+  /**
+   * Opens a page by menu item through the normal `browser_navigate` path (so the URL and company
+   * are policy-checked like any navigation), waits for F&O's busy overlay to clear, and returns a
+   * fresh snapshot: one model turn instead of a navigate, a wait and a snapshot.
+   */
+  private async openMenuItem(
+    call: LlmToolCall,
+    args: Record<string, unknown>,
+    ctx: Parameters<AgentOrchestrator['dispatch']>[1],
+  ): Promise<DispatchResult> {
+    const fail = (error: string): DispatchResult => ({ content: JSON.stringify({ error }), errored: true });
+    if (!this.cfg.D365_BASE_URL || !this.menuItems) return fail('No F&O URL is configured (D365_BASE_URL).');
+    const page = typeof args.page === 'string' ? args.page.trim() : '';
+    const raw = typeof args.menuItem === 'string' ? args.menuItem.trim() : '';
+    let mi: string | undefined;
+    let label = raw;
+    if (raw) {
+      const match = resolveMenuItem(this.menuItems, raw);
+      if ('item' in match) ({ mi, label } = match.item);
+      else if (isMenuItemName(raw)) mi = raw;
+      else return fail(`'${this.clean(raw, 80)}' is not a menu item name (letters, digits and underscores only).`);
+    } else if (page) {
+      const match = resolveMenuItem(this.menuItems, page);
+      if ('item' in match) ({ mi, label } = match.item);
+      else {
+        const options = match.candidates.map((m) => `${m.label} (${m.mi})`).join('; ');
+        return fail(
+          options
+            ? `'${this.clean(page, 80)}' matches several pages: ${options}. Call again with the right menuItem.`
+            : `'${this.clean(page, 80)}' is not a known page. Pass its menu item name as menuItem if you know it, otherwise open it with the navigation search box.`,
+        );
+      }
+    } else {
+      return fail('Pass `page` (caption or module path) or `menuItem` (menu item name).');
+    }
+
+    const company = ctx.tc.legalEntity ?? this.cfg.D365_COMPANY;
+    const url = menuItemUrl(this.cfg.D365_BASE_URL, company, mi!);
+    const nav = await this.dispatch({ id: call.id, name: 'playwright__browser_navigate', arguments: { url } }, ctx);
+    if (nav.errored || nav.policyBlocked || nav.stop) return nav;
+    try {
+      await this.mcp.callTool('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000);
+      const snap = await this.mcp.callTool('playwright', 'browser_snapshot', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000);
+      if (!snap.isError) {
+        const text = typeof snap.content === 'string' ? snap.content : JSON.stringify(snap.content);
+        return { content: redactSecrets(this.cfg, `Opened ${label} (${mi}) in ${company}.\n${text}`) };
+      }
+    } catch {
+      // The navigation result below still carries a snapshot; the model can wait and snapshot itself.
+    }
+    return { ...nav, content: `Opened ${label} (${mi}) in ${company}; the page may still be loading.\n${nav.content}` };
+  }
+
+  /** Saves the UI actions of a passing attempt as the test case's known-good path, replacing the previous one. */
+  private async saveKnownPath(tc: TestCase, path: string[]): Promise<void> {
+    const lines = path.length > MAX_PATH_LINES ? [...path.slice(0, MAX_PATH_LINES), `… ${path.length - MAX_PATH_LINES} more actions`] : path;
+    try {
+      this.kb.upsert({
+        kind: 'recipe',
+        summary: knownPathSummary(tc.id),
+        details: this.clean(lines.join('\n'), LIMITS.learningDetails * 2),
+        module: tc.module,
+        testCaseId: tc.id,
+        tags: tc.tags ?? [],
+        successCount: 1,
+      });
+      await this.kb.save();
+    } catch (e) {
+      console.warn(`[agent] could not save the known-good path: ${(e as Error).message}`);
     }
   }
 
@@ -700,6 +796,37 @@ function sleep(ms: number): Promise<void> {
  * deliberately not listed: in a dry run they must still execute so the model can see a page
  * (e.g. reach the login screen) instead of looping on a skipped navigate.
  */
+/**
+ * One line of a known-good path for a successful browser action. Element descriptions are kept
+ * (refs change on every page load) and typed values are not: they come from the test steps or the run.
+ */
+function pathLine(tool: string, args: Record<string, unknown>): string | undefined {
+  const el = typeof args.element === 'string' && args.element.trim() ? `"${args.element.trim()}"` : 'an element';
+  switch (tool) {
+    case 'browser_navigate':
+      return typeof args.url === 'string' ? `open ${args.url}` : undefined;
+    case 'browser_click':
+      return `${args.doubleClick ? 'double-click' : 'click'} ${el}`;
+    case 'browser_type':
+      return `type into ${el}${args.submit ? ' and press Enter' : ''}`;
+    case 'browser_select_option':
+      return `select an option in ${el}`;
+    case 'browser_press_key':
+      return typeof args.key === 'string' ? `press ${args.key}` : undefined;
+    case 'browser_hover':
+      return `hover ${el}`;
+    case 'browser_handle_dialog':
+      return `${args.accept ? 'accept' : 'dismiss'} the dialog`;
+    case 'browser_fill_form': {
+      const fields = Array.isArray(args.fields) ? args.fields : [];
+      const names = fields.map((f) => (f && typeof f === 'object' ? String((f as { name?: unknown }).name ?? '') : '')).filter(Boolean);
+      return `fill form fields ${names.map((n) => `"${n}"`).join(', ') || '(unnamed)'}`;
+    }
+    default:
+      return undefined;
+  }
+}
+
 function isMutatingBrowserTool(name: string): boolean {
   return /(click|type|fill|drag|drop|press|upload|handle_dialog|select_option|evaluate|run_code|route|_set|_delete|_clear)/i.test(name);
 }

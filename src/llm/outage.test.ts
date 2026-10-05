@@ -117,7 +117,7 @@ function orchestrator(complete: () => Promise<LlmCompleteResponse>, over: Partia
     } as AppConfig;
     const llm = { name: 'fake', async complete() { calls.llm += 1; return complete(); } };
     const mcp = { async listTools() { return []; }, async callTool() { return { content: 'page', isError: false }; } };
-    const kb = { retrieve: () => [], upsert() {}, async save() {} };
+    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
     return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never);
   };
   return { calls, run: async (t: TestCase) => (await build()).runTestCase(t) };
