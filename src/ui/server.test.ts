@@ -247,3 +247,124 @@ describe('test-case editor, run history and upload', () => {
     assert.deepEqual(await (await hcall('/api/history')).json(), []);
   });
 });
+
+describe('Open WebUI tool server', () => {
+  const FAKE_CLI = [
+    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'run') {",
+    "  mkdirSync('reports', { recursive: true });",
+    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
+    "  console.log('ran ' + args.join(' '));",
+    "} else if (args[0] === 'upload') {",
+    "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",
+    "}",
+  ].join('\n');
+
+  let dir = '';
+  let tui: RunningUi;
+  // fetch() ignores a custom Host header, so the Docker-style Host checks go through node:http.
+  const raw = (path: string, headers: Record<string, string>): Promise<Reply> =>
+    new Promise((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port: tui.port, path, headers }, (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  let tcall: (path: string, init?: RequestInit & { key?: string | null }) => Promise<Response>;
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'd365ui-tools-'));
+    await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
+    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir });
+    tcall = (path, init = {}) => {
+      const { key = tui.toolToken, ...rest } = init;
+      const headers: Record<string, string> = {};
+      if (key !== null) headers.authorization = `Bearer ${key}`;
+      if (rest.body) headers['content-type'] = 'application/json';
+      return fetch(`http://127.0.0.1:${tui.port}/tools${path}`, { ...rest, headers });
+    };
+  });
+  after(async () => {
+    await tui.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('publishes an OpenAPI document without a key, with CORS for browser-side tool servers', async () => {
+    const r = await tcall('/openapi.json', { key: null });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('access-control-allow-origin'), '*');
+    const spec = (await r.json()) as any;
+    const docker = await raw('/tools/openapi.json', { host: `host.docker.internal:${tui.port}` });
+    assert.equal(JSON.parse(docker.body).servers[0].url, `http://host.docker.internal:${tui.port}/tools`, 'server URL follows the address Open WebUI used');
+    const viaDocker = await raw('/tools/profiles', { host: `host.docker.internal:${tui.port}`, authorization: `Bearer ${tui.toolToken}` });
+    assert.equal(viaDocker.status, 200);
+    const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
+    assert.deepEqual(ops.sort(), ['get_results', 'get_run', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile']);
+    const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
+    assert.equal(pre.status, 204);
+    assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
+  });
+
+  it('refuses tool calls without the right key, and the browser cookie token is not accepted', async () => {
+    assert.equal((await tcall('/profiles', { key: null })).status, 401);
+    assert.equal((await tcall('/profiles', { key: 'wrong' })).status, 401);
+    assert.equal((await tcall('/profiles', { key: tui.token })).status, 401);
+    assert.notEqual(tui.toolToken, tui.token);
+  });
+
+  it('keeps the app itself closed to non-loopback Host headers', async () => {
+    assert.equal((await raw('/api/state', { host: `host.docker.internal:${tui.port}`, cookie: `d365fo_ui=${tui.token}` })).status, 403);
+    assert.equal((await raw('/api/state', { host: `127.0.0.1:${tui.port}`, cookie: `d365fo_ui=${tui.token}` })).status, 200);
+  });
+
+  it('lists and selects profiles without revealing their values', async () => {
+    const home = join(dir, 'home');
+    const { ProfileStore } = await import('../profiles/store.js');
+    await new ProfileStore(home).write('UAT', [{ key: 'D365_PASSWORD', value: 'hunter2!' }], 'create');
+    assert.equal((await tcall('/profiles/active', { method: 'POST', body: JSON.stringify({ name: 'Nope' }) })).status, 404);
+    assert.equal((await tcall('/profiles/active', { method: 'POST', body: JSON.stringify({ name: 'UAT' }) })).status, 200);
+    const r = await tcall('/profiles');
+    const text = await r.text();
+    assert.ok(!text.includes('hunter2'));
+    assert.equal(JSON.parse(text).active, 'UAT');
+  });
+
+  it('saves, lists and reads test cases', async () => {
+    const tc = { title: 'Post invoice', steps: [{ action: 'Open invoice journal', expected: 'Journal list shown' }] };
+    const saved = await tcall('/testcases?dir=cases', { method: 'PUT', body: JSON.stringify({ testCase: tc }) });
+    assert.equal(saved.status, 200);
+    const { file } = (await saved.json()) as any;
+    assert.deepEqual(((await (await tcall('/testcases?dir=cases')).json()) as any[]).map((c) => c.title), ['Post invoice']);
+    assert.equal(((await (await tcall(`/testcases/file?dir=cases&file=${file}`)).json()) as any).steps.length, 1);
+    assert.equal((await tcall('/testcases?dir=../..')).status, 400);
+  });
+
+  it('starts a run, waits for it, summarises results and uploads it from the history', async () => {
+    assert.equal(((await (await tcall('/results')).json()) as any).error !== undefined, true);
+    assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '1;x' }) })).status, 400);
+    assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) })).status, 200);
+    let run: any;
+    for (let i = 0; i < 20 && !(run && run.status !== 'running'); i++) run = ((await (await tcall('/runs/current?waitSeconds=5&tail=5')).json()) as any).run;
+    assert.equal(run.status, 'passed');
+    assert.ok(run.log.some((l: string) => /ran run --local cases --dry-run/.test(l)));
+    const results = (await (await tcall('/results')).json()) as any;
+    assert.deepEqual(results.totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
+    assert.deepEqual([results.cases[1].reason, results.cases[1].failedStep], ['Save button missing', 2]);
+
+    let runs: any[] = [];
+    for (let i = 0; i < 50 && !runs.length; i++) {
+      runs = ((await (await tcall('/history')).json()) as any).runs;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    assert.equal(runs.length, 1);
+    assert.equal(((await (await tcall(`/results?run=${runs[0].id}`)).json()) as any).totals.total, 2);
+    assert.equal((await tcall('/history/20990101-000000-1/upload', { method: 'POST', body: '{}' })).status, 404);
+    assert.equal((await tcall(`/history/${runs[0].id}/upload`, { method: 'POST', body: JSON.stringify({ plan: '5' }) })).status, 200);
+    const up = ((await (await tcall('/runs/current?waitSeconds=10')).json()) as any).run;
+    assert.deepEqual([up.kind, up.status], ['upload', 'passed']);
+    assert.equal((await tcall('/runs/current/stop', { method: 'POST' })).status, 200);
+  });
+});

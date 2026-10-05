@@ -22,8 +22,8 @@ import { isLoopbackUrl } from '../llm/index.js';
 import { D365ODataClient, hasAppRegistration } from '../d365fo/entra.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
 import { profileSelection } from '../config/load-env.js';
-import { agentHome } from '../profiles/paths.js';
-import { DEFAULT_PORT, findRunningUi, loadOrCreateToken, startUiServer } from '../ui/server.js';
+import { agentHome, toolTokenFile } from '../profiles/paths.js';
+import { DEFAULT_PORT, findRunningUi, isLoopback, loadOrCreateToken, loadOrCreateToolToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
 import { defaultRepoRoot, desktopDirectory, installLauncher, uninstallLauncher, type LauncherContext } from '../launcher/install.js';
 
@@ -295,7 +295,8 @@ program
   .description('Start the local settings web app and open it in your browser')
   .option('--port <n>', `Port to listen on (default ${DEFAULT_PORT})`, Number.parseInt)
   .option('--no-open', 'Do not open the browser')
-  .action(async (opts: { port?: number; open: boolean }) => {
+  .option('--host <address>', 'Address to listen on (default 127.0.0.1). Use 0.0.0.0 only so Open WebUI in Docker on Linux can reach the tool server; the app itself still answers this computer only')
+  .action(async (opts: { port?: number; open: boolean; host?: string }) => {
     const home = agentHome();
     const existing = await findRunningUi(home, await loadOrCreateToken(home));
     if (existing) {
@@ -303,13 +304,32 @@ program
       if (opts.open) await openBrowser(existing);
       return;
     }
-    const ui = await startUiServer({ home, port: opts.port });
+    const ui = await startUiServer({ home, port: opts.port, host: opts.host });
     console.log(`Settings app running at ${ui.url} (this computer only). Press Ctrl+C to stop.`);
     console.log(`Profiles are stored in ${home}`);
+    console.log(`Open WebUI tool server: ${ui.url}tools (run "d365fo-agent openwebui" for the key and setup steps)`);
+    if (opts.host && !isLoopback(opts.host)) console.log(`Listening on ${opts.host}: only the bearer-protected /tools routes answer other addresses.`);
     if (opts.open && !(await openBrowser(ui.openUrl))) console.log(`Could not open a browser. Open this address yourself: ${ui.openUrl}`);
     const stop = (): void => void ui.close().then(() => process.exit(0));
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
+  });
+
+program
+  .command('openwebui')
+  .description('Show the Open WebUI tool-server address and key for the settings app')
+  .option('--port <n>', `Port the settings app uses (default ${DEFAULT_PORT})`, Number.parseInt)
+  .action(async (opts: { port?: number }) => {
+    const home = agentHome();
+    const key = await loadOrCreateToolToken(home);
+    const running = await findRunningUi(home, await loadOrCreateToken(home));
+    const port = running ? new URL(running).port : String(opts.port ?? DEFAULT_PORT);
+    if (!running) console.log('The settings app is not running. Start it with "npm run ui" or the desktop icon first.\n');
+    console.log('Add this in Open WebUI as an OpenAPI tool server (Bearer auth):\n');
+    console.log(`  URL, Open WebUI opened in this computer's browser (Settings > Tools):  http://localhost:${port}/tools`);
+    console.log(`  URL, Open WebUI in Docker (Admin Settings > External Tools):          http://host.docker.internal:${port}/tools`);
+    console.log(`  Key:  ${key}\n`);
+    console.log(`To issue a new key, delete ${toolTokenFile(home)} and restart the settings app. See docs/openwebui.md.`);
   });
 
 async function launcherContext(): Promise<LauncherContext> {
