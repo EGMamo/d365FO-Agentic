@@ -11,6 +11,8 @@ import { FIELD_CATALOG } from '../profiles/catalog.js';
 import { serverFile, tokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { loadLocalTestCases } from '../testing/loader.js';
+import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
+import { REPORT_FILES, RunHistory, type ReportFile } from './history.js';
 
 /**
  * Local web UI for managing profiles. It binds to the loopback interface only and is meant to be opened from the
@@ -27,6 +29,7 @@ const ID = /^[\w.-]{1,64}$/;
 
 interface RunState {
   id: number;
+  kind: 'run' | 'upload';
   status: 'running' | 'passed' | 'failed' | 'stopped';
   args: string[];
   startedAt: string;
@@ -43,6 +46,8 @@ export interface UiServerOptions {
   cliPath?: string;
   port?: number;
   host?: string;
+  /** Project folder: test-case folders and the report folder are resolved inside it. Defaults to the repo root. */
+  root?: string;
 }
 
 export interface RunningUi {
@@ -148,7 +153,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const host = opts.host ?? '127.0.0.1';
   let port = opts.port ?? DEFAULT_PORT;
   const cliPath = opts.cliPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'index.js');
-  const repoRoot = defaultRepoRoot();
+  const repoRoot = opts.root ?? defaultRepoRoot();
+  const caseFiles = new TestCaseFiles(repoRoot);
   let run: RunState | undefined;
   let runSeq = 0;
   const listeners = new Set<ServerResponse>();
@@ -157,7 +163,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of listeners) res.write(msg);
   };
-  const publicRun = (r: RunState) => ({ id: r.id, status: r.status, args: r.args, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+  const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.status, args: r.args, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
 
   /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
   function runCli(args: string[], active?: string): ChildProcess {
@@ -201,10 +207,35 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (!Number.isInteger(n) || n < 0 || n > 10) return { error: 'Retries must be 0-10' };
       args.push('--reloop-max-retries', String(n));
     }
+    return startCli('run', args);
+  }
 
+  /** Uploads a run kept in the history to Azure DevOps, using the profile in use now. */
+  async function startUpload(id: string, body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
+    if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
+    const input = await history.file(id, 'results.json');
+    if (!input) return { error: 'That run has no results to upload.' };
+    const args = ['upload', '--input', input];
+    const plan = typeof body.plan === 'string' ? body.plan.trim() : '';
+    if (plan) {
+      if (!ID.test(plan)) return { error: 'Invalid plan id' };
+      args.push('--plan', plan);
+    }
+    return startCli('upload', args, async (state) => {
+      const line = state.lines.find((l) => /^Uploaded run #\d+/.test(l));
+      const m = line && /^Uploaded run #(\d+): (\S+)/.exec(line);
+      if (state.status === 'passed') await history.update(id, { upload: { runId: m ? Number(m[1]) : undefined, url: m ? m[2] : undefined, at: new Date().toISOString() } });
+    });
+  }
+
+  async function startCli(
+    kind: RunState['kind'],
+    args: string[],
+    onDone?: (state: RunState) => Promise<void>,
+  ): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
     const active = await store.getActive();
     const secrets = active ? await profileSecrets(store, active) : [];
-    const state: RunState = { id: ++runSeq, status: 'running', args, startedAt: new Date().toISOString(), lines: [] };
+    const state: RunState = { id: ++runSeq, kind, status: 'running', args, startedAt: new Date().toISOString(), lines: [] };
     run = state;
     const push = (line: string): void => {
       let clean = line;
@@ -233,7 +264,19 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       state.finishedAt = new Date().toISOString();
       state.status = state.stopRequested ? 'stopped' : code === 0 ? 'passed' : 'failed';
       state.child = undefined;
-      broadcast('status', publicRun(state));
+      const finish = async (): Promise<void> => {
+        try {
+          if (kind === 'run') {
+            const meta = await history.record({ status: state.status, args, profile: active ?? null, startedAt: state.startedAt, finishedAt: state.finishedAt }, state.id);
+            push(`Saved to run history as ${meta.id}.`);
+          }
+          await onDone?.(state);
+        } catch (e) {
+          console.error(`[ui] could not update the run history: ${(e as Error).message}`);
+        }
+        broadcast('status', publicRun(state));
+      };
+      void finish();
     });
     broadcast('status', publicRun(state));
     return { run: publicRun(state) };
@@ -257,20 +300,26 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return true;
   }
 
-  /** Reads a report written by the CLI, honouring REPORT_DIR from the active profile. */
-  async function reportFile(name: 'report.html' | 'results.json'): Promise<string | undefined> {
-    let reportDir = 'reports';
+  /** The report folder the CLI writes to, honouring REPORT_DIR from the active profile. */
+  async function reportDir(): Promise<string> {
+    let dir = 'reports';
     const active = await store.getActive();
     if (active) {
       try {
         const entry = (await store.read(active, true)).find((e) => e.key === 'REPORT_DIR');
-        if (entry?.value) reportDir = entry.value;
+        if (entry?.value) dir = entry.value;
       } catch {
         /* fall back to the default */
       }
     }
-    const path = join(repoRoot, reportDir, name);
-    return existsSync(path) ? readFile(path, 'utf8') : undefined;
+    return resolve(repoRoot, dir);
+  }
+  const history = new RunHistory(reportDir);
+
+  /** Reads a report written by the CLI: the latest run's, or a run from the history. */
+  async function reportFile(name: ReportFile, runId?: string | null): Promise<string | undefined> {
+    const path = runId ? await history.file(runId, name) : join(await reportDir(), name);
+    return path && existsSync(path) ? readFile(path, 'utf8') : undefined;
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -358,16 +407,53 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return;
       }
       if (method === 'GET' && url.pathname === '/api/results') {
-        const raw = await reportFile('results.json');
+        const raw = await reportFile('results.json', url.searchParams.get('run'));
         return raw ? send(res, 200, raw, { 'Content-Type': 'application/json; charset=utf-8' }) : send(res, 200, null);
       }
       if (method === 'GET' && url.pathname === '/report') {
-        const html = await reportFile('report.html');
+        const html = await reportFile('report.html', url.searchParams.get('run'));
         return html ? send(res, 200, html) : send(res, 404, { error: 'No report yet. Run some tests first.' });
+      }
+      const dl = /^\/download\/([\w.-]+)$/.exec(url.pathname);
+      if (method === 'GET' && dl && (REPORT_FILES as readonly string[]).includes(dl[1])) {
+        const runId = url.searchParams.get('run');
+        const body = await reportFile(dl[1] as ReportFile, runId);
+        if (body === undefined) return send(res, 404, { error: 'No such report.' });
+        const type = dl[1].endsWith('.html') ? 'text/html' : dl[1].endsWith('.xml') ? 'application/xml' : 'application/json';
+        res.writeHead(200, {
+          'Content-Type': `${type}; charset=utf-8`,
+          'Content-Disposition': `attachment; filename="${runId ?? 'latest'}-${dl[1]}"`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        return void res.end(body);
+      }
+      if (method === 'GET' && url.pathname === '/api/history') return send(res, 200, await history.list());
+      const hm = /^\/api\/history\/([\w-]+)(\/upload)?$/.exec(url.pathname);
+      if (hm) {
+        if (!(await history.meta(hm[1]))) return send(res, 404, { error: 'No such run.' });
+        if (hm[2] && method === 'POST') {
+          const result = await startUpload(hm[1], await readJson(req));
+          return send(res, result.busy ? 409 : result.error ? 400 : 200, result);
+        }
+        if (!hm[2] && method === 'DELETE') return send(res, 200, { deleted: await history.delete(hm[1]) });
+      }
+      if (url.pathname === '/api/testcases') {
+        const dir = url.searchParams.get('dir') ?? '';
+        const file = url.searchParams.get('file') ?? '';
+        if (method === 'GET') return send(res, 200, file ? await caseFiles.read(dir, file) : await caseFiles.list(dir));
+        if (method === 'PUT') {
+          const body = await readJson(req);
+          return send(res, 200, await caseFiles.save(dir, body.testCase, file || undefined));
+        }
+        if (method === 'DELETE' && file) {
+          await caseFiles.delete(dir, file);
+          return send(res, 200, { deleted: file });
+        }
       }
       return send(res, 404, { error: 'Not found.' });
     } catch (e) {
-      if (e instanceof ProfileError) return send(res, e.status, { error: e.message });
+      if (e instanceof ProfileError || e instanceof TestCaseFileError) return send(res, e.status, { error: e.message });
       console.error(`[ui] ${(e as Error).message}`);
       return send(res, 500, { error: 'Something went wrong. See the terminal window for details.' });
     }

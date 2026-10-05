@@ -63,6 +63,17 @@
   dialog::backdrop { background:rgba(0,0,0,.45); }
   dialog label { display:block; margin:.6rem 0 .25rem; font-size:.9rem; }
   dialog .row { display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem; }
+  textarea { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); resize:vertical; min-height:2.4rem; }
+  .steps .step { display:grid; grid-template-columns:2rem 1fr 1fr auto; gap:.5rem; align-items:start; margin-bottom:.5rem; }
+  @media (max-width:760px) { .steps .step { grid-template-columns:2rem 1fr; } }
+  .steps .num { color:var(--muted); padding-top:.5rem; text-align:right; }
+  .case { display:block; width:100%; text-align:left; font:inherit; background:none; border:1px solid transparent; border-radius:8px; padding:.45rem .6rem; color:var(--text); cursor:pointer; }
+  .case:hover { background:var(--bg); }
+  .case[aria-current="true"] { border-color:var(--accent); background:var(--bg); }
+  .case small { display:block; color:var(--muted); }
+  .chips span { display:inline-block; font-size:.75rem; padding:.05rem .45rem; border-radius:99px; border:1px solid var(--line); margin-right:.25rem; }
+  .totals span { margin-right:.6rem; }
+  a.btn { text-decoration:none; display:inline-block; }
   .err { color:var(--danger); font-size:.85rem; min-height:1.2em; margin-top:.5rem; }
 </style>
 </head>
@@ -72,8 +83,10 @@
   <h1>D365FO Agent</h1>
   <nav class="tabs">
     <button class="tab active" data-tab="profiles" type="button">Profiles</button>
+    <button class="tab" data-tab="cases" type="button">Test cases</button>
     <button class="tab" data-tab="run" type="button">Run</button>
     <button class="tab" data-tab="results" type="button">Results</button>
+    <button class="tab" data-tab="history" type="button">History</button>
   </nav>
   <span class="sub" id="homeInfo"></span>
 </header>
@@ -90,6 +103,18 @@
         <button class="btn" id="noneBtn" type="button" hidden>Use the .env file instead</button>
       </aside>
       <section class="panel" id="editor" aria-live="polite"></section>
+    </div>
+  </section>
+
+  <section class="view" id="tab-cases">
+    <div class="layout">
+      <aside class="panel">
+        <h2>Folder</h2>
+        <div class="row" style="margin-bottom:.6rem"><input type="text" id="caseDir" value="examples/testcases" aria-label="Test-case folder"><button class="btn" id="caseDirLoad" type="button">Open</button></div>
+        <div id="caseList"></div>
+        <div class="actions" style="margin:.75rem 0 0"><button class="btn primary" id="caseNew" type="button">+ New test case</button></div>
+      </aside>
+      <section class="panel" id="caseEditor" aria-live="polite"></section>
     </div>
   </section>
 
@@ -133,11 +158,24 @@
   <section class="view" id="tab-results">
     <div class="panel">
       <div class="actions" style="margin-bottom:.6rem">
-        <h3>Latest run</h3>
+        <h3 id="resultsTitle">Latest run</h3>
         <button class="btn" id="refreshResults" type="button">Refresh</button>
-        <a class="btn" href="/report" target="_blank" rel="noopener" style="text-decoration:none">Open full HTML report ↗</a>
+        <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Open full HTML report ↗</a>
+        <a class="btn" id="jsonLink" href="/download/results.json">JSON</a>
+        <a class="btn" id="junitLink" href="/download/results.junit.xml">JUnit XML</a>
       </div>
       <div id="results"></div>
+    </div>
+  </section>
+
+  <section class="view" id="tab-history">
+    <div class="panel">
+      <div class="actions" style="margin-bottom:.6rem">
+        <h3>Run history</h3>
+        <button class="btn" id="refreshHistory" type="button">Refresh</button>
+        <label>Plan for upload <input type="text" id="uploadPlan" placeholder="default from profile" style="width:180px"></label>
+      </div>
+      <div id="history"></div>
     </div>
   </section>
 </main>
@@ -299,10 +337,16 @@ $('newForm').addEventListener('submit', async (ev) => {
 
 // ── Tabs ──
 document.querySelectorAll('nav.tabs button').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('nav.tabs button').forEach((x) => x.classList.toggle('active', x === b));
-  document.querySelectorAll('.view').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + b.dataset.tab));
-  if (b.dataset.tab === 'results') loadResults().catch(fail);
+  if (b.dataset.tab === 'results') viewRun = null;
+  showTab(b.dataset.tab);
 }));
+function showTab(tab) {
+  document.querySelectorAll('nav.tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === tab));
+  document.querySelectorAll('.view').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + tab));
+  if (tab === 'results') loadResults().catch(fail);
+  if (tab === 'history') loadHistory().catch(fail);
+  if (tab === 'cases' && !casesLoaded) loadCases().catch(fail);
+}
 
 // ── Run ──
 const source = () => document.querySelector('input[name=source]:checked').value;
@@ -331,7 +375,7 @@ function showStatus(r) {
   $('start').disabled = running; $('stop').disabled = !running;
   const s = $('runStatus'); s.className = r ? r.status : '';
   s.textContent = !r ? '' : running ? 'Running…' : r.status === 'passed' ? 'Finished' : r.status === 'stopped' ? 'Stopped' : 'Finished with failures (exit ' + r.exitCode + ')';
-  if (r && !running) loadResults().catch(() => {});
+  if (r && !running) { viewRun = null; loadResults().catch(() => {}); loadHistory().catch(() => {}); }
 }
 function appendLog(line) {
   const log = $('log');
@@ -350,10 +394,14 @@ async function initRun() {
 }
 
 // ── Results ──
+let viewRun = null;
 async function loadResults() {
   const box = $('results');
+  const q = viewRun ? '?run=' + encodeURIComponent(viewRun) : '';
+  $('resultsTitle').textContent = viewRun ? 'Run ' + viewRun : 'Latest run';
+  $('reportLink').href = '/report' + q; $('jsonLink').href = '/download/results.json' + q; $('junitLink').href = '/download/results.junit.xml' + q;
   let results;
-  try { results = await api('/api/results'); } catch (e) { box.textContent = String(e.message || e); return; }
+  try { results = await api('/api/results' + q); } catch (e) { box.textContent = String(e.message || e); return; }
   if (!results || !results.length) { box.textContent = 'No results yet. Run some tests first.'; return; }
   const table = el('table', {}, el('tr', {}, ...['Case', 'Outcome', 'Attempts', 'Duration', 'Details'].map((h) => el('th', {}, h))));
   for (const r of results) {
@@ -373,6 +421,123 @@ async function loadResults() {
   box.replaceChildren(table);
 }
 $('refreshResults').addEventListener('click', () => loadResults().catch(fail));
+
+// ── History ──
+async function loadHistory() {
+  const box = $('history');
+  const runs = await api('/api/history');
+  if (!runs.length) { box.replaceChildren(el('p', { class: 'empty' }, 'No runs yet. Every run started here is kept with its reports.')); return; }
+  const table = el('table', {}, el('tr', {}, ...['Started', 'Profile', 'What ran', 'Outcome', 'Azure DevOps', ''].map((h) => el('th', {}, h))));
+  for (const r of runs) {
+    const t = r.totals;
+    const outcome = t ? el('span', { class: 'totals' }, el('span', { class: 'passed' }, t.passed + ' passed'), t.failed ? el('span', { class: 'failed' }, t.failed + ' failed') : null, t.blocked ? el('span', { class: 'blocked' }, t.blocked + ' blocked') : null, t.skipped ? el('span', { class: 'skipped' }, t.skipped + ' skipped') : null)
+      : el('span', { class: r.status }, r.status === 'stopped' ? 'stopped, no results' : 'no results');
+    const q = '?run=' + encodeURIComponent(r.id);
+    const devops = r.upload ? (r.upload.url ? el('a', { href: r.upload.url, target: '_blank', rel: 'noopener' }, 'Run #' + r.upload.runId + ' ↗') : 'Uploaded') : '';
+    table.append(el('tr', {},
+      el('td', {}, new Date(r.startedAt).toLocaleString()),
+      el('td', {}, r.profile || '.env'),
+      el('td', {}, el('code', {}, r.args.slice(1).join(' ') || 'all')),
+      el('td', {}, outcome),
+      el('td', {}, devops),
+      el('td', {}, el('div', { class: 'row' },
+        t ? el('button', { class: 'btn', type: 'button', onclick: () => { viewRun = r.id; showTab('results'); } }, 'View') : null,
+        t ? el('a', { class: 'btn', href: '/report' + q, target: '_blank', rel: 'noopener' }, 'Report ↗') : null,
+        t ? el('a', { class: 'btn', href: '/download/results.junit.xml' + q }, 'JUnit') : null,
+        t ? el('button', { class: 'btn', type: 'button', onclick: () => uploadRun(r.id).catch(fail) }, r.upload ? 'Upload again' : 'Upload to DevOps') : null,
+        el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Delete run', onclick: () => deleteRun(r.id).catch(fail) }, '×')))));
+  }
+  box.replaceChildren(table);
+}
+async function uploadRun(id) {
+  if (!confirm('Upload run ' + id + ' to Azure DevOps as a new test run, using the profile in use?')) return;
+  const res = await api('/api/history/' + encodeURIComponent(id) + '/upload', 'POST', { plan: $('uploadPlan').value });
+  if (res.error) return toast(res.error);
+  $('log').textContent = ''; showStatus(res.run); showTab('run');
+}
+async function deleteRun(id) {
+  if (!confirm('Delete run ' + id + ' and its reports from this computer?')) return;
+  await api('/api/history/' + encodeURIComponent(id), 'DELETE'); toast('Deleted'); await loadHistory();
+}
+$('refreshHistory').addEventListener('click', () => loadHistory().catch(fail));
+
+// ── Test cases ──
+let casesLoaded = false, cases = [], editing = null; // editing: { file|null, tc }
+const caseDir = () => $('caseDir').value.trim();
+async function loadCases(select) {
+  casesLoaded = true;
+  cases = await api('/api/testcases?dir=' + encodeURIComponent(caseDir()));
+  renderCaseList();
+  if (select) await openCase(select);
+  else if (!editing) renderCaseEditor();
+}
+function renderCaseList() {
+  const list = $('caseList'); list.replaceChildren();
+  if (!cases.length) list.append(el('p', { class: 'empty' }, 'No test cases in this folder yet.'));
+  for (const c of cases) list.append(el('button', { class: 'case', type: 'button', 'aria-current': editing && editing.file === c.file ? 'true' : 'false', onclick: () => openCase(c.file).catch(fail) },
+    '[' + c.id + '] ' + c.title, el('small', {}, c.error || (c.steps + ' step(s)' + (c.module ? ' · ' + c.module : '')))));
+}
+async function openCase(file) {
+  editing = { file, tc: await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(file)) };
+  renderCaseList(); renderCaseEditor();
+}
+function stepRow(step) {
+  const a = el('textarea', { rows: '2', placeholder: 'Action, e.g. Open Accounts payable > Vendors > All vendors', 'data-sa': '1' }); a.value = step.action || '';
+  const x = el('textarea', { rows: '2', placeholder: 'Expected result (optional)', 'data-se': '1' }); x.value = step.expected || '';
+  const row = el('div', { class: 'step' }, el('span', { class: 'num' }), a, x, el('div', { class: 'row' },
+    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move up', onclick: () => { if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); renumber(); } }, '↑'),
+    el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove step', onclick: () => { row.remove(); renumber(); } }, '×')));
+  return row;
+}
+function renumber() { document.querySelectorAll('#steps .step .num').forEach((n, i) => { n.textContent = (i + 1) + '.'; }); }
+function input(id, label, value, opts = {}) {
+  const i = el(opts.area ? 'textarea' : 'input', { id, type: 'text', placeholder: opts.placeholder || '', autocomplete: 'off' }); i.value = value == null ? '' : value;
+  return el('div', { class: 'field' }, el('label', { for: id }, label), i, opts.help ? el('div', { class: 'help' }, opts.help) : null);
+}
+function renderCaseEditor() {
+  const ed = $('caseEditor'); ed.replaceChildren();
+  if (!editing) { ed.append(el('p', { class: 'empty' }, 'Pick a test case to edit, or create a new one. Steps are plain language: the agent reads them and drives F&O.')); return; }
+  const tc = editing.tc;
+  ed.append(el('div', { class: 'actions' }, el('h3', {}, editing.file ? tc.title : 'New test case'),
+    editing.file ? el('button', { class: 'btn', type: 'button', onclick: () => runCase(tc.id) }, 'Run this case') : null,
+    editing.file ? el('button', { class: 'btn', type: 'button', onclick: () => { editing = { file: null, tc: { ...tc, id: tc.id + '-COPY', title: tc.title + ' (copy)' } }; renderCaseList(); renderCaseEditor(); } }, 'Duplicate') : null,
+    editing.file ? el('button', { class: 'btn danger', type: 'button', onclick: () => deleteCase().catch(fail) }, 'Delete') : null));
+  const form = el('form', { id: 'caseForm' },
+    input('tcId', 'Id', tc.id, { placeholder: 'TC-VENDOR-001', help: editing.file ? 'Saved in ' + editing.file : 'Leave empty to derive it from the title.' }),
+    input('tcTitle', 'Title', tc.title),
+    input('tcModule', 'Module', tc.module, { placeholder: 'Accounts payable' }),
+    input('tcEntity', 'Legal entity', tc.legalEntity, { placeholder: 'Default from the profile', help: 'Navigation to another company is refused during the run.' }),
+    input('tcPriority', 'Priority (1-4)', tc.priority),
+    input('tcTags', 'Tags', (tc.tags || []).join(', '), { placeholder: 'smoke, vendor' }),
+    input('tcPre', 'Preconditions', tc.preconditions, { area: true }),
+    el('fieldset', {}, el('legend', {}, 'Steps'), el('div', { class: 'steps', id: 'steps' }, (tc.steps || []).map(stepRow)),
+      el('button', { class: 'btn', type: 'button', onclick: () => { $('steps').append(stepRow({})); renumber(); } }, '+ Add step')),
+    el('div', { class: 'err', id: 'caseErr', role: 'alert' }),
+    el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save test case')));
+  form.addEventListener('submit', (ev) => { ev.preventDefault(); saveCase().catch((e) => { $('caseErr').textContent = e.message; }); });
+  ed.append(form); renumber();
+}
+async function saveCase() {
+  const steps = [...document.querySelectorAll('#steps .step')].map((r) => ({ action: r.querySelector('[data-sa]').value, expected: r.querySelector('[data-se]').value })).filter((s) => s.action.trim() || s.expected.trim());
+  const testCase = { id: $('tcId').value.trim(), title: $('tcTitle').value, module: $('tcModule').value, legalEntity: $('tcEntity').value, priority: $('tcPriority').value.trim(),
+    tags: $('tcTags').value.split(',').map((t) => t.trim()).filter(Boolean), preconditions: $('tcPre').value, steps };
+  const q = '?dir=' + encodeURIComponent(caseDir()) + (editing.file ? '&file=' + encodeURIComponent(editing.file) : '');
+  const res = await api('/api/testcases' + q, 'PUT', { testCase });
+  toast('Saved'); editing = null; await loadCases(res.file);
+}
+async function deleteCase() {
+  if (!confirm('Delete the test case "' + editing.tc.title + '" (' + editing.file + ')?')) return;
+  await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(editing.file), 'DELETE');
+  toast('Deleted'); editing = null; await loadCases();
+}
+function runCase(id) {
+  document.querySelector('input[name=source][value=local]').checked = true;
+  $('local').value = caseDir();
+  const sel = $('caseId'); sel.replaceChildren(el('option', { value: id }, id)); sel.value = id;
+  showTab('run');
+}
+$('caseDirLoad').addEventListener('click', () => { editing = null; loadCases().catch(fail); });
+$('caseNew').addEventListener('click', () => { editing = { file: null, tc: { id: '', title: '', steps: [{ action: 'Sign in to D365 F&O and open the default dashboard', expected: 'The dashboard is shown' }], tags: [] } }; renderCaseList(); renderCaseEditor(); });
 
 refresh().catch(fail);
 initRun();
