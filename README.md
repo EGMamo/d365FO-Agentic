@@ -39,6 +39,14 @@ Double-click the icon: it starts a small local web app and opens it in your brow
 
 In the app you can create, edit, duplicate and delete **named profiles** (one per environment, for example "Sandbox UAT" and "Dev"), choose the one in use, and press **Check setup** to run `doctor` against it. Secrets are masked in the browser. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). The server listens on `127.0.0.1` only and requires a per-machine token.
 
+The app has five tabs:
+
+- **Profiles**: environments and their settings, as above.
+- **Test cases**: open a folder inside the project (default `examples/testcases`), then create, edit, duplicate and delete local test cases with a step editor (action and expected result per step). "Run this case" takes you to the Run tab with it selected.
+- **Run**: run a local folder or an Azure DevOps plan/suite, one case or all, with dry run, retries and optional upload; the log streams live and a run can be stopped.
+- **Results**: the latest run (or one picked from History), with the HTML report and JSON / JUnit XML downloads.
+- **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
+
 The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
 
 ## Quick start
@@ -83,6 +91,7 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_MODEL` | Provider `github-copilot`: token (or run `copilot-login` to save one) and model |
 | `D365_BASE_URL` | Your F&O sandbox URL |
 | `D365_USERNAME` / `D365_PASSWORD` | Test account credentials (non-MFA recommended for automated runs) |
+| `D365_TENANT_ID` / `D365_CLIENT_ID` / `D365_CLIENT_SECRET` | Optional Entra app registration: read-only OData data checks (`d365_odata_query`), see [D365 F&O notes](docs/d365fo.md#entra-app-registration-optional) |
 | `D365_ENVIRONMENT_TYPE` | Declare `sandbox` / `production` / `dev`; empty guesses from the URL (see [Grounding & safety](#grounding--safety)) |
 | `D365_STORAGE_STATE` | Optional saved browser session (see [docs/d365fo.md](docs/d365fo.md#signing-in-with-a-saved-session-optional)); replaces the password when set |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |

@@ -62,7 +62,11 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() === 'true'),
 
   D365_BASE_URL: z.string().optional(),
-  D365_TENANT_ID: z.string().optional(),
+  // Optional Entra app registration (client credentials) for read-only OData checks; see d365fo/entra.ts.
+  D365_TENANT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
+  D365_CLIENT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
+  D365_CLIENT_SECRET: z.string().optional().transform((v) => v || undefined),
+  D365_AUTHORITY_HOST: z.string().optional().transform((v) => v?.trim() || undefined),
   D365_USERNAME: z.string().optional(),
   D365_PASSWORD: z.string().optional(),
   D365_COMPANY: z.string().default('USMF'),
@@ -210,9 +214,13 @@ export function validateForRun(cfg: AppConfig): string[] {
   const prod = productionIssue(cfg);
   if (prod) issues.push(prod);
   const hasPassword = !!cfg.D365_USERNAME && !!cfg.D365_PASSWORD;
+  const hasApp = !!(cfg.D365_TENANT_ID && cfg.D365_CLIENT_ID && cfg.D365_CLIENT_SECRET);
+  const appParts = [cfg.D365_TENANT_ID, cfg.D365_CLIENT_ID, cfg.D365_CLIENT_SECRET].filter(Boolean).length;
+  if (appParts > 0 && !hasApp) issues.push('The Entra app registration needs all three of D365_TENANT_ID, D365_CLIENT_ID and D365_CLIENT_SECRET');
   if (!hasPassword) {
     if (!cfg.D365_STORAGE_STATE) {
-      issues.push('D365_USERNAME and D365_PASSWORD are required so the agent can sign in to F&O (or use a saved session: D365_STORAGE_STATE)');
+      // An app registration alone is enough for data-only test cases; browser steps will report blocked.
+      if (!hasApp) issues.push('Sign-in is not configured: set D365_USERNAME and D365_PASSWORD, a saved session (D365_STORAGE_STATE), or an Entra app registration (D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET)');
     } else if (!existsSync(resolve(cfg.D365_STORAGE_STATE))) {
       issues.push(`D365_STORAGE_STATE points at ${cfg.D365_STORAGE_STATE}, which does not exist. Run \`d365fo-agent session-login\` or set D365_USERNAME and D365_PASSWORD`);
     }

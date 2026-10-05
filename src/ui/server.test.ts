@@ -103,7 +103,7 @@ describe('run management', () => {
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'd365ui-run-'));
     await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
-    runUi = await startUiServer({ home: dir, port: 0, cliPath: join(dir, 'cli.mjs') });
+    runUi = await startUiServer({ home: dir, port: 0, cliPath: join(dir, 'cli.mjs'), root: dir });
     base = `http://127.0.0.1:${runUi.port}`;
     cookieHeader = `d365fo_ui=${runUi.token}`;
     rcall = (path, init = {}, auth = true) => {
@@ -153,5 +153,97 @@ describe('run management', () => {
     assert.equal(stopped.status, 200);
     const r = await pollStatus('stopped');
     assert.equal(r.status, 'stopped');
+  });
+});
+
+describe('test-case editor, run history and upload', () => {
+  // Fake CLI: `run` writes a results.json like the real one, `upload` prints the line the real one prints.
+  const FAKE_CLI = [
+    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'run') {",
+    "  mkdirSync('reports', { recursive: true });",
+    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 5 }]));",
+    "  writeFileSync('reports/report.html', '<html>report</html>');",
+    "  process.exitCode = 1;",
+    "} else if (args[0] === 'upload') {",
+    "  console.log('INPUT ' + args[2] + ' PLAN ' + (args[4] ?? '-'));",
+    "  console.log('Uploaded run #42: https://dev.azure.com/org/p/_testManagement/runs?runId=42');",
+    "}",
+  ].join('\n');
+
+  let dir = '';
+  let hui: RunningUi;
+  let hcall: (path: string, init?: RequestInit) => Promise<Response>;
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'd365ui-hist-'));
+    await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
+    hui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir });
+    hcall = (path, init = {}) => {
+      const method = (init.method ?? 'GET').toUpperCase();
+      const headers: Record<string, string> = { cookie: `d365fo_ui=${hui.token}` };
+      if (init.body) headers['content-type'] = 'application/json';
+      if (method !== 'GET') headers['x-requested-with'] = 'd365fo-ui';
+      return fetch(`http://127.0.0.1:${hui.port}${path}`, { ...init, headers });
+    };
+  });
+  after(async () => {
+    await hui.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const waitFor = async (pred: (r: any) => boolean): Promise<any> => {
+    for (let i = 0; i < 100; i++) {
+      const r = (await (await hcall('/api/run')).json()) as any;
+      if (r && pred(r)) return r;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    throw new Error('timed out');
+  };
+
+  it('creates, lists, edits and deletes test-case files inside the project folder only', async () => {
+    const tc = { title: 'Create vendor', module: 'Accounts payable', steps: [{ action: 'Open vendors', expected: 'List shown' }, { action: 'Click New' }] };
+    const created = await hcall('/api/testcases?dir=cases', { method: 'PUT', body: JSON.stringify({ testCase: tc }) });
+    assert.equal(created.status, 200);
+    const { file } = (await created.json()) as any;
+    assert.equal(file, 'create-vendor.json');
+    assert.equal((await hcall('/api/testcases?dir=cases', { method: 'PUT', body: JSON.stringify({ testCase: tc }) })).status, 409, 'same id is refused');
+    const list = (await (await hcall('/api/testcases?dir=cases')).json()) as any[];
+    assert.deepEqual(list.map((c) => [c.file, c.id, c.steps]), [['create-vendor.json', 'CREATE-VENDOR', 2]]);
+    const edited = await hcall(`/api/testcases?dir=cases&file=${file}`, { method: 'PUT', body: JSON.stringify({ testCase: { ...tc, id: 'TC-V1', steps: [{ action: 'Only step' }] } }) });
+    assert.equal(edited.status, 200);
+    const read = (await (await hcall(`/api/testcases?dir=cases&file=${file}`)).json()) as any;
+    assert.deepEqual([read.id, read.steps], ['TC-V1', [{ index: 1, action: 'Only step' }]]);
+    assert.equal((await hcall('/api/testcases?dir=cases', { method: 'PUT', body: JSON.stringify({ testCase: { title: 'x', steps: [] } }) })).status, 400);
+    assert.equal((await hcall('/api/testcases?dir=../..')).status, 400);
+    assert.equal((await hcall('/api/testcases?dir=cases&file=..%2F..%2Fx.json')).status, 400);
+    assert.equal((await hcall(`/api/testcases?dir=cases&file=${file}`, { method: 'DELETE' })).status, 200);
+    assert.deepEqual(await (await hcall('/api/testcases?dir=cases')).json(), []);
+  });
+
+  it('keeps each finished run in the history and uploads one to Azure DevOps on request', async () => {
+    assert.equal((await hcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases' }) })).status, 200);
+    await waitFor((r) => r.status === 'failed' && r.lines.some((l: string) => l.startsWith('Saved to run history')));
+    const runs = (await (await hcall('/api/history')).json()) as any[];
+    assert.equal(runs.length, 1);
+    assert.deepEqual(runs[0].totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
+    const id = runs[0].id;
+    assert.match(await (await hcall(`/report?run=${id}`)).text(), /report/);
+    const junit = await hcall(`/download/results.json?run=${id}`);
+    assert.match(String(junit.headers.get('content-disposition')), /attachment/);
+    assert.equal((await hcall('/report?run=nope')).status, 404);
+
+    assert.equal((await hcall(`/api/history/${id}/upload`, { method: 'POST', body: JSON.stringify({ plan: '1;x' }) })).status, 400);
+    assert.equal((await hcall(`/api/history/${id}/upload`, { method: 'POST', body: JSON.stringify({ plan: '77' }) })).status, 200);
+    const up = await waitFor((r) => r.kind === 'upload' && r.status === 'passed');
+    assert.match(up.lines.join('\n'), /INPUT .*history.*results\.json PLAN 77/);
+    let meta: any;
+    for (let i = 0; i < 50 && !meta?.upload; i++) {
+      meta = ((await (await hcall('/api/history')).json()) as any[])[0];
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    assert.deepEqual([meta.upload.runId, meta.upload.url], [42, 'https://dev.azure.com/org/p/_testManagement/runs?runId=42']);
+    assert.equal((await (await hcall('/api/history')).json() as any[]).length, 1, 'an upload is not a new run');
+    assert.equal((await hcall(`/api/history/${id}`, { method: 'DELETE' })).status, 200);
+    assert.deepEqual(await (await hcall('/api/history')).json(), []);
   });
 });

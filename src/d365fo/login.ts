@@ -44,6 +44,7 @@ const SECRET_KEYS = [
   'GITHUB_TOKEN',
   'GITHUB_COPILOT_TOKEN',
   'AZDO_PAT',
+  'D365_CLIENT_SECRET',
 ] as const;
 
 // Token shapes that can show up in page text or errors even when they are not configured values.
