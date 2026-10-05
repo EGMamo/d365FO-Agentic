@@ -8,17 +8,20 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultRepoRoot } from '../launcher/install.js';
 import { FIELD_CATALOG } from '../profiles/catalog.js';
-import { serverFile, tokenFile } from '../profiles/paths.js';
+import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { REPORT_FILES, RunHistory, type ReportFile } from './history.js';
+import { openApiSpec, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import type { TestResult } from '../testing/types.js';
 
 /**
  * Local web UI for managing profiles. It binds to the loopback interface only and is meant to be opened from the
  * launcher. Three checks keep other web pages and other local users away from the secrets it manages:
  * the Host header must be this server (blocks DNS rebinding), writes must come from this page (Origin and a custom
  * header, blocks cross-site forms) and every request needs the per-machine token held in a cookie.
+ * The Open WebUI tool routes under /tools are the exception: they take a bearer token instead (see tools.ts).
  */
 export const DEFAULT_PORT = 4365;
 const COOKIE = 'd365fo_ui';
@@ -50,6 +53,9 @@ export interface UiServerOptions {
   root?: string;
 }
 
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
+export const isLoopback = (host: string): boolean => LOOPBACK.has(host);
+
 export interface RunningUi {
   server: Server;
   port: number;
@@ -57,21 +63,27 @@ export interface RunningUi {
   url: string;
   /** The URL that signs the browser in (sets the cookie) and then lands on the app. */
   openUrl: string;
+  /** Bearer token for the Open WebUI tool server at `<url>tools`. */
+  toolToken: string;
   close: () => Promise<void>;
 }
 
-export async function loadOrCreateToken(home: string): Promise<string> {
+async function loadOrCreate(home: string, file: string): Promise<string> {
   try {
-    const t = (await readFile(tokenFile(home), 'utf8')).trim();
+    const t = (await readFile(file, 'utf8')).trim();
     if (t.length >= 32) return t;
   } catch {
     /* create below */
   }
   const token = randomBytes(24).toString('hex');
   await mkdir(home, { recursive: true, mode: 0o700 });
-  await writeFile(tokenFile(home), token, { mode: 0o600 });
+  await writeFile(file, token, { mode: 0o600 });
   return token;
 }
+
+export const loadOrCreateToken = (home: string): Promise<string> => loadOrCreate(home, tokenFile(home));
+/** The key Open WebUI sends to the tool routes. Delete the file and restart the app to issue a new one. */
+export const loadOrCreateToolToken = (home: string): Promise<string> => loadOrCreate(home, toolTokenFile(home));
 
 const same = (a: string, b: string): boolean => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -150,6 +162,7 @@ async function runDoctor(store: ProfileStore, name: string, cliPath: string): Pr
 export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const store = new ProfileStore(opts.home);
   const token = await loadOrCreateToken(opts.home);
+  const toolToken = await loadOrCreateToolToken(opts.home);
   const host = opts.host ?? '127.0.0.1';
   let port = opts.port ?? DEFAULT_PORT;
   const cliPath = opts.cliPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'index.js');
@@ -322,7 +335,82 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return path && existsSync(path) ? readFile(path, 'utf8') : undefined;
   }
 
+  /** Bearer tokens carry no ambient browser credentials, so any origin may call (Open WebUI user tool servers call from the browser). */
+  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600' };
+  const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' });
+  const intParam = (url: URL, name: string, def: number, max: number): number => {
+    const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
+  };
+  const runView = (tail: number) => (run ? { ...publicRun(run), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` } : null);
+
+  /** The Open WebUI tool server: the same actions as the app, for a chat model. */
+  async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
+    const path = url.pathname.slice(TOOLS_PREFIX.length) || '/';
+    if (method === 'OPTIONS') {
+      res.writeHead(204, CORS);
+      return void res.end();
+    }
+    if (method === 'GET' && path === '/openapi.json') {
+      const base = `http://${req.headers.host ?? `127.0.0.1:${port}`}${TOOLS_PREFIX}`;
+      return tsend(res, 200, openApiSpec(base));
+    }
+    const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
+    if (!auth || !same(auth[1].trim(), toolToken)) return tsend(res, 401, { error: 'Missing or wrong bearer token. Run "d365fo-agent openwebui" to see it.' });
+
+    if (method === 'GET' && path === '/profiles') return tsend(res, 200, { active: (await store.getActive()) ?? null, profiles: await store.list() });
+    if (method === 'POST' && path === '/profiles/active') {
+      const body = await readJson(req);
+      if (typeof body.name !== 'string' || !body.name) return tsend(res, 400, { error: 'Give the profile name.' });
+      await store.read(body.name); // 404 for an unknown profile
+      await store.setActive(body.name);
+      return tsend(res, 200, { active: (await store.getActive()) ?? null });
+    }
+    if (path === '/testcases' || path === '/testcases/file') {
+      const dir = url.searchParams.get('dir') ?? '';
+      const file = url.searchParams.get('file') ?? '';
+      if (method === 'GET' && path === '/testcases') return tsend(res, 200, await caseFiles.list(dir));
+      if (method === 'GET') return tsend(res, 200, await caseFiles.read(dir, file));
+      if (method === 'PUT' && path === '/testcases') return tsend(res, 200, await caseFiles.save(dir, (await readJson(req)).testCase, file || undefined));
+    }
+    if (method === 'POST' && path === '/runs') {
+      const result = await startRun(await readJson(req));
+      return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
+    }
+    if (method === 'GET' && path === '/runs/current') {
+      const deadline = Date.now() + intParam(url, 'waitSeconds', 0, 120) * 1000;
+      while (run?.status === 'running' && Date.now() < deadline && !res.destroyed) await new Promise((r) => setTimeout(r, 500));
+      return tsend(res, 200, { run: runView(intParam(url, 'tail', 40, 400)) });
+    }
+    if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
+    if (method === 'GET' && path === '/results') {
+      const runId = url.searchParams.get('run');
+      const raw = await reportFile('results.json', runId);
+      if (!raw) return tsend(res, 404, { error: runId ? 'That run has no results.' : 'No results yet. Start a run first.' });
+      return tsend(res, 200, { run: runId ?? 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) });
+    }
+    if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
+    const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
+    if (method === 'POST' && up) {
+      if (!(await history.meta(up[1]))) return tsend(res, 404, { error: 'No such run.' });
+      const result = await startUpload(up[1], await readJson(req));
+      return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
+    }
+    return tsend(res, 404, { error: 'Not found.' });
+  }
+
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const method0 = req.method ?? 'GET';
+    const path0 = (req.url ?? '/').split('?')[0];
+    if (path0 === TOOLS_PREFIX || path0.startsWith(`${TOOLS_PREFIX}/`)) {
+      try {
+        return await toolsHandler(req, res, new URL(req.url ?? '/', 'http://tools'), method0);
+      } catch (e) {
+        if (e instanceof ProfileError || e instanceof TestCaseFileError) return tsend(res, e.status, { error: e.message });
+        console.error(`[ui] ${(e as Error).message}`);
+        return tsend(res, 500, { error: 'Something went wrong. See the settings app window for details.' });
+      }
+    }
     const hostHeader = (req.headers.host ?? '').toLowerCase();
     if (hostHeader !== `127.0.0.1:${port}` && hostHeader !== `localhost:${port}`) return send(res, 403, { error: 'Unexpected Host header.' });
     const url = new URL(req.url ?? '/', `http://${hostHeader}`);
@@ -487,6 +575,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     token,
     url,
     openUrl: `${url}?token=${token}`,
+    toolToken,
     close: () =>
       new Promise((resolve) => {
         stopRun();

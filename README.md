@@ -47,6 +47,10 @@ The app has five tabs:
 - **Results**: the latest run (or one picked from History), with the HTML report and JSON / JUnit XML downloads.
 - **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
 
+### Open WebUI
+
+Prefer a chat? The app also serves an OpenAPI tool server for [Open WebUI](https://openwebui.com): `npm run openwebui:up` starts Open WebUI in Docker, `npm run openwebui` prints the address and key to add under External Tools, and a chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
+
 The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
 
 ## Quick start
