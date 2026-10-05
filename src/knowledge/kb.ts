@@ -87,17 +87,28 @@ export class KnowledgeBase {
     return created;
   }
 
+  /** The recorded path of the last passing run of a test case, if one was saved. */
+  recipeFor(testCaseId: string): KbEntry | undefined {
+    return this.data.entries.find((e) => e.kind === 'recipe' && e.testCaseId === testCaseId && e.summary === knownPathSummary(testCaseId));
+  }
+
   /** Retrieve top-K entries most relevant to a free-text query and tag set. */
   retrieve(query: string, tags: string[] = [], k = 5): KbEntry[] {
     const terms = tokenize(query);
     const tagSet = new Set(tags.map((t) => t.toLowerCase()));
-    return [...this.data.entries]
+    return this.data.entries
+      .filter((e) => !(e.testCaseId && e.summary === knownPathSummary(e.testCaseId)))
       .map((e) => ({ entry: e, score: score(e, terms, tagSet) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, k)
       .map((x) => x.entry);
   }
+}
+
+/** Summary under which a test case's known-good path is stored, so each case keeps one entry. */
+export function knownPathSummary(testCaseId: string): string {
+  return `Known-good path for test case ${testCaseId}`;
 }
 
 function tokenize(s: string): string[] {

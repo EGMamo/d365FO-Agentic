@@ -21,7 +21,7 @@ function build(dir: string, over: Partial<AppConfig>, next: () => LlmCompleteRes
     async listTools() { return []; },
     async callTool(_s: string, tool: string) { called.push(tool); return { content: 'page', isError: false }; },
   };
-  const kb = { retrieve: () => [], upsert() {}, async save() {} };
+  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
   return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never);
 }
 

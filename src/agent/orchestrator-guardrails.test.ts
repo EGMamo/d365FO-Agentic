@@ -53,7 +53,7 @@ function harness(
     async listTools() { return discovered.map((d) => ({ ...d, description: '', inputSchema: { type: 'object' } })); },
     async callTool(server: string, tool: string, args: Record<string, unknown>) { h.reached.push([server, tool, args]); return { content: page, isError: false }; },
   };
-  const kb = { retrieve: () => [], upsert(e: Record<string, unknown>) { h.upserts.push(e); }, async save() {} };
+  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert(e: Record<string, unknown>) { h.upserts.push(e); }, async save() {} };
   const dir = mkdtemp(join(tmpdir(), 'orch-'));
   h.run = async (t = tc) => {
     cfg.REPORT_DIR = await dir;

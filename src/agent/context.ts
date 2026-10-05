@@ -1,4 +1,5 @@
 import type { LlmMessage } from '../llm/types.js';
+import { OPEN_MENU_ITEM_TOOL_NAME } from '../d365fo/navigation.js';
 
 /**
  * Keeps the conversation from growing without bound. Every turn resends the whole
@@ -16,7 +17,8 @@ const PREVIEW_CHARS = 160;
 const STUB_PREFIX = '[Omitted older tool result';
 
 function isBulkyMcpResult(m: LlmMessage): boolean {
-  return m.role === 'tool' && !!m.toolName?.includes('__') && m.content.length >= MIN_COMPACT_CHARS && !m.content.startsWith(STUB_PREFIX);
+  const snapshotTool = !!m.toolName && (m.toolName.includes('__') || m.toolName === OPEN_MENU_ITEM_TOOL_NAME);
+  return m.role === 'tool' && snapshotTool && m.content.length >= MIN_COMPACT_CHARS && !m.content.startsWith(STUB_PREFIX);
 }
 
 function stub(m: LlmMessage): string {

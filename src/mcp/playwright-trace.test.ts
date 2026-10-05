@@ -86,7 +86,7 @@ describe('orchestrator tracing', () => {
         return { content: 'ok', isError: false };
       },
     };
-    const orch = new AgentOrchestrator({ cfg, llm: { name: 'f', async complete() { return turns.shift()!; } }, mcp, kb: { retrieve: () => [], upsert() {}, async save() {} }, mcpServers: ['playwright', 'learn'] } as never);
+    const orch = new AgentOrchestrator({ cfg, llm: { name: 'f', async complete() { return turns.shift()!; } }, mcp, kb: { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} }, mcpServers: ['playwright', 'learn'] } as never);
     const result = await orch.runTestCase({ id: 'T', source: 'local', title: 't', steps: [{ index: 1, action: 'a' }] });
     return { result, called };
   }
