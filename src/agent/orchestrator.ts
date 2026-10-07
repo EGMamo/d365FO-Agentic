@@ -6,6 +6,8 @@ import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import { knownPathSummary, type KnowledgeBase } from '../knowledge/kb.js';
+import { mergeMenuItems, PageMap, pageKey, type ControlAction } from '../knowledge/page-map.js';
+import { isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot } from '../mcp/playwright-response.js';
 import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { D365ODataClient, hasAppRegistration, ODATA_TOOL, ODATA_TOOL_NAME } from '../d365fo/entra.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
@@ -108,6 +110,26 @@ const LOCAL_TOOLS: LlmTool[] = [
   },
 ];
 
+export const PAGE_NOTE_TOOL_NAME = 'd365_page_note';
+const PAGE_NOTE_TOOL: LlmTool = {
+  name: PAGE_NOTE_TOOL_NAME,
+  description:
+    'Save a short, reusable fact about the F&O form the browser is on now, e.g. "Vendor group is on the General FastTab; expand it first" or "Save shows a confirmation dialog". It is shown the next time any test opens this form. Generic facts only: never data values, names or secrets.',
+  inputSchema: { type: 'object', required: ['note'], properties: { note: { type: 'string' } } },
+};
+
+/** Actions after which F&O typically shows its busy overlay while the server processes the change. */
+const FNO_SETTLE_TOOLS = new Set(['browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_handle_dialog']);
+
+/** Browser tools whose resolved locator is worth learning, and the action it is learned as. */
+const LEARNABLE: Record<string, ControlAction> = {
+  browser_click: 'click',
+  browser_type: 'fill',
+  browser_fill_form: 'fill',
+  browser_select_option: 'select',
+  browser_hover: 'hover',
+};
+
 interface RunOptions {
   cfg: AppConfig;
   llm: LlmProvider;
@@ -156,6 +178,9 @@ export class AgentOrchestrator {
   private reportedHiddenTools = false;
   private odata?: D365ODataClient;
   private menuItems?: MenuItem[];
+  private pageMap?: PageMap;
+  /** MCP tool lists do not change during a run; listing them once saves a round trip per attempt. */
+  private toolCache = new Map<string, McpToolDescriptor[]>();
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -247,7 +272,11 @@ export class AgentOrchestrator {
     const mcpTools: McpToolDescriptor[] = [];
     for (const server of this.mcpServers) {
       try {
-        const tools = await this.mcp.listTools(server);
+        let tools = this.toolCache.get(server);
+        if (!tools) {
+          tools = await this.mcp.listTools(server);
+          this.toolCache.set(server, tools);
+        }
         mcpTools.push(...tools);
         const bt = tools.find((t) => t.server === 'playwright' && t.name === 'browser_type');
         if (bt) this.browserTypeSchema = bt.inputSchema;
@@ -261,7 +290,15 @@ export class AgentOrchestrator {
       this.log(`hiding ${hiddenTools.length} tool(s) not on the allowlist: ${hiddenTools.map((t) => `${t.server}__${t.name}`).join(', ')}`);
     }
     const canOpenPages = this.mcpServers.includes('playwright') && Boolean(this.cfg.D365_BASE_URL);
-    if (canOpenPages) this.menuItems ??= await loadMenuItems(this.cfg.KB_DIR ?? './knowledge');
+    if (this.mcpServers.includes('playwright') && this.cfg.AGENT_LEARN_PAGES !== false && !this.pageMap) {
+      try {
+        this.pageMap = await PageMap.load(this.cfg.KB_DIR ?? './knowledge');
+      } catch (e) {
+        console.warn(`[agent] page learning is off for this run: ${(e as Error).message}`);
+      }
+    }
+    // Reloaded per case, so forms learned by earlier cases of this run can be opened by caption.
+    if (canOpenPages) this.menuItems = mergeMenuItems(await loadMenuItems(this.cfg.KB_DIR ?? './knowledge'), this.pageMap?.menuItems() ?? []);
     const tools: LlmTool[] = [
       ...allowedTools.map((t) => ({
         name: `${t.server}__${t.name}`,
@@ -272,6 +309,7 @@ export class AgentOrchestrator {
       CREDENTIAL_TOOL,
       ...(this.odata ? [ODATA_TOOL] : []),
       ...(canOpenPages && this.menuItems ? [openMenuItemTool(this.menuItems)] : []),
+      ...(this.pageMap ? [PAGE_NOTE_TOOL] : []),
     ];
 
     const retrieved = this.kb.retrieve(
@@ -300,6 +338,7 @@ export class AgentOrchestrator {
     const timeouts: string[] = [];
     const data: Record<string, string> = {};
     const path: string[] = [];
+    const page = { key: undefined as string | undefined, hinted: new Set<string>() };
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
     let stopped = false;
@@ -363,6 +402,7 @@ export class AgentOrchestrator {
             path,
             guard,
             flags,
+            page,
           });
           if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
@@ -418,6 +458,8 @@ export class AgentOrchestrator {
       await this.saveKnownPath(tc, path);
     }
 
+    await this.savePages();
+
     if (traceBefore) {
       try {
         await this.mcp.callTool('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
@@ -461,7 +503,10 @@ export class AgentOrchestrator {
       path: string[];
       guard: AttemptGuard;
       flags: { nonRetryable: boolean };
+      /** The F&O form the browser is on, and the forms whose learned hints were already shown this attempt. */
+      page: { key?: string; hinted: Set<string> };
     },
+    opts: { noHint?: boolean } = {},
   ): Promise<DispatchResult> {
     const args: Record<string, unknown> =
       call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments : {};
@@ -561,6 +606,15 @@ export class AgentOrchestrator {
       }
     }
     if (call.name === OPEN_MENU_ITEM_TOOL_NAME) return this.openMenuItem(call, args, ctx);
+    if (call.name === PAGE_NOTE_TOOL_NAME) {
+      if (!this.pageMap) return fail('Page learning is off (AGENT_LEARN_PAGES=false). Nothing was saved.');
+      if (!ctx.page.key) return fail('No F&O form is open yet. Open the form first, then save the note.');
+      const note = typeof args.note === 'string' ? this.clean(args.note, 200) : '';
+      if (!note.trim()) return fail('Give the note text. Nothing was saved.');
+      this.pageMap.addNote(ctx.page.key, note);
+      await this.savePages();
+      return { content: JSON.stringify({ ok: true, savedFor: ctx.page.key }) };
+    }
     if (call.name === 'kb_search') {
       const q = typeof args.query === 'string' ? args.query : '';
       const requested = Number(args.k ?? 5);
@@ -633,12 +687,26 @@ export class AgentOrchestrator {
       if (this.cfg.AGENT_DRY_RUN && server === 'playwright' && isMutatingBrowserTool(toolName)) {
         return { content: JSON.stringify({ dryRun: true, note: `Skipped mutating browser tool ${toolName}` }) };
       }
-      const res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
+      const fno = server === 'playwright';
+      const autoWait = fno && this.cfg.AGENT_FNO_AUTO_WAIT !== false;
+      let res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
+      let text = responseText(res.content);
+      // A locator target is resolved at once, without waiting, so it misses controls of a form that is still
+      // loading. Nothing was done in that case, so waiting for F&O and trying once more is safe.
+      const locatorTarget = fno && typeof args.target === 'string' && !isSnapshotRef(args.target) ? args.target : undefined;
+      if (res.isError && locatorTarget && isMissingTarget(text)) {
+        if (autoWait) {
+          await this.waitForFno();
+          res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
+          text = responseText(res.content);
+        }
+        if (res.isError && ctx.page.key) this.pageMap?.failControl(ctx.page.key, locatorTarget);
+      }
+      if (autoWait && !res.isError && FNO_SETTLE_TOOLS.has(toolName)) await this.waitForFno();
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
-      const text = typeof res.content === 'string' ? res.content : JSON.stringify(res.content ?? { ok: !res.isError });
-      const content = redactSecrets(this.cfg, text);
-      if (server === 'playwright') {
+      let content = redactSecrets(this.cfg, fno && this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(text) : text);
+      if (fno) {
         const problem = detectAuthProblem(text);
         const authStop = problem && ctx.guard.authStop(problem);
         if (authStop) return { content, errored: true, stop: authStop };
@@ -653,9 +721,12 @@ export class AgentOrchestrator {
           };
         }
       }
-      if (server === 'playwright' && !res.isError) {
+      if (fno && !res.isError) {
         const line = pathLine(toolName, args);
         if (line) ctx.path.push(this.clean(line, 200));
+        this.learnFromResult(toolName, args, text, ctx);
+        const hint = opts.noHint ? undefined : this.takeHint(ctx);
+        if (hint) content += `\n\n${redactSecrets(this.cfg, hint)}`;
       }
       return { content, ...(res.isError ? { errored: true } : {}) };
     } catch (e) {
@@ -712,19 +783,74 @@ export class AgentOrchestrator {
 
     const company = ctx.tc.legalEntity ?? this.cfg.D365_COMPANY;
     const url = menuItemUrl(this.cfg.D365_BASE_URL, company, mi!);
-    const nav = await this.dispatch({ id: call.id, name: 'playwright__browser_navigate', arguments: { url } }, ctx);
+    const nav = await this.dispatch({ id: call.id, name: 'playwright__browser_navigate', arguments: { url } }, ctx, { noHint: true });
     if (nav.errored || nav.policyBlocked || nav.stop) return nav;
     try {
       await this.mcp.callTool('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000);
       const snap = await this.mcp.callTool('playwright', 'browser_snapshot', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000);
       if (!snap.isError) {
-        const text = typeof snap.content === 'string' ? snap.content : JSON.stringify(snap.content);
-        return { content: redactSecrets(this.cfg, `Opened ${label} (${mi}) in ${company}.\n${text}`) };
+        const raw = responseText(snap.content);
+        this.learnFromResult('browser_snapshot', {}, raw, ctx);
+        const text = this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(raw) : raw;
+        const hint = this.takeHint(ctx);
+        return { content: redactSecrets(this.cfg, `Opened ${label} (${mi}) in ${company}.\n${text}${hint ? `\n\n${hint}` : ''}`) };
       }
     } catch {
       // The navigation result below still carries a snapshot; the model can wait and snapshot itself.
     }
-    return { ...nav, content: `Opened ${label} (${mi}) in ${company}; the page may still be loading.\n${nav.content}` };
+    const hint = this.takeHint(ctx);
+    return { ...nav, content: `Opened ${label} (${mi}) in ${company}; the page may still be loading.\n${nav.content}${hint ? `\n\n${hint}` : ''}` };
+  }
+
+  /**
+   * Live learning from a successful browser call: notes which form the browser is on (by the URL's
+   * menu item, else the page title) and stores the stable locator each control resolved to under the
+   * form it was used on, so the next visit can act on it without a snapshot.
+   */
+  private learnFromResult(toolName: string, args: Record<string, unknown>, text: string, ctx: Parameters<AgentOrchestrator['dispatch']>[1]): void {
+    if (!this.pageMap) return;
+    const before = ctx.page.key;
+    const info = pageInfo(text);
+    const key = pageKey(info);
+    if (info && key && key !== before) {
+      this.pageMap.visit(info);
+      ctx.page.key = key;
+    }
+    const action = LEARNABLE[toolName];
+    const formKey = before ?? key;
+    if (!action || !formKey || this.cfg.AGENT_DRY_RUN) return;
+    const locators = ranLocators(text);
+    if (toolName === 'browser_fill_form') {
+      const fields = Array.isArray(args.fields) ? (args.fields as Array<Record<string, unknown>>) : [];
+      locators.forEach((loc, i) => this.pageMap!.learnControl(formKey, String(fields[i]?.name ?? ''), loc, action));
+    } else if (locators[0]) {
+      this.pageMap.learnControl(formKey, typeof args.element === 'string' ? args.element : '', locators[0], action);
+    }
+  }
+
+  /** The learned hint for the current form, once per form per attempt. */
+  private takeHint(ctx: Parameters<AgentOrchestrator['dispatch']>[1]): string | undefined {
+    const key = ctx.page.key;
+    if (!key || !this.pageMap || ctx.page.hinted.has(key)) return undefined;
+    ctx.page.hinted.add(key);
+    return this.pageMap.hint(key);
+  }
+
+  /** Waits for F&O's blocking overlay to clear. Returns at once when it is not shown. */
+  private async waitForFno(): Promise<void> {
+    try {
+      await this.mcp.callTool('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000);
+    } catch {
+      // The model sees the page state on its next snapshot.
+    }
+  }
+
+  private async savePages(): Promise<void> {
+    try {
+      await this.pageMap?.save();
+    } catch (e) {
+      console.warn(`[agent] could not save the learned pages: ${(e as Error).message}`);
+    }
   }
 
   /** Saves the UI actions of a passing attempt as the test case's known-good path, replacing the previous one. */
