@@ -36,3 +36,6 @@ knowledge/
 
 # Local settings app (only if D365FO_AGENT_HOME points inside the project)
 .d365fo-agent/
+
+# Open WebUI settings written by `d365fo-agent studio` (holds the tool-server key)
+openwebui/.env

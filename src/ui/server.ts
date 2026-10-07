@@ -13,7 +13,8 @@ import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { REPORT_FILES, RunHistory, type ReportFile } from './history.js';
-import { openApiSpec, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { PageMap } from '../knowledge/page-map.js';
 import type { TestResult } from '../testing/types.js';
 
 /**
@@ -313,13 +314,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return true;
   }
 
-  /** The report folder the CLI writes to, honouring REPORT_DIR from the active profile. */
-  async function reportDir(): Promise<string> {
-    let dir = 'reports';
+  /** A folder setting of the active profile (REPORT_DIR, KB_DIR), resolved inside the project. */
+  async function profileDir(key: string, fallback: string): Promise<string> {
+    let dir = fallback;
     const active = await store.getActive();
     if (active) {
       try {
-        const entry = (await store.read(active, true)).find((e) => e.key === 'REPORT_DIR');
+        const entry = (await store.read(active, true)).find((e) => e.key === key);
         if (entry?.value) dir = entry.value;
       } catch {
         /* fall back to the default */
@@ -327,6 +328,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
     return resolve(repoRoot, dir);
   }
+  /** The report folder the CLI writes to, honouring REPORT_DIR from the active profile. */
+  const reportDir = (): Promise<string> => profileDir('REPORT_DIR', 'reports');
   const history = new RunHistory(reportDir);
 
   /** Reads a report written by the CLI: the latest run's, or a run from the history. */
@@ -342,7 +345,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
   };
-  const runView = (tail: number) => (run ? { ...publicRun(run), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` } : null);
+  const runView = (tail: number) =>
+    run ? { ...publicRun(run), ...(run.kind === 'run' ? { progress: runProgress(run.lines) } : {}), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` } : null;
 
   /** The Open WebUI tool server: the same actions as the app, for a chat model. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
@@ -388,6 +392,20 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       const raw = await reportFile('results.json', runId);
       if (!raw) return tsend(res, 404, { error: runId ? 'That run has no results.' : 'No results yet. Start a run first.' });
       return tsend(res, 200, { run: runId ?? 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) });
+    }
+    if (method === 'POST' && path === '/setup/check') {
+      const active = await store.getActive();
+      if (!active) return tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
+      return tsend(res, 200, { profile: active, ...(await runDoctor(store, active, cliPath)) });
+    }
+    if (method === 'GET' && path === '/knowledge/pages') {
+      const search = (url.searchParams.get('search') ?? '').toLowerCase();
+      const pages = (await PageMap.load(await profileDir('KB_DIR', 'knowledge'))).pages()
+        .filter((p) => !search || `${p.caption ?? ''} ${p.mi ?? ''}`.toLowerCase().includes(search))
+        .sort((a, b) => b.visits - a.visits)
+        .slice(0, 100)
+        .map((p) => ({ caption: p.caption, menuItem: p.mi, visits: p.visits, controls: p.controls.length, notes: p.notes, updatedAt: p.updatedAt }));
+      return tsend(res, 200, { pages });
     }
     if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
     const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
