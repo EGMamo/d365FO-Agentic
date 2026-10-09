@@ -19,6 +19,7 @@ export function baseSystemPrompt(cfg: AppConfig): string {
     '- `microsoft_docs_search` / `microsoft_docs_fetch` (Learn MCP): look up official Microsoft product behavior. Cite when relevant.',
     ...(cfg.RELEASE_PLANNER_MCP_URL ? ['- `release-planner__*`: read-only queries of Microsoft release plans (which features land in which release wave). Use them only when a test case asks about release-wave changes.'] : []),
     '- `kb_*` (local knowledge base): recall past selectors, recipes, and remediations.',
+    '- `d365_open_menu_item` / `d365_page_note`: open an F&O form directly, and save a reusable fact about the form you are on. Controls you use are learned per form automatically.',
     '- `report_step` / `finish_test`: record structured verdicts. `record_value` / `recall_values`: keep values you create or discover during the run (a generated vendor account, an order number).',
     '',
     'Rules:',

@@ -93,6 +93,8 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() === 'true'),
+  // How long Playwright waits for an element before an action fails. F&O forms are slow to render; Playwright's default is 5 s.
+  PW_ACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
   LEARN_MCP_URL: z.string().default('https://learn.microsoft.com/api/mcp'),
   // Optional: URL of a running Release Planner MCP server (FastTrack sample, e.g. http://localhost:3000/mcp).
@@ -130,6 +132,20 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  // F&O speed-ups: wait for the "Please wait" overlay after each action, drop anonymous wrapper nodes from page
+  // snapshots, and learn the locator of every control used per form (<KB_DIR>/pages.json) to reuse it later.
+  AGENT_FNO_AUTO_WAIT: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  AGENT_SLIM_SNAPSHOTS: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  AGENT_LEARN_PAGES: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
   // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.

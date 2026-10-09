@@ -45,6 +45,8 @@ export const FIELD_CATALOG: FieldSpec[] = [
 
   { group: 'Browser', key: 'PW_HEADLESS', label: 'Headless', options: bool, help: 'Set false to watch the browser while it runs.' },
   { group: 'Browser', key: 'PW_BROWSER', label: 'Browser', options: ['chromium', 'firefox', 'webkit'] },
+  { group: 'Browser', key: 'AGENT_LEARN_PAGES', label: 'Learn controls per form', options: bool, help: 'Remembers the controls it used on each F&O form and reuses them on later runs.' },
+  { group: 'Browser', key: 'AGENT_FNO_AUTO_WAIT', label: 'Wait for F&O after each action', options: bool },
 
   { group: 'Safety limits', key: 'AGENT_MAX_STEPS', label: 'Max model turns per test', placeholder: '40' },
   { group: 'Safety limits', key: 'AGENT_TEST_TIMEOUT_MS', label: 'Max time per test (ms)', placeholder: '900000', help: '0 turns the limit off.' },

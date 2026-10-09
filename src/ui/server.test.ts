@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -302,7 +302,7 @@ describe('Open WebUI tool server', () => {
     const viaDocker = await raw('/tools/profiles', { host: `host.docker.internal:${tui.port}`, authorization: `Bearer ${tui.toolToken}` });
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
-    assert.deepEqual(ops.sort(), ['get_results', 'get_run', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile']);
+    assert.deepEqual(ops.sort(), ['check_setup', 'get_results', 'get_run', 'list_learned_pages', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile']);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
     assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
@@ -330,6 +330,18 @@ describe('Open WebUI tool server', () => {
     const text = await r.text();
     assert.ok(!text.includes('hunter2'));
     assert.equal(JSON.parse(text).active, 'UAT');
+  });
+
+  it('lists the F&O forms learned during runs, and checks the profile in use', async () => {
+    await mkdir(join(dir, 'knowledge'), { recursive: true });
+    const learned = { version: 1, pages: [{ key: 'mi:vendtablelistpage', mi: 'VendTableListPage', caption: 'All vendors', visits: 3, controls: [{ name: 'New', target: "getByTestId('SystemDefinedNewButton')", action: 'click', uses: 2, failures: 0, lastUsed: '' }], notes: ['n'], updatedAt: '' }] };
+    await writeFile(join(dir, 'knowledge', 'pages.json'), JSON.stringify(learned));
+    const pages = ((await (await tcall('/knowledge/pages?search=vend')).json()) as any).pages;
+    assert.deepEqual(pages, [{ caption: 'All vendors', menuItem: 'VendTableListPage', visits: 3, controls: 1, notes: ['n'], updatedAt: '' }]);
+    assert.deepEqual(((await (await tcall('/knowledge/pages?search=sales')).json()) as any).pages, []);
+    const check = (await (await tcall('/setup/check', { method: 'POST' })).json()) as any;
+    assert.equal(check.profile, 'UAT');
+    assert.equal(typeof check.output, 'string');
   });
 
   it('saves, lists and reads test cases', async () => {
