@@ -49,9 +49,33 @@ export function selectProfile(env: NodeJS.ProcessEnv = process.env, argv: string
 
 export const profileSelection = selectProfile();
 
+const presetKeys = new Set(Object.keys(process.env));
+let loaded: Record<string, string> | undefined;
 if (profileSelection.name) {
-  dotenv.config({ path: join(profilesDir(agentHome()), `${profileSelection.name}.env`) });
+  loaded = dotenv.config({ path: join(profilesDir(agentHome()), `${profileSelection.name}.env`) }).parsed;
 } else {
   if (profileSelection.missing) console.warn(`[config] profile "${profileSelection.missing}" was not found; using .env`);
-  dotenv.config();
+  loaded = dotenv.config().parsed;
+}
+
+/** Variables this process took from its settings file (a profile or `.env`), as opposed to its real environment. */
+export const loadedKeys: readonly string[] = Object.keys(loaded ?? {}).filter((k) => !presetKeys.has(k));
+
+/**
+ * Settings in the file that did not take effect because the real environment already had a different value.
+ * `doctor` lists them, since a profile that is quietly overridden is hard to spot.
+ */
+export const overriddenKeys: readonly string[] = Object.entries(loaded ?? {})
+  .filter(([k, v]) => presetKeys.has(k) && process.env[k] !== v)
+  .map(([k]) => k);
+
+/**
+ * The environment to give a child command that must read its own settings (another profile, or `.env` afresh).
+ * Without this, what this process loaded would look like real environment variables to the child and, because
+ * those always win, silently override the profile the child was asked to use.
+ */
+export function environmentForChild(env: NodeJS.ProcessEnv = process.env, fromFile: readonly string[] = loadedKeys): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const k of fromFile) delete out[k];
+  return out;
 }

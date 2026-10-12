@@ -23,6 +23,7 @@ Each item has a scope, the files likely touched, an acceptance check and the sup
 | 11 | Release Planner MCP (optional) (done) |
 | 12 | API-side test data setup (evaluate) (design note done) |
 | 13 | FastTrack agents as end-to-end test subjects (done) |
+| 14 | Learning loop, triage and run control (done) |
 
 ## 1. Stronger saved-session check in `doctor`
 
@@ -140,5 +141,20 @@ Each item has a scope, the files likely touched, an acceptance check and the sup
 - **Files likely touched:** `examples/testcases/`, `docs/d365fo.md`
 - **Acceptance check:** One example case per agent, marked sandbox-only, with expected results stated.
 - **Source:** [AI ERP Agents](https://github.com/microsoft/Dynamics-365-FastTrack-Implementation-Assets/tree/master/Agents/AI%20ERP%20Agents).
+
+## 14. Learning loop, triage and run control (done)
+
+**Done.**
+- **Retrieval:** BM25 knowledge-base retrieval with F&O synonyms.
+- **Learning:** outcome feedback on retrieved entries, stale known-good paths, `learn --stats/--search/--prune`, and reflexion prompts on retries.
+- **Triage:** failure categories in every report.
+- **Run control:** `run --case/--tag/--module/--max-priority/--sort-by-priority/--fail-on` and graceful Ctrl+C.
+- **Drafting:** `generate` for test-case drafts.
+
+All of it is covered by unit tests, and CI runs lint and tests on every pull request and every push to `main`.
+
+- **Scope:** Make the agent learn from outcomes rather than only from what the model proposes, explain why cases did not pass, and give CI fine-grained run control.
+- **Files touched:** `src/knowledge/kb.ts`, `src/agent/orchestrator.ts`, `src/agent/prompts.ts`, `src/testing/triage.ts`, `src/testing/generate.ts`, `src/core/runner.ts`, `src/reporting/reporters.ts`, `src/cli/index.ts`, `.github/workflows/ci.yml`
+- **Acceptance check:** `npm run lint && npm test` pass; see [Self-learning](self-learning.md).
 
 Notes: do not copy the FastTrack sample's habit of committing session files or `.env`; keep `.d365fo-session/` gitignored. The four JMeter blog posts linked from its README (cookie handling tips) were not readable when this plan was written; read them before starting items 1 to 4.

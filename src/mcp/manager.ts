@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Declarative description of an MCP server. Servers are launched lazily by the
@@ -29,6 +30,16 @@ export interface McpToolDescriptor {
 }
 
 /**
+ * How a stdio server is started. Outside Windows it goes through `shield.js`, which keeps the terminal's Ctrl+C
+ * away from the server (and its browser) so an interrupted run can still be wound down. `MCP_SHIELD=false`
+ * starts servers directly.
+ */
+export function stdioLaunch(command: string, args: string[], platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): { command: string; args: string[] } {
+  if (platform === 'win32' || env.MCP_SHIELD === 'false') return { command, args };
+  return { command: process.execPath, args: [fileURLToPath(new URL('./shield.js', import.meta.url)), command, ...args] };
+}
+
+/**
  * Manages a pool of MCP clients. Handles lazy connection, tool discovery, and
  * shutdown of all servers at process exit.
  */
@@ -49,8 +60,7 @@ export class McpManager {
     const client = new Client({ name: 'd365fo-agentic', version: '0.1.0' });
     if (spec.transport === 'stdio') {
       const transport = new StdioClientTransport({
-        command: spec.command,
-        args: spec.args ?? [],
+        ...stdioLaunch(spec.command, spec.args ?? []),
         env: { ...process.env, ...(spec.env ?? {}) } as Record<string, string>,
       });
       await client.connect(transport);

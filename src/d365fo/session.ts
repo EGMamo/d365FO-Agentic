@@ -120,6 +120,16 @@ export interface ProbeResult {
   detail: string;
 }
 
+/**
+ * Why a run must not start after a `--probe-session` preflight, or undefined when it may: a refused session and
+ * an unreachable host both stop it; `live` and `skipped` (nothing to probe) do not.
+ */
+export function probeBlocksRun(probe: ProbeResult): string | undefined {
+  if (probe.state === 'expired') return 'Saved D365 session was refused by the server. Renew it with `d365fo-agent session-login` before running tests.';
+  if (probe.state === 'unreachable') return 'Could not verify the saved D365 session (`--probe-session`) because the environment was unreachable. Resolve connectivity and retry.';
+  return undefined;
+}
+
 export type ProbeFetch = (url: string, init: { headers: Record<string, string>; redirect: 'manual'; signal: AbortSignal }) => Promise<{ status: number; headers: { get(name: string): string | null } }>;
 
 /**

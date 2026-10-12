@@ -10,6 +10,26 @@ LLM_MODEL=claude-opus-4-5-20251101
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+### Custom Claude API URL
+
+To send requests to a Claude-compatible endpoint other than `api.anthropic.com` (a company gateway, a proxy, or a model router), set its address:
+
+```env
+LLM_PROVIDER=anthropic
+ANTHROPIC_BASE_URL=https://llm-gateway.example.com/anthropic
+ANTHROPIC_API_KEY=...          # sent as x-api-key
+# ANTHROPIC_AUTH_TOKEN=...     # or: sent as Authorization: Bearer, for gateways that expect a token
+LLM_MODEL=claude-opus-4-5-20251101   # the model name your endpoint expects
+```
+
+- Give the base address. The agent calls `<base>/v1/messages`, so a pasted `/v1` or `/v1/messages` ending is removed.
+- Set `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or both, depending on what the endpoint checks.
+- The endpoint must speak the Anthropic Messages API with tool use. For an OpenAI-style endpoint use `LLM_PROVIDER=openai-compatible` instead.
+- `doctor` (or **Check setup** in the settings app) asks the endpoint for its model list and reports whether it is reachable, whether the credentials were accepted, and whether `LLM_MODEL` is in the list. A gateway without a model list still passes.
+- Everything the agent sends to the model, including page content from F&O, goes to this address. Use `https` and an endpoint you trust.
+
+In the settings app the field is **Claude API URL** under **AI model**.
+
 Uses the official `@anthropic-ai/sdk` and its native tool-use format. Prompt caching is on by default (`LLM_PROMPT_CACHE=false` disables it): the system prompt with the tool schemas, and the conversation so far, are cached between turns. With `AGENT_VERBOSE=true` each turn logs `cached=<tokens>` when the cache hits; prompts below the model's minimum cacheable size are simply not cached.
 
 ## OpenAI

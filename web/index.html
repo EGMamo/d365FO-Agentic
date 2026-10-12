@@ -6,161 +6,247 @@
 <title>D365FO Agent</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <style>
-  :root { --bg:#f6f7f9; --panel:#fff; --text:#1b1f27; --muted:#667085; --line:#d9dde4; --accent:#2563eb; --accent-text:#fff; --danger:#b42318; --ok:#067647; --warn:#9a6700; --warn-bg:#fff4e5; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#12151b; --panel:#1b2029; --text:#e7eaf0; --muted:#98a2b3; --line:#2f3644; --accent:#5b8def; --accent-text:#0b1220; --danger:#f97066; --ok:#47cd89; --warn:#d29922; --warn-bg:#3a2a12; } }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; gap:.75rem; padding:.8rem 1.25rem; background:var(--panel); border-bottom:1px solid var(--line); }
-  header img { width:30px; height:30px; }
-  header h1 { font-size:1.05rem; margin:0; }
-  header .sub { color:var(--muted); font-size:.85rem; margin-left:auto; }
-  nav.tabs { display:flex; gap:2px; margin-left:1rem; }
-  nav.tabs button { background:none; border:0; border-bottom:2px solid transparent; padding:.5rem .8rem; color:var(--muted); font:inherit; cursor:pointer; }
-  nav.tabs button.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
-  main { padding:1.25rem; max-width:1200px; margin:0 auto; }
-  .view { display:none; }
-  .view.active { display:block; }
-  .layout { display:grid; grid-template-columns:280px 1fr; gap:1.25rem; }
-  @media (max-width:760px) { .layout { grid-template-columns:1fr; } }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:1rem; margin-bottom:1rem; }
-  h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 .6rem; }
+  :root { --bg:#f5f6f8; --panel:#fff; --sunk:#f0f2f5; --text:#1b1f27; --muted:#5d6878; --line:#d9dde4; --accent:#1f5fd6; --accent-soft:#e8f0fe; --accent-text:#fff; --danger:#b42318; --danger-soft:#fdecea; --ok:#067647; --ok-soft:#e6f6ee; --warn:#8a5a00; --warn-soft:#fff4e0; --radius:12px; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11141a; --panel:#1a1f28; --sunk:#141820; --text:#e7eaf0; --muted:#9aa5b5; --line:#2f3644; --accent:#6b9cf5; --accent-soft:#1c2a45; --accent-text:#0b1220; --danger:#f97066; --danger-soft:#3a1b1a; --ok:#47cd89; --ok-soft:#13301f; --warn:#e0a83a; --warn-soft:#35280f; } }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:.75rem; padding:.55rem 1.25rem; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header img { width:28px; height:28px; }
+  header h1 { font-size:1.02rem; margin:0; white-space:nowrap; }
+  nav.tabs { display:flex; gap:2px; margin-left:.75rem; flex-wrap:wrap; }
+  nav.tabs button { background:none; border:0; border-bottom:2px solid transparent; padding:.5rem .8rem; color:var(--muted); font:inherit; cursor:pointer; border-radius:6px 6px 0 0; }
+  nav.tabs button:hover { color:var(--text); background:var(--sunk); }
+  nav.tabs button[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
+  #using { margin-left:auto; display:flex; align-items:center; gap:.4rem; font-size:.85rem; padding:.3rem .7rem; border-radius:99px; border:1px solid var(--line); background:var(--sunk); color:var(--text); cursor:pointer; max-width:46ch; }
+  #using .dot { width:.55rem; height:.55rem; border-radius:50%; background:var(--ok); flex:none; }
+  #using.none .dot { background:var(--warn); }
+  #using span.t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  main { padding:1.25rem; max-width:1180px; margin:0 auto; }
+  .view { display:none; } .view.active { display:block; }
+  .layout { display:grid; grid-template-columns:270px minmax(0,1fr); gap:1.25rem; align-items:start; }
+  @media (max-width:820px) { .layout { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:1rem 1.1rem; margin-bottom:1rem; }
+  h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 .6rem; font-weight:600; }
   h3 { font-size:1.15rem; margin:0; }
-  .profile { display:flex; align-items:center; gap:.5rem; width:100%; text-align:left; padding:.55rem .7rem; border:1px solid transparent; border-radius:8px; background:none; color:inherit; font:inherit; cursor:pointer; }
-  .profile:hover { background:var(--bg); }
-  .profile[aria-current="true"] { border-color:var(--accent); background:var(--bg); }
-  .badge { margin-left:auto; font-size:.72rem; padding:.1rem .45rem; border-radius:99px; background:var(--accent); color:var(--accent-text); }
-  button.btn { font:inherit; padding:.5rem .9rem; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; }
-  button.btn:hover { border-color:var(--accent); }
+  p { margin:.3rem 0 .8rem; }
+  .muted { color:var(--muted); } .small { font-size:.85rem; }
+  code { font:12.5px ui-monospace,Menlo,Consolas,monospace; background:var(--sunk); padding:.05rem .3rem; border-radius:4px; }
+  a { color:var(--accent); }
+
+  button.btn, a.btn { font:inherit; padding:.45rem .85rem; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:.35rem; white-space:nowrap; }
+  button.btn:hover, a.btn:hover { border-color:var(--accent); }
   button.primary { background:var(--accent); color:var(--accent-text); border-color:var(--accent); font-weight:600; }
-  button.danger { color:var(--danger); }
+  button.danger { color:var(--danger); } button.danger:hover { border-color:var(--danger); }
+  button.link { background:none; border:0; padding:0; color:var(--accent); font:inherit; cursor:pointer; text-decoration:underline; }
   button:disabled { opacity:.5; cursor:default; }
-  .actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem; align-items:center; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  fieldset { border:0; padding:0; margin:0 0 1.25rem; }
-  legend { font-weight:600; margin-bottom:.5rem; padding:0; }
-  .field { display:grid; grid-template-columns:220px 1fr; gap:.25rem .75rem; align-items:center; margin-bottom:.55rem; }
-  @media (max-width:760px) { .field { grid-template-columns:1fr; } }
-  .field label { font-size:.9rem; }
-  .field .help { grid-column:2; color:var(--muted); font-size:.8rem; margin-top:-.15rem; }
-  @media (max-width:760px) { .field .help { grid-column:1; } }
-  input[type=text], input[type=password], input[type=number], select { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
-  input:focus, select:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+  .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  .spacer { flex:1; }
+
+  .item { display:flex; align-items:center; gap:.5rem; width:100%; text-align:left; padding:.5rem .65rem; border:1px solid transparent; border-radius:8px; background:none; color:inherit; font:inherit; cursor:pointer; }
+  .item:hover { background:var(--sunk); }
+  .item[aria-current="true"] { border-color:var(--accent); background:var(--accent-soft); }
+  .item small { display:block; color:var(--muted); }
+  .pill { font-size:.72rem; padding:.1rem .5rem; border-radius:99px; background:var(--accent); color:var(--accent-text); white-space:nowrap; }
+  .pill.right { margin-left:auto; }
+
+  fieldset.group { border:1px solid var(--line); border-radius:var(--radius); padding:.9rem 1rem .5rem; margin:0 0 1rem; min-width:0; }
+  fieldset.group > legend { font-weight:600; padding:0 .4rem; font-size:1rem; }
+  .gdesc { color:var(--muted); font-size:.87rem; margin:-.1rem 0 .8rem; }
+  .field { display:grid; grid-template-columns:210px minmax(0,1fr); gap:.2rem .9rem; align-items:start; margin-bottom:.7rem; }
+  @media (max-width:820px) { .field { grid-template-columns:1fr; } }
+  .field > label { font-size:.92rem; padding-top:.42rem; }
+  .field .req { color:var(--danger); margin-left:.15rem; }
+  .field .help, .field .ferr { grid-column:2; font-size:.82rem; }
+  .field .help { color:var(--muted); }
+  .field .ferr { color:var(--danger); }
+  @media (max-width:820px) { .field .help, .field .ferr { grid-column:1; } }
+  input[type=text], input[type=password], input[type=number], select, textarea { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); }
+  input[aria-invalid="true"] { border-color:var(--danger); }
+  input::placeholder, textarea::placeholder { color:var(--muted); opacity:.75; }
+  textarea { resize:vertical; min-height:2.4rem; }
+  .withbtn { display:flex; gap:.4rem; } .withbtn input { flex:1; min-width:0; }
+  details.more { margin:.2rem 0 .6rem; }
+  details.more > summary { cursor:pointer; color:var(--accent); font-size:.9rem; padding:.25rem 0; width:max-content; }
+  details.more[open] > summary { margin-bottom:.6rem; }
   .custom { display:grid; grid-template-columns:1fr 1.5fr auto; gap:.5rem; margin-bottom:.5rem; }
-  .empty { color:var(--muted); padding:2rem 1rem; text-align:center; }
-  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:.75rem; overflow:auto; max-height:480px; white-space:pre-wrap; word-break:break-word; font:12px/1.4 ui-monospace, Menlo, monospace; margin:0; }
-  .note { background:var(--warn-bg); border-radius:8px; padding:.6rem .8rem; font-size:.85rem; margin-bottom:1rem; }
+
+  .checklist { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:.6rem; margin:0 0 1rem; padding:0; list-style:none; }
+  .checklist li { display:flex; gap:.6rem; align-items:flex-start; padding:.6rem .75rem; border-radius:10px; border:1px solid var(--line); background:var(--panel); }
+  .checklist li.ok { background:var(--ok-soft); border-color:transparent; }
+  .checklist li.todo { background:var(--warn-soft); border-color:transparent; }
+  .checklist .ico { font-weight:700; width:1.3rem; height:1.3rem; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex:none; font-size:.8rem; margin-top:.1rem; }
+  .checklist li.ok .ico { background:var(--ok); color:var(--panel); }
+  .checklist li.todo .ico { background:var(--warn); color:var(--panel); }
+  .checklist li > div { min-width:0; overflow-wrap:anywhere; }
+  .checklist b { display:block; font-size:.92rem; } .checklist span.d { font-size:.82rem; color:var(--muted); }
+
+  .savebar { position:sticky; bottom:0; display:flex; align-items:center; gap:.6rem; padding:.7rem 1rem; margin:0 -1.1rem -1rem; background:var(--panel); border-top:1px solid var(--line); border-radius:0 0 var(--radius) var(--radius); flex-wrap:wrap; }
+  .savebar .state { font-size:.88rem; color:var(--muted); }
+  .savebar .state.dirty { color:var(--warn); font-weight:600; }
+
+  .banner { border-radius:10px; padding:.65rem .85rem; font-size:.9rem; margin-bottom:1rem; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+  .banner.info { background:var(--accent-soft); } .banner.warn { background:var(--warn-soft); } .banner.bad { background:var(--danger-soft); } .banner.good { background:var(--ok-soft); }
+  .empty { color:var(--muted); padding:1.5rem 1rem; text-align:center; }
+  .welcome { text-align:center; padding:2rem 1rem; }
+  .welcome ol { text-align:left; max-width:34rem; margin:1rem auto; padding-left:1.3rem; } .welcome li { margin-bottom:.4rem; }
+
+  pre { background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:.75rem; overflow:auto; max-height:460px; white-space:pre-wrap; word-break:break-word; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; margin:0; }
+  ul.checks { list-style:none; padding:0; margin:.4rem 0 .8rem; }
+  ul.checks li { display:flex; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--line); font-size:.92rem; }
+  ul.checks li:last-child { border-bottom:0; }
+  ul.checks .ico { flex:none; width:1.25rem; text-align:center; font-weight:700; }
+  .s-ok .ico { color:var(--ok); } .s-warn .ico { color:var(--warn); } .s-bad .ico { color:var(--danger); } .s-info .ico { color:var(--muted); }
+  ul.checks .v { color:var(--muted); word-break:break-word; }
+
+  .seg { display:inline-flex; justify-self:start; flex-wrap:wrap; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg label { padding:.4rem .9rem; cursor:pointer; font-size:.92rem; }
+  .seg input { position:absolute; opacity:0; pointer-events:none; }
+  .seg label:has(input:checked) { background:var(--accent); color:var(--accent-text); font-weight:600; }
+  .seg label:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:2px; }
+  label.check { display:inline-flex; align-items:center; gap:.4rem; font-size:.92rem; cursor:pointer; }
+  #runStatus { font-size:.9rem; padding:.2rem .7rem; border-radius:99px; }
+  #runStatus.running { background:var(--accent-soft); color:var(--accent); }
+  #runStatus.passed { background:var(--ok-soft); color:var(--ok); }
+  #runStatus.failed, #runStatus.stopped { background:var(--danger-soft); color:var(--danger); }
+  #progress { font-size:.9rem; color:var(--muted); margin-top:.6rem; min-height:1.3em; }
+  .spin { display:inline-block; width:.8rem; height:.8rem; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:.6rem; margin-bottom:1rem; }
+  .tile { border:1px solid var(--line); border-radius:10px; padding:.6rem .8rem; background:var(--panel); }
+  .tile b { display:block; font-size:1.5rem; line-height:1.2; } .tile span { font-size:.82rem; color:var(--muted); }
+  .tile.passed b { color:var(--ok); } .tile.failed b, .tile.blocked b { color:var(--danger); }
+  .tablewrap { overflow-x:auto; }
   table { width:100%; border-collapse:collapse; font-size:14px; }
-  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; }
+  th, td { text-align:left; padding:.5rem .55rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; white-space:nowrap; }
+  .badge { display:inline-block; font-size:.75rem; font-weight:600; padding:.1rem .55rem; border-radius:99px; text-transform:uppercase; letter-spacing:.03em; }
+  .badge.passed { background:var(--ok-soft); color:var(--ok); } .badge.failed, .badge.blocked { background:var(--danger-soft); color:var(--danger); } .badge.skipped { background:var(--sunk); color:var(--muted); }
   .passed { color:var(--ok); } .failed, .blocked { color:var(--danger); } .skipped { color:var(--muted); }
-  #runStatus { font-size:.9rem; }
-  #runStatus.running { color:var(--accent); }
-  #runStatus.passed { color:var(--ok); }
-  #runStatus.failed, #runStatus.stopped { color:var(--danger); }
-  #toast { position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:.6rem 1rem; border-radius:8px; opacity:0; pointer-events:none; transition:opacity .2s; max-width:90vw; }
-  #toast.show { opacity:1; }
-  dialog { border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--text); padding:1.25rem; width:min(420px,92vw); }
-  dialog::backdrop { background:rgba(0,0,0,.45); }
-  dialog label { display:block; margin:.6rem 0 .25rem; font-size:.9rem; }
-  dialog .row { display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem; }
-  textarea { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); resize:vertical; min-height:2.4rem; }
+  .cat { display:inline-block; font-size:.75rem; padding:.05rem .45rem; border-radius:6px; border:1px solid var(--line); margin-bottom:.2rem; }
+  .hint { font-size:.85rem; color:var(--muted); }
+  td details summary { cursor:pointer; color:var(--accent); font-size:.85rem; }
+  .steplist { margin:.4rem 0 0; padding:0; list-style:none; font-size:.87rem; } .steplist li { padding:.15rem 0; }
+  .totals span { margin-right:.6rem; white-space:nowrap; }
+
   .steps .step { display:grid; grid-template-columns:2rem 1fr 1fr auto; gap:.5rem; align-items:start; margin-bottom:.5rem; }
-  @media (max-width:760px) { .steps .step { grid-template-columns:2rem 1fr; } }
+  @media (max-width:820px) { .steps .step { grid-template-columns:2rem 1fr; } }
   .steps .num { color:var(--muted); padding-top:.5rem; text-align:right; }
-  .case { display:block; width:100%; text-align:left; font:inherit; background:none; border:1px solid transparent; border-radius:8px; padding:.45rem .6rem; color:var(--text); cursor:pointer; }
-  .case:hover { background:var(--bg); }
-  .case[aria-current="true"] { border-color:var(--accent); background:var(--bg); }
-  .case small { display:block; color:var(--muted); }
-  .chips span { display:inline-block; font-size:.75rem; padding:.05rem .45rem; border-radius:99px; border:1px solid var(--line); margin-right:.25rem; }
-  .totals span { margin-right:.6rem; }
-  a.btn { text-decoration:none; display:inline-block; }
-  .err { color:var(--danger); font-size:.85rem; min-height:1.2em; margin-top:.5rem; }
+  .err { color:var(--danger); font-size:.87rem; min-height:1.2em; margin-top:.4rem; }
+
+  #toast { position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:.6rem 1rem; border-radius:8px; opacity:0; pointer-events:none; transition:opacity .2s; max-width:90vw; z-index:20; }
+  #toast.show { opacity:1; } #toast.bad { background:var(--danger); color:#fff; }
+  dialog { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); color:var(--text); padding:1.25rem; width:min(440px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  dialog label { display:block; margin:.7rem 0 .25rem; font-size:.9rem; }
+  dialog h3 { margin-bottom:.4rem; }
+  dialog .row { justify-content:flex-end; margin-top:1.1rem; }
 </style>
 </head>
 <body>
 <header>
   <img src="/icon.svg" alt="">
   <h1>D365FO Agent</h1>
-  <nav class="tabs">
-    <button class="tab active" data-tab="profiles" type="button">Profiles</button>
-    <button class="tab" data-tab="cases" type="button">Test cases</button>
-    <button class="tab" data-tab="run" type="button">Run</button>
-    <button class="tab" data-tab="results" type="button">Results</button>
-    <button class="tab" data-tab="history" type="button">History</button>
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="profiles" aria-selected="true" type="button">Setup</button>
+    <button role="tab" data-tab="cases" aria-selected="false" type="button">Test cases</button>
+    <button role="tab" data-tab="run" aria-selected="false" type="button">Run</button>
+    <button role="tab" data-tab="results" aria-selected="false" type="button">Results</button>
+    <button role="tab" data-tab="history" aria-selected="false" type="button">History</button>
   </nav>
-  <span class="sub" id="homeInfo"></span>
+  <button id="using" type="button" title="Open Setup"><span class="dot"></span><span class="t" id="usingText">Loading…</span></button>
 </header>
 <main>
-  <section class="view active" id="tab-profiles">
+  <section class="view active" id="tab-profiles" role="tabpanel">
     <div class="layout">
       <aside class="panel">
         <h2>Profiles</h2>
+        <p class="muted small">One per environment, for example "Sandbox UAT" and "Dev".</p>
         <div id="list"></div>
-        <div class="actions" style="margin:.75rem 0 0">
-          <button class="btn primary" id="newBtn" type="button">+ New profile</button>
-        </div>
-        <p class="help" id="activeInfo" style="color:var(--muted);font-size:.82rem;margin:.9rem 0 .4rem"></p>
+        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="newBtn" type="button">+ New profile</button></div>
+        <p class="muted small" id="activeInfo" style="margin:.9rem 0 .4rem"></p>
         <button class="btn" id="noneBtn" type="button" hidden>Use the .env file instead</button>
+        <p class="muted small" id="homeInfo" style="margin-top:.9rem;word-break:break-all"></p>
       </aside>
       <section class="panel" id="editor" aria-live="polite"></section>
     </div>
   </section>
 
-  <section class="view" id="tab-cases">
+  <section class="view" id="tab-cases" role="tabpanel">
     <div class="layout">
       <aside class="panel">
         <h2>Folder</h2>
-        <div class="row" style="margin-bottom:.6rem"><input type="text" id="caseDir" value="examples/testcases" aria-label="Test-case folder"><button class="btn" id="caseDirLoad" type="button">Open</button></div>
+        <div class="withbtn" style="margin-bottom:.6rem"><input type="text" id="caseDir" value="examples/testcases" aria-label="Test-case folder"><button class="btn" id="caseDirLoad" type="button">Open</button></div>
         <div id="caseList"></div>
-        <div class="actions" style="margin:.75rem 0 0"><button class="btn primary" id="caseNew" type="button">+ New test case</button></div>
+        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="caseNew" type="button">+ New test case</button></div>
       </aside>
       <section class="panel" id="caseEditor" aria-live="polite"></section>
     </div>
   </section>
 
-  <section class="view" id="tab-run">
+  <section class="view" id="tab-run" role="tabpanel">
+    <div id="runBanner"></div>
     <div class="panel">
-      <h2>Test cases</h2>
+      <h2>What to run</h2>
       <div class="field">
-        <label>Source</label>
-        <div class="row">
-          <label><input type="radio" name="source" value="local" checked> Local folder</label>
+        <label id="srcLabel">Test cases from</label>
+        <div class="seg" role="radiogroup" aria-labelledby="srcLabel">
+          <label><input type="radio" name="source" value="local" checked> A folder on this computer</label>
           <label><input type="radio" name="source" value="devops"> Azure DevOps</label>
         </div>
       </div>
-      <div class="field"><label for="local">Folder</label><input id="local" value="examples/testcases"></div>
-      <div class="field">
-        <label>Plan / suite</label>
-        <div class="row"><input id="plan" placeholder="plan id (default from profile)" style="width:220px"><input id="suite" placeholder="suite id" style="width:220px"></div>
-      </div>
-      <div class="field">
-        <label for="caseId">Case</label>
-        <div class="row"><select id="caseId" style="width:460px"><option value="">All cases</option></select><button class="btn" id="load" type="button">Load cases</button></div>
-        <div class="help">"Load cases" works for local folders; for Azure DevOps the whole plan/suite runs (you can still type a case id in the box).</div>
-      </div>
+      <div class="field" data-src="local"><label for="local">Folder</label><input type="text" id="local" value="examples/testcases">
+        <div class="help">Inside the project folder. Edit the cases on the Test cases tab.</div></div>
+      <div class="field" data-src="devops" hidden><label for="plan">Test plan and suite</label>
+        <div class="row"><input type="text" id="plan" placeholder="Plan ID (default from the profile)" style="width:16rem" inputmode="numeric"><input type="text" id="suite" placeholder="Suite ID (optional)" style="width:14rem" inputmode="numeric"></div>
+        <div class="help">The whole plan or suite runs. Needs the Azure DevOps settings in the profile.</div></div>
+      <div class="field" data-src="local"><label for="caseId">Which case</label>
+        <select id="caseId"><option value="">All cases</option></select><div class="help" id="caseHelp"></div></div>
+      <div class="field" data-src="devops" hidden><label for="caseIdText">One case only</label>
+        <input type="text" id="caseIdText" placeholder="Work item ID (optional)" style="max-width:16rem"></div>
       <div class="field">
         <label>Options</label>
-        <div class="row">
-          <label><input type="checkbox" id="dryRun"> Dry run (no clicks/typing that change data)</label>
-          <label><input type="checkbox" id="upload"> Upload results to Azure DevOps</label>
-          <label>Retries <input id="retries" type="number" min="0" max="10" placeholder="default" style="width:90px"></label>
+        <div>
+          <div class="row" style="gap:1.2rem">
+            <label class="check"><input type="checkbox" id="dryRun"> Dry run</label>
+            <label class="check"><input type="checkbox" id="upload"> Upload results to Azure DevOps</label>
+          </div>
+          <div class="help" style="margin-top:.3rem">A dry run opens pages and reads them but does not click or type anything that changes data. Try it first on a new environment.</div>
+          <details class="more" style="margin-top:.5rem"><summary>More options</summary>
+            <div class="field"><label for="tags">Only tags</label><input type="text" id="tags" placeholder="smoke, vendor"></div>
+            <div class="field"><label for="modules">Only modules</label><input type="text" id="modules" placeholder="Accounts payable"></div>
+            <div class="field"><label for="retries">Retries per case</label><input type="number" id="retries" min="0" max="10" placeholder="From the profile" style="max-width:12rem"></div>
+            <div class="field"><label></label><label class="check"><input type="checkbox" id="sortPrio"> Run the most urgent cases first (by priority)</label></div>
+          </details>
         </div>
       </div>
-      <div class="actions" style="margin-top:12px;margin-bottom:0">
-        <button class="btn primary" id="start" type="button">Run</button>
+      <div class="actions" style="margin-top:.4rem">
+        <button class="btn primary" id="start" type="button">▶ Run</button>
         <button class="btn danger" id="stop" type="button" disabled>Stop</button>
-        <span id="runStatus"></span>
+        <span id="runStatus" role="status"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="toResults" type="button" hidden>View results →</button>
       </div>
+      <div id="progress" aria-live="polite"></div>
     </div>
-    <div class="panel"><h2>Live log</h2><pre id="log">No run yet.</pre></div>
+    <div class="panel">
+      <div class="actions" style="margin-bottom:.5rem"><h2 style="margin:0">Live log</h2><span class="spacer"></span><button class="btn" id="copyLog" type="button">Copy</button></div>
+      <pre id="log" tabindex="0">Nothing has run yet. Choose what to run and press Run.</pre>
+    </div>
   </section>
 
-  <section class="view" id="tab-results">
+  <section class="view" id="tab-results" role="tabpanel">
     <div class="panel">
-      <div class="actions" style="margin-bottom:.6rem">
+      <div class="actions" style="margin-bottom:.8rem">
         <h3 id="resultsTitle">Latest run</h3>
+        <span class="spacer"></span>
+        <label class="check"><input type="checkbox" id="onlyBad"> Only cases that did not pass</label>
         <button class="btn" id="refreshResults" type="button">Refresh</button>
-        <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Open full HTML report ↗</a>
+        <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Full report ↗</a>
         <a class="btn" id="jsonLink" href="/download/results.json">JSON</a>
         <a class="btn" id="junitLink" href="/download/results.junit.xml">JUnit XML</a>
       </div>
@@ -168,12 +254,13 @@
     </div>
   </section>
 
-  <section class="view" id="tab-history">
+  <section class="view" id="tab-history" role="tabpanel">
     <div class="panel">
-      <div class="actions" style="margin-bottom:.6rem">
+      <div class="actions" style="margin-bottom:.8rem">
         <h3>Run history</h3>
+        <span class="spacer"></span>
+        <label class="row small">Plan for upload <input type="text" id="uploadPlan" placeholder="Default from the profile" style="width:13rem"></label>
         <button class="btn" id="refreshHistory" type="button">Refresh</button>
-        <label>Plan for upload <input type="text" id="uploadPlan" placeholder="default from profile" style="width:180px"></label>
       </div>
       <div id="history"></div>
     </div>
@@ -182,17 +269,20 @@
 
 <dialog id="newDlg">
   <form method="dialog" id="newForm">
-    <h2 style="margin:0">New profile</h2>
+    <h3>New profile</h3>
+    <p class="muted small">A profile holds the settings for one environment.</p>
     <label for="newName">Name</label>
     <input type="text" id="newName" maxlength="60" placeholder="e.g. Sandbox UAT" required autocomplete="off">
     <label for="newFrom">Start from</label>
     <select id="newFrom"></select>
     <div class="err" id="newErr" role="alert"></div>
-    <div class="row">
-      <button class="btn" type="button" id="newCancel">Cancel</button>
-      <button class="btn primary" type="submit">Create</button>
-    </div>
+    <div class="row"><button class="btn" type="button" id="newCancel">Cancel</button><button class="btn primary" type="submit">Create</button></div>
   </form>
+</dialog>
+<dialog id="askDlg" aria-labelledby="askTitle">
+  <h3 id="askTitle"></h3>
+  <p id="askBody" class="muted"></p>
+  <div class="row"><button class="btn" type="button" id="askNo">Cancel</button><button class="btn primary" type="button" id="askYes">OK</button></div>
 </dialog>
 <div id="toast" role="status"></div>
 
@@ -200,16 +290,18 @@
 'use strict';
 const MASK = '••••••••';
 const SECRET = /PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|_KEY$|_PAT$/i;
-let state = { profiles: [], active: null, catalog: [], home: '' };
-let current = null; // { name, entries: [{key,value}] }
+let state = { profiles: [], active: null, catalog: [], groups: {}, providers: {}, categoryHints: {}, home: '' };
+let current = null;   // { name, entries: [{key,value}] }
+let snapshot = '';    // saved form contents, to tell whether there are unsaved changes
+let activeUrl = '';
 
 const $ = (id) => document.getElementById(id);
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
-    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== false) e.setAttribute(k, v === true ? '' : v);
+    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== false && v !== null) e.setAttribute(k, v === true ? '' : v);
   }
-  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
   return e;
 }
 async function api(path, method = 'GET', body) {
@@ -219,169 +311,400 @@ async function api(path, method = 'GET', body) {
   return data;
 }
 let toastTimer;
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3200); }
-const fail = (e) => toast(e.message || String(e));
+function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'show' + (bad ? ' bad' : ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, bad ? 5000 : 3000); }
+const fail = (e) => toast(e.message || String(e), true);
 
+/** A yes/no question in a dialog; resolves true when confirmed. */
+function ask(title, body, okLabel, danger) {
+  return new Promise((resolve) => {
+    const d = $('askDlg'), yes = $('askYes'), no = $('askNo');
+    $('askTitle').textContent = title; $('askBody').textContent = body || '';
+    yes.textContent = okLabel || 'OK'; yes.className = 'btn ' + (danger ? 'danger' : 'primary');
+    const done = (v) => { yes.onclick = no.onclick = d.oncancel = null; d.close(); resolve(v); };
+    yes.onclick = () => done(true); no.onclick = () => done(false); d.oncancel = (ev) => { ev.preventDefault(); done(false); };
+    d.showModal(); (danger ? no : yes).focus();
+  });
+}
+
+// ── Setup: profiles ──
 async function refresh(select) {
   state = await api('/api/state');
-  $('homeInfo').textContent = 'Saved in ' + state.home;
-  $('activeInfo').textContent = state.active
-    ? 'Runs use "' + state.active + '".'
-    : 'No profile selected: runs use the .env file in the project folder.';
+  $('homeInfo').textContent = 'Profiles are stored on this computer in ' + state.home;
+  $('activeInfo').textContent = state.active ? 'Runs use "' + state.active + '".' : 'No profile is in use: runs read the .env file in the project folder.';
   $('noneBtn').hidden = !state.active;
+  await refreshUsing();
   renderList();
   if (select === null) { current = null; return renderEditor(); }
   const name = select || (current && state.profiles.some((p) => p.name === current.name) ? current.name : (state.active || (state.profiles[0] && state.profiles[0].name)));
-  if (name) await open(name); else { current = null; renderEditor(); }
+  if (name) await open(name, true); else { current = null; renderEditor(); }
+}
+async function refreshUsing() {
+  activeUrl = '';
+  if (state.active) {
+    try { const d = await api('/api/profiles/' + encodeURIComponent(state.active)); activeUrl = (d.entries.find((e) => e.key === 'D365_BASE_URL') || {}).value || ''; } catch { /* shown without the address */ }
+  }
+  const host = activeUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  $('using').classList.toggle('none', !state.active);
+  $('usingText').textContent = state.active ? state.active + (host ? ' · ' + host : '') : 'No profile in use';
+  renderRunBanner();
 }
 function renderList() {
   const list = $('list'); list.replaceChildren();
-  if (!state.profiles.length) list.append(el('p', { class: 'empty' }, 'No profiles yet. Create one to get started.'));
   for (const p of state.profiles) {
-    list.append(el('button', { class: 'profile', type: 'button', 'aria-current': current && current.name === p.name ? 'true' : 'false', onclick: () => open(p.name).catch(fail) },
-      p.name, p.active ? el('span', { class: 'badge' }, 'In use') : null));
+    list.append(el('button', { class: 'item', type: 'button', 'aria-current': current && current.name === p.name ? 'true' : 'false', onclick: () => open(p.name).catch(fail) },
+      p.name, p.active ? el('span', { class: 'pill right' }, 'In use') : null));
   }
 }
-async function open(name) {
+const isDirty = () => Boolean(current) && $('form') && JSON.stringify(collect()) !== snapshot;
+async function leaveOk() {
+  return !isDirty() || ask('Discard unsaved changes?', 'You changed "' + current.name + '" and have not saved it.', 'Discard changes', true);
+}
+async function open(name, force) {
+  if (!force && current && current.name !== name && !(await leaveOk())) return;
   const data = await api('/api/profiles/' + encodeURIComponent(name));
   current = { name, entries: data.entries };
   renderList(); renderEditor();
 }
+
+const provider = () => { const s = document.querySelector('#form [data-key="LLM_PROVIDER"]'); return (s && s.value) || 'anthropic'; };
+const formValue = (key) => { const i = document.querySelector('#form [data-key="' + key + '"]'); return i ? i.value.trim() : ''; };
+function checkField(input) {
+  const v = input.value.trim(), type = input.dataset.type;
+  let msg = '';
+  if (v && v !== MASK && type === 'url') {
+    let ok = false;
+    try { ok = ['http:', 'https:'].includes(new URL(v).protocol); } catch { /* not a URL */ }
+    if (!ok) msg = 'Enter a full web address that starts with https:// (or http://).';
+  }
+  if (v && type === 'number' && !/^\d+$/.test(v)) msg = 'Enter a whole number.';
+  input.setAttribute('aria-invalid', msg ? 'true' : 'false');
+  const box = input.closest('.field').querySelector('.ferr');
+  box.textContent = msg; box.hidden = !msg;
+  return !msg;
+}
 function fieldInput(spec, value) {
   const id = 'f_' + spec.key;
-  let input;
+  let input, control;
   if (spec.options) {
-    input = el('select', { id, 'data-key': spec.key }, spec.options.map((o) => el('option', { value: o }, o === '' ? '(default)' : o)));
-    if (value && !spec.options.includes(value)) input.append(el('option', { value }, value));
-    input.value = value || '';
+    const label = (o) => spec.key === 'LLM_PROVIDER' ? (state.providers[o] || o) : o === '' ? 'Guess from the address' : o === 'true' ? 'Yes (true)' : o === 'false' ? 'No (false)' : o;
+    const opts = spec.options.slice();
+    if (!opts.includes('') && spec.key !== 'LLM_PROVIDER') opts.unshift('');
+    input = el('select', { id, 'data-key': spec.key }, opts.map((o) => el('option', { value: o }, o === '' && spec.key !== 'D365_ENVIRONMENT_TYPE' ? 'Default' : label(o))));
+    if (value && !opts.includes(value)) input.append(el('option', { value }, value));
+    input.value = value || (spec.key === 'LLM_PROVIDER' ? 'anthropic' : '');
+    control = input;
   } else {
-    input = el('input', { id, 'data-key': spec.key, type: spec.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', placeholder: spec.placeholder || '' });
+    input = el('input', { id, 'data-key': spec.key, 'data-type': spec.type, type: spec.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', placeholder: spec.placeholder || '', inputmode: spec.type === 'number' ? 'numeric' : spec.type === 'url' ? 'url' : null });
     input.value = value || '';
-    if (spec.secret && value === MASK) input.addEventListener('focus', () => input.select());
+    control = input;
+    if (spec.secret) {
+      const saved = value === MASK;
+      if (saved) input.addEventListener('focus', () => input.select());
+      const show = el('button', { class: 'btn', type: 'button', 'aria-pressed': 'false', onclick: () => {
+        if (input.value === MASK) return toast('The saved value is hidden. Type a new one to replace it.');
+        const on = input.type === 'password'; input.type = on ? 'text' : 'password'; show.textContent = on ? 'Hide' : 'Show'; show.setAttribute('aria-pressed', String(on));
+      } }, 'Show');
+      control = el('div', { class: 'withbtn' }, input, show);
+    }
+    input.addEventListener('blur', () => checkField(input));
   }
-  return el('div', { class: 'field' }, el('label', { for: id }, spec.label), input,
-    (spec.help || (spec.secret && value === MASK)) ? el('div', { class: 'help' }, [spec.help, spec.secret && value === MASK ? 'A value is saved. Type to replace it, or clear the box to remove it.' : ''].filter(Boolean).join(' ')) : null);
+  const help = [spec.help, spec.secret && value === MASK ? 'A value is saved. Type to replace it, or clear the box to remove it.' : ''].filter(Boolean).join(' ');
+  return el('div', { class: 'field', 'data-providers': spec.providers ? spec.providers.join(' ') : null, 'data-required': spec.required ? '1' : null },
+    el('label', { for: id }, spec.label, spec.required ? el('span', { class: 'req', title: 'Needed before a run', 'aria-label': 'required' }, '*') : null),
+    control, help ? el('div', { class: 'help' }, help) : null, el('div', { class: 'ferr', role: 'alert', hidden: true }));
 }
 function customRow(key, value) {
   const k = el('input', { type: 'text', placeholder: 'VARIABLE_NAME', 'aria-label': 'Variable name', 'data-ck': '1', spellcheck: 'false' }); k.value = key;
   const v = el('input', { type: SECRET.test(key) ? 'password' : 'text', placeholder: 'value', 'aria-label': 'Value', 'data-cv': '1', autocomplete: 'off', spellcheck: 'false' }); v.value = value;
   k.addEventListener('input', () => { v.type = SECRET.test(k.value) ? 'password' : 'text'; });
-  const row = el('div', { class: 'custom' }, k, v, el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove variable', onclick: () => row.remove() }, '×'));
+  const row = el('div', { class: 'custom' }, k, v, el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove variable', onclick: () => { row.remove(); onFormChange(); } }, '×'));
   return row;
+}
+function welcome() {
+  return el('div', { class: 'welcome' },
+    el('h3', {}, 'Welcome. Let\'s set up your first environment'),
+    el('p', { class: 'muted' }, 'This app runs your Dynamics 365 F&O test cases with an AI agent. Three things get you to a first run:'),
+    el('ol', {},
+      el('li', {}, el('b', {}, 'Create a profile'), ' with your sandbox address, a test account, and an AI model key.'),
+      el('li', {}, el('b', {}, 'Check setup'), ' to confirm everything connects.'),
+      el('li', {}, el('b', {}, 'Run'), ' the example test cases as a dry run first.')),
+    el('button', { class: 'btn primary', type: 'button', onclick: () => openNew() }, '+ Create your first profile'));
 }
 function renderEditor() {
   const ed = $('editor'); ed.replaceChildren();
-  if (!current) { ed.append(el('p', { class: 'empty' }, 'Create a profile to set up an environment: its F&O address, sign-in, AI model and safety limits.')); return; }
+  if (!current) { ed.append(state.profiles.length ? el('p', { class: 'empty' }, 'Pick a profile on the left, or create a new one.') : welcome()); snapshot = ''; return; }
   const known = new Set(state.catalog.map((f) => f.key));
   const values = new Map(current.entries.map((e) => [e.key, e.value]));
   const isActive = state.active === current.name;
-  ed.append(el('div', { class: 'actions' },
-    el('h3', {}, current.name),
-    el('button', { class: 'btn', type: 'button', disabled: isActive, onclick: () => use(current.name).catch(fail) }, isActive ? 'In use' : 'Use this profile'),
-    el('button', { class: 'btn', type: 'button', onclick: () => checkSetup().catch(fail) }, 'Check setup'),
+  ed.append(el('div', { class: 'actions', style: 'margin-bottom:1rem' },
+    el('h3', {}, current.name), isActive ? el('span', { class: 'pill' }, 'In use') : null, el('span', { class: 'spacer' }),
+    isActive ? null : el('button', { class: 'btn primary', type: 'button', onclick: () => use(current.name).catch(fail) }, 'Use this profile'),
+    el('button', { class: 'btn', type: 'button', id: 'checkBtn', onclick: () => checkSetup().catch(fail) }, 'Check setup'),
     el('button', { class: 'btn', type: 'button', onclick: () => openNew(current.name) }, 'Duplicate'),
     el('button', { class: 'btn danger', type: 'button', onclick: () => remove().catch(fail) }, 'Delete')));
-  if (!isActive) ed.append(el('div', { class: 'note' }, state.active ? 'Runs currently use "' + state.active + '". Choose "Use this profile" to switch to this one.' : 'Not in use yet. Choose "Use this profile" so runs read these settings instead of the .env file.'));
-  const form = el('form', { id: 'form' });
-  const groups = [...new Set(state.catalog.map((f) => f.group))];
-  for (const g of groups) {
-    const fs = el('fieldset', {}, el('legend', {}, g));
-    for (const spec of state.catalog.filter((f) => f.group === g)) fs.append(fieldInput(spec, values.get(spec.key)));
+  ed.append(el('ul', { class: 'checklist', id: 'checklist', 'aria-label': 'Ready to run?' }), el('div', { id: 'checkOut' }));
+
+  const form = el('form', { id: 'form', novalidate: true });
+  for (const g of [...new Set(state.catalog.map((f) => f.group))]) {
+    const fs = el('fieldset', { class: 'group' }, el('legend', {}, g), state.groups[g] ? el('p', { class: 'gdesc' }, state.groups[g]) : null);
+    const specs = state.catalog.filter((f) => f.group === g);
+    for (const spec of specs.filter((s) => !s.advanced)) fs.append(fieldInput(spec, values.get(spec.key)));
+    const adv = specs.filter((s) => s.advanced);
+    if (adv.length) {
+      const set = adv.filter((s) => values.get(s.key)).length;
+      const d = el('details', { class: 'more', open: set > 0 }, el('summary', {}, 'More settings'));
+      for (const spec of adv) d.append(fieldInput(spec, values.get(spec.key)));
+      fs.append(d);
+    }
     form.append(fs);
   }
   const customs = el('div', { id: 'customs' });
-  for (const e of current.entries) if (!known.has(e.key)) customs.append(customRow(e.key, e.value));
-  form.append(el('fieldset', {}, el('legend', {}, 'Other variables'), customs,
-    el('button', { class: 'btn', type: 'button', onclick: () => customs.append(customRow('', '')) }, '+ Add variable')));
-  form.append(el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save changes')));
+  const extra = current.entries.filter((e) => !known.has(e.key));
+  for (const e of extra) customs.append(customRow(e.key, e.value));
+  form.append(el('fieldset', { class: 'group' }, el('legend', {}, 'Other variables'),
+    el('p', { class: 'gdesc' }, 'Any other setting from .env.example, by its variable name.'),
+    el('details', { class: 'more', open: extra.length > 0 }, el('summary', {}, extra.length ? extra.length + ' variable(s)' : 'Add a variable'), customs,
+      el('button', { class: 'btn', type: 'button', onclick: () => { customs.append(customRow('', '')); customs.lastChild.querySelector('input').focus(); } }, '+ Add variable'))));
+  form.append(el('div', { class: 'savebar' },
+    el('span', { class: 'state', id: 'saveState' }, 'All changes saved'), el('span', { class: 'spacer' }),
+    el('button', { class: 'btn', type: 'button', id: 'discardBtn', disabled: true, onclick: () => open(current.name, true).catch(fail) }, 'Discard changes'),
+    el('button', { class: 'btn primary', type: 'submit', id: 'saveBtn', disabled: true }, 'Save changes')));
   form.addEventListener('submit', (ev) => { ev.preventDefault(); save().catch(fail); });
-  ed.append(form, el('div', { id: 'checkOut' }));
+  form.addEventListener('input', onFormChange);
+  form.addEventListener('change', onFormChange);
+  ed.append(form);
+  snapshot = JSON.stringify(collect());
+  onFormChange();
+}
+function onFormChange() {
+  const p = provider();
+  for (const f of document.querySelectorAll('#form .field[data-providers]')) f.hidden = !f.dataset.providers.split(' ').includes(p);
+  for (const d of document.querySelectorAll('#form details.more')) { const any = [...d.querySelectorAll('.field')].some((f) => !f.hidden); if (d.querySelector('.field')) d.hidden = !any; }
+  const dirty = isDirty();
+  const s = $('saveState'); if (s) { s.textContent = dirty ? 'Unsaved changes' : 'All changes saved'; s.className = 'state' + (dirty ? ' dirty' : ''); }
+  if ($('saveBtn')) { $('saveBtn').disabled = !dirty; $('discardBtn').disabled = !dirty; }
+  renderChecklist();
+}
+function focusField(key) {
+  const i = document.querySelector('#form [data-key="' + key + '"]'); if (!i) return;
+  const d = i.closest('details'); if (d) d.open = true;
+  i.scrollIntoView({ block: 'center', behavior: 'smooth' }); i.focus({ preventScroll: true });
+}
+/** What still stands between this profile and a run, from what is in the form right now. */
+function readiness() {
+  const p = provider(), has = (k) => formValue(k) !== '';
+  const items = [];
+  let urlOk = false;
+  try { urlOk = ['http:', 'https:'].includes(new URL(formValue('D365_BASE_URL')).protocol); } catch { /* missing or invalid */ }
+  items.push({ ok: urlOk, title: 'F&O address', todo: 'Enter your sandbox address.', done: formValue('D365_BASE_URL').replace(/^https?:\/\//, ''), key: 'D365_BASE_URL' });
+  const pw = has('D365_USERNAME') && has('D365_PASSWORD'), sess = has('D365_STORAGE_STATE'), app = has('D365_TENANT_ID') && has('D365_CLIENT_ID') && has('D365_CLIENT_SECRET');
+  items.push({ ok: pw || sess || app, title: 'Sign-in', todo: 'Add a username and password, or a saved session.', done: sess ? 'Saved session' : pw ? 'Username and password' : 'App registration', key: has('D365_USERNAME') ? 'D365_PASSWORD' : 'D365_USERNAME' });
+  const need = state.catalog.filter((f) => f.required && f.providers && f.providers.includes(p));
+  let missing = need.find((f) => !has(f.key));
+  if (p === 'anthropic' && missing && missing.key === 'ANTHROPIC_API_KEY' && has('ANTHROPIC_AUTH_TOKEN')) missing = undefined;
+  const custom = p === 'anthropic' && has('ANTHROPIC_BASE_URL');
+  items.push({ ok: !missing, title: 'AI model', todo: missing ? 'Add: ' + missing.label + '.' : '', done: (state.providers[p] || p) + (custom ? ' via your own URL' : ''), key: missing ? missing.key : 'LLM_PROVIDER' });
+  const active = state.active === current.name;
+  items.push({ ok: active, title: 'In use', todo: 'Runs use ' + (state.active ? '"' + state.active + '"' : 'the .env file') + ' until you choose "Use this profile".', done: 'Runs use this profile.', action: active ? null : () => use(current.name).catch(fail) });
+  return items;
+}
+function renderChecklist() {
+  const box = $('checklist'); if (!box || !current) return;
+  box.replaceChildren(...readiness().map((it) => el('li', { class: it.ok ? 'ok' : 'todo' },
+    el('span', { class: 'ico', 'aria-hidden': 'true' }, it.ok ? '✓' : '!'),
+    el('div', {}, el('b', {}, it.title), el('span', { class: 'd' }, it.ok ? it.done : it.todo), ' ',
+      it.ok ? null : el('button', { class: 'link small', type: 'button', onclick: it.action || (() => focusField(it.key)) }, it.action ? 'Use it' : 'Fix')))));
 }
 function collect() {
   const entries = [];
-  for (const i of document.querySelectorAll('#form [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value });
+  for (const i of document.querySelectorAll('#form [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value.trim() === MASK ? MASK : i.value });
   for (const row of document.querySelectorAll('#customs .custom')) {
     const key = row.querySelector('[data-ck]').value.trim(); const value = row.querySelector('[data-cv]').value;
     if (key) entries.push({ key, value });
   }
   return entries;
 }
-async function save() { await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries: collect() }); toast('Saved'); await open(current.name); }
-async function use(name) { await api('/api/active', 'POST', { name }); toast('"' + name + '" is now in use'); await refresh(name); }
+function validateForm() {
+  const bad = [...document.querySelectorAll('#form input[data-type]')].filter((i) => !checkField(i));
+  if (bad.length) { const key = bad[0].dataset.key; focusField(key); toast('Fix the highlighted field before saving.', true); return false; }
+  return true;
+}
+async function save(quiet) {
+  if (!validateForm()) return false;
+  await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries: collect() });
+  if (!quiet) toast('Saved');
+  await open(current.name, true);
+  if (state.active === current.name) await refreshUsing();
+  return true;
+}
+async function use(name) {
+  if (current && current.name === name && isDirty() && !(await save(true))) return;
+  await api('/api/active', 'POST', { name }); toast('Runs now use "' + name + '"'); await refresh(name);
+}
 async function remove() {
-  if (!confirm('Delete the profile "' + current.name + '"? Its saved settings and secrets are removed from this computer.')) return;
+  if (!(await ask('Delete "' + current.name + '"?', 'Its saved settings and secrets are removed from this computer. This cannot be undone.', 'Delete profile', true))) return;
   await api('/api/profiles/' + encodeURIComponent(current.name), 'DELETE'); toast('Deleted'); current = null; await refresh();
 }
+/** Turns one line of the setup check into a status row. */
+function checkRow(line) {
+  const m = /^([^:]{2,40}):\s*(.*)$/.exec(line.trim());
+  const text = line.trim();
+  const bad = /NOT REACHABLE|MISSING|\(missing\)|FAILED|INVALID|EXPIRED|UNREADABLE|NOT INSTALLED|refused/i.test(text);
+  const warn = /^WARNING|WARNING:|not configured|unknown/i.test(text);
+  const optional = /^Azure DevOps|app registration: not configured|saved session/i.test(text) && !/EXPIRED|UNREADABLE/i.test(text);
+  const status = bad && !optional ? 'bad' : warn || (bad && optional) ? (optional ? 'info' : 'warn') : 'ok';
+  const ico = { ok: '✓', warn: '!', bad: '✕', info: '–' }[status];
+  return el('li', { class: 's-' + status }, el('span', { class: 'ico', 'aria-hidden': 'true' }, ico),
+    m ? el('div', {}, el('b', {}, m[1]), el('div', { class: 'v' }, m[2])) : el('div', { class: 'v' }, text.replace(/^WARNING:\s*/, '')));
+}
 async function checkSetup() {
-  await save();
-  const out = $('checkOut'); out.replaceChildren(el('p', {}, 'Checking… this can take a few seconds.'));
-  const r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/check', 'POST');
-  out.replaceChildren(el('h2', {}, r.exitCode === 0 ? 'Setup looks good' : 'Things to fix'), el('pre', {}, r.output || '(no output)'));
+  if (isDirty() && !(await save(true))) return;
+  const out = $('checkOut'), btn = $('checkBtn');
+  btn.disabled = true;
+  out.replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'Checking the connections… this can take up to a minute.'));
+  let r;
+  try { r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/check', 'POST'); }
+  finally { const b = $('checkBtn'); if (b) b.disabled = false; }
+  const lines = (r.output || '').split('\n');
+  const at = lines.findIndex((l) => /^Issues:/.test(l.trim()));
+  const body = (at >= 0 ? lines.slice(0, at) : lines).filter((l) => l.trim() && !/^Configuration looks good/.test(l.trim()));
+  const issues = at >= 0 ? lines.slice(at + 1).map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean) : [];
+  const good = r.exitCode === 0;
+  const box = $('checkOut'); if (!box) return;
+  box.replaceChildren(el('div', { class: 'panel', style: 'background:var(--sunk)' },
+    el('div', { class: 'banner ' + (good ? 'good' : 'bad'), style: 'margin-bottom:.6rem' }, el('b', {}, good ? '✓ Setup looks good. You can run tests.' : issues.length + ' thing(s) to fix before a run')),
+    issues.length ? el('ul', { class: 'checks' }, issues.map((i) => el('li', { class: 's-bad' }, el('span', { class: 'ico', 'aria-hidden': 'true' }, '✕'), el('div', {}, i)))) : null,
+    el('ul', { class: 'checks' }, body.map(checkRow)),
+    el('div', { class: 'actions' },
+      good ? el('button', { class: 'btn primary', type: 'button', onclick: () => showTab('run') }, 'Go to Run →') : null,
+      el('button', { class: 'btn', type: 'button', onclick: () => $('checkOut').replaceChildren() }, 'Close'))));
+  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 function openNew(from) {
   $('newName').value = ''; $('newErr').textContent = '';
-  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'Blank profile'));
-  for (const p of state.profiles) sel.append(el('option', { value: p.name }, 'Copy of ' + p.name));
+  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'A blank profile'));
+  for (const p of state.profiles) sel.append(el('option', { value: p.name }, 'A copy of ' + p.name));
   sel.value = from || '';
   $('newDlg').showModal(); $('newName').focus();
 }
-$('newBtn').addEventListener('click', () => openNew());
+$('newBtn').addEventListener('click', async () => { if (await leaveOk()) openNew(); });
 $('noneBtn').addEventListener('click', () => api('/api/active', 'POST', {}).then(() => { toast('Runs now use the .env file'); return refresh(); }).catch(fail));
 $('newCancel').addEventListener('click', () => $('newDlg').close());
 $('newForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const name = $('newName').value.trim(), copyFrom = $('newFrom').value;
-  try { await api('/api/profiles', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [] }); $('newDlg').close(); toast('Created'); await refresh(name); }
-  catch (e) { $('newErr').textContent = e.message; }
+  try {
+    await api('/api/profiles', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [] });
+    $('newDlg').close(); current = null;
+    if (!state.active) await api('/api/active', 'POST', { name });
+    toast('Created "' + name + '"'); await refresh(name);
+  } catch (e) { $('newErr').textContent = e.message; }
 });
+$('using').addEventListener('click', () => showTab('profiles'));
+window.addEventListener('beforeunload', (ev) => { if (isDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
 
 // ── Tabs ──
-document.querySelectorAll('nav.tabs button').forEach((b) => b.addEventListener('click', () => {
-  if (b.dataset.tab === 'results') viewRun = null;
-  showTab(b.dataset.tab);
-}));
+const tabs = [...document.querySelectorAll('nav.tabs button')];
+tabs.forEach((b, i) => {
+  b.addEventListener('click', () => { if (b.dataset.tab === 'results') viewRun = null; showTab(b.dataset.tab); });
+  b.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+    const next = tabs[(i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]; next.focus(); next.click();
+  });
+});
 function showTab(tab) {
-  document.querySelectorAll('nav.tabs button').forEach((x) => x.classList.toggle('active', x.dataset.tab === tab));
+  for (const x of tabs) { const on = x.dataset.tab === tab; x.setAttribute('aria-selected', String(on)); x.tabIndex = on ? 0 : -1; }
   document.querySelectorAll('.view').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + tab));
   if (tab === 'results') loadResults().catch(fail);
   if (tab === 'history') loadHistory().catch(fail);
   if (tab === 'cases' && !casesLoaded) loadCases().catch(fail);
+  if (tab === 'run') { renderRunBanner(); if (!runCasesLoaded) loadRunCases(); }
+  window.scrollTo({ top: 0 });
 }
 
 // ── Run ──
 const source = () => document.querySelector('input[name=source]:checked').value;
-$('load').addEventListener('click', async () => {
-  const sel = $('caseId');
-  if (source() !== 'local') { sel.replaceChildren(el('option', { value: '' }, 'Type a case id, or leave empty for all')); return; }
+let runCasesLoaded = false, runCaseCount = 0, running = false;
+function renderRunBanner() {
+  const box = $('runBanner'); if (!box) return;
+  if (!state.active) {
+    box.replaceChildren(el('div', { class: 'banner warn' }, el('span', {}, state.profiles.length ? 'No profile is in use, so the run reads the .env file in the project folder.' : 'Nothing is set up yet.'),
+      el('button', { class: 'btn', type: 'button', onclick: () => showTab('profiles') }, state.profiles.length ? 'Choose a profile' : 'Set up a profile')));
+  } else {
+    box.replaceChildren(el('div', { class: 'banner info' }, el('span', {}, 'This run uses ', el('b', {}, state.active), activeUrl ? [' against ', el('b', {}, activeUrl.replace(/^https?:\/\//, ''))] : ' (no F&O address set yet)', '.'),
+      el('button', { class: 'link', type: 'button', onclick: () => showTab('profiles') }, 'Change')));
+  }
+}
+function syncSource() {
+  const s = source();
+  for (const f of document.querySelectorAll('#tab-run [data-src]')) f.hidden = f.dataset.src !== s;
+  if (s === 'local' && !runCasesLoaded) loadRunCases();
+}
+document.querySelectorAll('input[name=source]').forEach((r) => r.addEventListener('change', syncSource));
+async function loadRunCases(keep) {
+  runCasesLoaded = true;
+  const sel = $('caseId'), help = $('caseHelp');
   sel.replaceChildren(el('option', { value: '' }, 'Loading…'));
   try {
     const cases = await api('/api/cases?local=' + encodeURIComponent($('local').value));
-    sel.replaceChildren(el('option', { value: '' }, 'All cases (' + cases.length + ')'));
-    for (const c of cases) sel.append(el('option', { value: c.id }, '[' + c.id + '] ' + c.title + ' — ' + c.steps + ' step(s)'));
-  } catch (e) { sel.replaceChildren(el('option', { value: '' }, 'Error: ' + (e.message || e))); }
-});
+    runCaseCount = cases.length;
+    sel.replaceChildren(el('option', { value: '' }, 'All ' + cases.length + ' case(s) in the folder'));
+    for (const c of cases) sel.append(el('option', { value: c.id }, c.title + '  [' + c.id + ', ' + c.steps + ' step(s)]'));
+    if (keep && cases.some((c) => c.id === keep)) sel.value = keep;
+    help.textContent = cases.length ? '' : 'No test cases in this folder yet. Create one on the Test cases tab.';
+  } catch (e) {
+    runCaseCount = 0;
+    sel.replaceChildren(el('option', { value: '' }, 'All cases'));
+    help.textContent = 'Could not read that folder: ' + (e.message || e);
+  }
+}
+let localTimer;
+$('local').addEventListener('input', () => { clearTimeout(localTimer); localTimer = setTimeout(() => loadRunCases(), 500); });
 $('start').addEventListener('click', async () => {
-  const body = { source: source(), local: $('local').value, plan: $('plan').value, suite: $('suite').value, caseId: $('caseId').value, dryRun: $('dryRun').checked, upload: $('upload').checked, retries: $('retries').value };
+  const s = source();
+  const body = { source: s, local: $('local').value, plan: $('plan').value, suite: $('suite').value, caseId: s === 'local' ? $('caseId').value : $('caseIdText').value.trim(),
+    dryRun: $('dryRun').checked, upload: $('upload').checked, retries: $('retries').value, tags: $('tags').value, modules: $('modules').value, sortByPriority: $('sortPrio').checked };
+  if (!body.dryRun && !(await ask('Start a real run?', 'The agent will click and type in ' + (activeUrl ? activeUrl.replace(/^https?:\/\//, '') : 'the configured environment') + ' and may create or change data. Use a dry run to try it safely first.', 'Start run'))) return;
   try {
-    $('log').textContent = '';
+    $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; $('toResults').hidden = true;
     const res = await api('/api/run', 'POST', body);
-    if (res.error) { $('log').textContent = res.error; return; }
+    if (res.error) { $('log').textContent = res.error; return toast(res.error, true); }
     showStatus(res.run);
-  } catch (e) { $('log').textContent = String(e.message || e); }
+  } catch (e) { $('log').textContent = String(e.message || e); fail(e); }
 });
-$('stop').addEventListener('click', () => api('/api/run/stop', 'POST', {}).catch(() => {}));
+$('stop').addEventListener('click', async () => {
+  if (!(await ask('Stop this run?', 'The case that is running is marked interrupted, and the report is still written for the cases that finished.', 'Stop run', true))) return;
+  $('stop').disabled = true; $('runStatus').textContent = 'Stopping… saving the report';
+  api('/api/run/stop', 'POST', {}).catch(fail);
+});
+$('copyLog').addEventListener('click', () => navigator.clipboard.writeText($('log').textContent).then(() => toast('Log copied'), () => toast('Could not copy the log', true)));
+$('toResults').addEventListener('click', () => { viewRun = null; showTab('results'); });
+let progress = { started: 0, done: 0, counts: {}, current: '' };
+function showProgress() {
+  const p = progress, box = $('progress');
+  if (!p.started) { box.textContent = running ? 'Starting… the first run also downloads the test browser, which can take a few minutes.' : ''; return; }
+  const tally = ['passed', 'failed', 'blocked', 'skipped'].filter((k) => p.counts[k]).map((k) => p.counts[k] + ' ' + k).join(', ');
+  box.textContent = (running ? 'Case ' + p.started + ': ' + p.current : p.done + ' case(s) finished') + (tally ? ' · so far: ' + tally : '');
+}
 function showStatus(r) {
-  const running = r && r.status === 'running';
+  running = Boolean(r) && r.status === 'running';
   $('start').disabled = running; $('stop').disabled = !running;
   const s = $('runStatus'); s.className = r ? r.status : '';
-  s.textContent = !r ? '' : running ? 'Running…' : r.status === 'passed' ? 'Finished' : r.status === 'stopped' ? 'Stopped' : 'Finished with failures (exit ' + r.exitCode + ')';
-  if (r && !running) { viewRun = null; loadResults().catch(() => {}); loadHistory().catch(() => {}); }
+  s.replaceChildren(...(!r ? [] : running ? [el('span', { class: 'spin', 'aria-hidden': 'true' }), ' Running'] : [r.status === 'passed' ? '✓ Finished' : r.status === 'stopped' ? 'Stopped' : r.kind === 'upload' ? 'Upload failed' : 'Finished, with problems']));
+  showProgress();
+  if (r && !running) {
+    $('toResults').hidden = r.kind !== 'run';
+    viewRun = null; loadResults().catch(() => {}); loadHistory().catch(() => {});
+  }
 }
 function appendLog(line) {
   const log = $('log');
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.append(line + '\n');
   if (stick) log.scrollTop = log.scrollHeight;
+  let m;
+  if ((m = /^▶ Running \[([^\]]+)\] (.*)$/.exec(line))) { progress.started++; progress.current = m[2]; showProgress(); }
+  else if ((m = /^\s+→ (passed|failed|blocked|skipped)\b/.exec(line))) { progress.done++; progress.counts[m[1]] = (progress.counts[m[1]] || 0) + 1; showProgress(); }
 }
 async function initRun() {
   try {
@@ -394,69 +717,77 @@ async function initRun() {
 }
 
 // ── Results ──
-let viewRun = null;
+let viewRun = null, lastResults = [];
 async function loadResults() {
   const box = $('results');
   const q = viewRun ? '?run=' + encodeURIComponent(viewRun) : '';
   $('resultsTitle').textContent = viewRun ? 'Run ' + viewRun : 'Latest run';
   $('reportLink').href = '/report' + q; $('jsonLink').href = '/download/results.json' + q; $('junitLink').href = '/download/results.junit.xml' + q;
-  let results;
-  try { results = await api('/api/results' + q); } catch (e) { box.textContent = String(e.message || e); return; }
-  if (!results || !results.length) { box.textContent = 'No results yet. Run some tests first.'; return; }
-  const table = el('table', {}, el('tr', {}, ...['Case', 'Outcome', 'Attempts', 'Duration', 'Details'].map((h) => el('th', {}, h))));
-  for (const r of results) {
-    const details = el('div');
-    if (r.errorMessage) details.append(el('div', {}, r.errorMessage));
-    for (const s of r.steps || []) {
-      details.append(el('div', {}, el('span', { class: s.status }, 'Step ' + s.index + ' ' + s.status + (s.verified ? ' ✓' : '') + ': '), (s.observed || s.errorMessage || '')));
+  try { lastResults = (await api('/api/results' + q)) || []; } catch (e) { lastResults = []; box.replaceChildren(el('p', { class: 'empty' }, String(e.message || e))); return; }
+  renderResults();
+}
+function renderResults() {
+  const box = $('results'), results = lastResults;
+  if (!results.length) { box.replaceChildren(el('div', { class: 'empty' }, el('p', {}, 'No results yet.'), el('button', { class: 'btn primary', type: 'button', onclick: () => showTab('run') }, 'Go to Run'))); return; }
+  const count = (o) => results.filter((r) => r.outcome === o).length;
+  const tiles = el('div', { class: 'tiles' }, el('div', { class: 'tile' }, el('b', {}, String(results.length)), el('span', {}, 'cases')),
+    ...['passed', 'failed', 'blocked', 'skipped'].map((o) => el('div', { class: 'tile ' + (count(o) ? o : '') }, el('b', {}, String(count(o))), el('span', {}, o))));
+  const shown = $('onlyBad').checked ? results.filter((r) => r.outcome !== 'passed') : results;
+  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Case', 'Outcome', 'Why and what to do', 'Tries', 'Time'].map((h) => el('th', { scope: 'col' }, h)))));
+  const tb = el('tbody'); table.append(tb);
+  for (const r of shown) {
+    const why = el('div');
+    if (r.failureCategory) why.append(el('span', { class: 'cat' }, r.failureCategory.replace(/_/g, ' ')), el('div', { class: 'hint' }, state.categoryHints[r.failureCategory] || ''));
+    if (r.errorMessage) why.append(el('div', {}, r.errorMessage));
+    for (const p of r.policyBlocks || []) why.append(el('div', { class: 'blocked small' }, 'Refused by a safety rule: ' + p));
+    if ((r.steps || []).length) {
+      why.append(el('details', { open: r.outcome !== 'passed' && r.steps.length <= 6 }, el('summary', {}, r.steps.length + ' step(s)'),
+        el('ul', { class: 'steplist' }, r.steps.map((s) => el('li', {}, el('span', { class: s.status }, (s.status === 'passed' ? '✓' : s.status === 'skipped' ? '–' : '✕') + ' Step ' + s.index + ' ' + s.status + (s.verified === false ? ' (not checked)' : '') + (s.observed || s.errorMessage ? ': ' : '')), s.observed || s.errorMessage || '')))));
     }
-    for (const p of r.policyBlocks || []) details.append(el('div', { class: 'blocked' }, 'Guardrail: ' + p));
-    table.append(el('tr', {},
-      el('td', {}, '[' + r.testCaseId + '] ' + r.title),
-      el('td', { class: r.outcome }, r.outcome),
-      el('td', {}, String(r.attemptCount || 1)),
-      el('td', {}, (r.durationMs / 1000).toFixed(1) + 's'),
-      el('td', {}, details)));
+    tb.append(el('tr', {},
+      el('td', {}, el('b', {}, r.title), el('div', { class: 'muted small' }, r.testCaseId)),
+      el('td', {}, el('span', { class: 'badge ' + r.outcome }, r.interrupted ? 'interrupted' : r.outcome)),
+      el('td', {}, why), el('td', {}, String(r.attemptCount || 1)), el('td', { style: 'white-space:nowrap' }, (r.durationMs / 1000).toFixed(1) + ' s')));
   }
-  box.replaceChildren(table);
+  box.replaceChildren(tiles, shown.length ? el('div', { class: 'tablewrap' }, table) : el('p', { class: 'empty' }, 'Every case passed.'));
 }
 $('refreshResults').addEventListener('click', () => loadResults().catch(fail));
+$('onlyBad').addEventListener('change', renderResults);
 
 // ── History ──
 async function loadHistory() {
   const box = $('history');
   const runs = await api('/api/history');
   if (!runs.length) { box.replaceChildren(el('p', { class: 'empty' }, 'No runs yet. Every run started here is kept with its reports.')); return; }
-  const table = el('table', {}, el('tr', {}, ...['Started', 'Profile', 'What ran', 'Outcome', 'Azure DevOps', ''].map((h) => el('th', {}, h))));
+  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Started', 'Profile', 'What ran', 'Outcome', 'Azure DevOps', 'Actions'].map((h) => el('th', { scope: 'col' }, h)))));
+  const tb = el('tbody'); table.append(tb);
   for (const r of runs) {
     const t = r.totals;
     const outcome = t ? el('span', { class: 'totals' }, el('span', { class: 'passed' }, t.passed + ' passed'), t.failed ? el('span', { class: 'failed' }, t.failed + ' failed') : null, t.blocked ? el('span', { class: 'blocked' }, t.blocked + ' blocked') : null, t.skipped ? el('span', { class: 'skipped' }, t.skipped + ' skipped') : null)
-      : el('span', { class: r.status }, r.status === 'stopped' ? 'stopped, no results' : 'no results');
+      : el('span', { class: 'muted' }, r.status === 'stopped' ? 'Stopped, no results' : 'No results');
     const q = '?run=' + encodeURIComponent(r.id);
-    const devops = r.upload ? (r.upload.url ? el('a', { href: r.upload.url, target: '_blank', rel: 'noopener' }, 'Run #' + r.upload.runId + ' ↗') : 'Uploaded') : '';
-    table.append(el('tr', {},
-      el('td', {}, new Date(r.startedAt).toLocaleString()),
-      el('td', {}, r.profile || '.env'),
+    const devops = r.upload ? (r.upload.url ? el('a', { href: r.upload.url, target: '_blank', rel: 'noopener' }, 'Run #' + r.upload.runId + ' ↗') : 'Uploaded') : el('span', { class: 'muted' }, '–');
+    tb.append(el('tr', {},
+      el('td', { style: 'white-space:nowrap' }, new Date(r.startedAt).toLocaleString()),
+      el('td', {}, r.profile || '.env file'),
       el('td', {}, el('code', {}, r.args.slice(1).join(' ') || 'all')),
-      el('td', {}, outcome),
-      el('td', {}, devops),
+      el('td', {}, outcome), el('td', {}, devops),
       el('td', {}, el('div', { class: 'row' },
         t ? el('button', { class: 'btn', type: 'button', onclick: () => { viewRun = r.id; showTab('results'); } }, 'View') : null,
         t ? el('a', { class: 'btn', href: '/report' + q, target: '_blank', rel: 'noopener' }, 'Report ↗') : null,
-        t ? el('a', { class: 'btn', href: '/download/results.junit.xml' + q }, 'JUnit') : null,
-        t ? el('button', { class: 'btn', type: 'button', onclick: () => uploadRun(r.id).catch(fail) }, r.upload ? 'Upload again' : 'Upload to DevOps') : null,
-        el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Delete run', onclick: () => deleteRun(r.id).catch(fail) }, '×')))));
+        t ? el('button', { class: 'btn', type: 'button', onclick: () => uploadRun(r.id).catch(fail) }, r.upload ? 'Upload again' : 'Upload') : null,
+        el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Delete this run', title: 'Delete this run', onclick: () => deleteRun(r.id).catch(fail) }, '×')))));
   }
-  box.replaceChildren(table);
+  box.replaceChildren(el('div', { class: 'tablewrap' }, table));
 }
 async function uploadRun(id) {
-  if (!confirm('Upload run ' + id + ' to Azure DevOps as a new test run, using the profile in use?')) return;
+  if (!(await ask('Upload to Azure DevOps?', 'Run ' + id + ' is published as a new test run, using the profile in use now. Cases that were interrupted are left out.', 'Upload'))) return;
   const res = await api('/api/history/' + encodeURIComponent(id) + '/upload', 'POST', { plan: $('uploadPlan').value });
-  if (res.error) return toast(res.error);
-  $('log').textContent = ''; showStatus(res.run); showTab('run');
+  if (res.error) return toast(res.error, true);
+  $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; showStatus(res.run); showTab('run');
 }
 async function deleteRun(id) {
-  if (!confirm('Delete run ' + id + ' and its reports from this computer?')) return;
+  if (!(await ask('Delete this run?', 'Run ' + id + ' and its reports are removed from this computer.', 'Delete run', true))) return;
   await api('/api/history/' + encodeURIComponent(id), 'DELETE'); toast('Deleted'); await loadHistory();
 }
 $('refreshHistory').addEventListener('click', () => loadHistory().catch(fail));
@@ -474,46 +805,50 @@ async function loadCases(select) {
 function renderCaseList() {
   const list = $('caseList'); list.replaceChildren();
   if (!cases.length) list.append(el('p', { class: 'empty' }, 'No test cases in this folder yet.'));
-  for (const c of cases) list.append(el('button', { class: 'case', type: 'button', 'aria-current': editing && editing.file === c.file ? 'true' : 'false', onclick: () => openCase(c.file).catch(fail) },
-    '[' + c.id + '] ' + c.title, el('small', {}, c.error || (c.steps + ' step(s)' + (c.module ? ' · ' + c.module : '')))));
+  for (const c of cases) list.append(el('button', { class: 'item', type: 'button', 'aria-current': editing && editing.file === c.file ? 'true' : 'false', onclick: () => openCase(c.file).catch(fail) },
+    el('span', {}, c.title, el('small', {}, c.error || (c.id + ' · ' + c.steps + ' step(s)' + (c.module ? ' · ' + c.module : ''))))));
 }
 async function openCase(file) {
   editing = { file, tc: await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(file)) };
   renderCaseList(); renderCaseEditor();
 }
 function stepRow(step) {
-  const a = el('textarea', { rows: '2', placeholder: 'Action, e.g. Open Accounts payable > Vendors > All vendors', 'data-sa': '1' }); a.value = step.action || '';
-  const x = el('textarea', { rows: '2', placeholder: 'Expected result (optional)', 'data-se': '1' }); x.value = step.expected || '';
+  const a = el('textarea', { rows: '2', placeholder: 'What to do, e.g. Open Accounts payable > Vendors > All vendors', 'aria-label': 'Action', 'data-sa': '1' }); a.value = step.action || '';
+  const x = el('textarea', { rows: '2', placeholder: 'What you should see (optional, but it is what gets checked)', 'aria-label': 'Expected result', 'data-se': '1' }); x.value = step.expected || '';
   const row = el('div', { class: 'step' }, el('span', { class: 'num' }), a, x, el('div', { class: 'row' },
-    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move up', onclick: () => { if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); renumber(); } }, '↑'),
-    el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove step', onclick: () => { row.remove(); renumber(); } }, '×')));
+    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move step up', title: 'Move up', onclick: () => { if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); renumber(); } }, '↑'),
+    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move step down', title: 'Move down', onclick: () => { if (row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row); renumber(); } }, '↓'),
+    el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove step', title: 'Remove', onclick: () => { row.remove(); renumber(); } }, '×')));
   return row;
 }
 function renumber() { document.querySelectorAll('#steps .step .num').forEach((n, i) => { n.textContent = (i + 1) + '.'; }); }
 function input(id, label, value, opts = {}) {
   const i = el(opts.area ? 'textarea' : 'input', { id, type: 'text', placeholder: opts.placeholder || '', autocomplete: 'off' }); i.value = value == null ? '' : value;
-  return el('div', { class: 'field' }, el('label', { for: id }, label), i, opts.help ? el('div', { class: 'help' }, opts.help) : null);
+  return el('div', { class: 'field' }, el('label', { for: id }, label, opts.required ? el('span', { class: 'req', 'aria-label': 'required' }, '*') : null), i, opts.help ? el('div', { class: 'help' }, opts.help) : null);
 }
 function renderCaseEditor() {
   const ed = $('caseEditor'); ed.replaceChildren();
-  if (!editing) { ed.append(el('p', { class: 'empty' }, 'Pick a test case to edit, or create a new one. Steps are plain language: the agent reads them and drives F&O.')); return; }
+  if (!editing) { ed.append(el('div', { class: 'empty' }, el('p', {}, 'Pick a test case to edit, or create a new one.'), el('p', { class: 'small' }, 'Steps are written in plain language. The agent reads them and drives F&O the way a tester would.'))); return; }
   const tc = editing.tc;
-  ed.append(el('div', { class: 'actions' }, el('h3', {}, editing.file ? tc.title : 'New test case'),
-    editing.file ? el('button', { class: 'btn', type: 'button', onclick: () => runCase(tc.id) }, 'Run this case') : null,
+  ed.append(el('div', { class: 'actions', style: 'margin-bottom:1rem' }, el('h3', {}, editing.file ? tc.title : 'New test case'), el('span', { class: 'spacer' }),
+    editing.file ? el('button', { class: 'btn primary', type: 'button', onclick: () => runCase(tc.id) }, '▶ Run this case') : null,
     editing.file ? el('button', { class: 'btn', type: 'button', onclick: () => { editing = { file: null, tc: { ...tc, id: tc.id + '-COPY', title: tc.title + ' (copy)' } }; renderCaseList(); renderCaseEditor(); } }, 'Duplicate') : null,
     editing.file ? el('button', { class: 'btn danger', type: 'button', onclick: () => deleteCase().catch(fail) }, 'Delete') : null));
   const form = el('form', { id: 'caseForm' },
-    input('tcId', 'Id', tc.id, { placeholder: 'TC-VENDOR-001', help: editing.file ? 'Saved in ' + editing.file : 'Leave empty to derive it from the title.' }),
-    input('tcTitle', 'Title', tc.title),
-    input('tcModule', 'Module', tc.module, { placeholder: 'Accounts payable' }),
-    input('tcEntity', 'Legal entity', tc.legalEntity, { placeholder: 'Default from the profile', help: 'Navigation to another company is refused during the run.' }),
-    input('tcPriority', 'Priority (1-4)', tc.priority),
-    input('tcTags', 'Tags', (tc.tags || []).join(', '), { placeholder: 'smoke, vendor' }),
-    input('tcPre', 'Preconditions', tc.preconditions, { area: true }),
-    el('fieldset', {}, el('legend', {}, 'Steps'), el('div', { class: 'steps', id: 'steps' }, (tc.steps || []).map(stepRow)),
-      el('button', { class: 'btn', type: 'button', onclick: () => { $('steps').append(stepRow({})); renumber(); } }, '+ Add step')),
+    input('tcTitle', 'Title', tc.title, { required: true, placeholder: 'Create a vendor' }),
+    el('fieldset', { class: 'group' }, el('legend', {}, 'Steps'), el('p', { class: 'gdesc' }, 'One action per step. Add what you expect to see, so the agent can check it.'),
+      el('div', { class: 'steps', id: 'steps' }, (tc.steps || []).map(stepRow)),
+      el('button', { class: 'btn', type: 'button', onclick: () => { $('steps').append(stepRow({})); renumber(); $('steps').lastChild.querySelector('textarea').focus(); } }, '+ Add step')),
+    el('fieldset', { class: 'group' }, el('legend', {}, 'Details'),
+      input('tcModule', 'Module', tc.module, { placeholder: 'Accounts payable' }),
+      input('tcEntity', 'Legal entity', tc.legalEntity, { placeholder: 'Default from the profile', help: 'Navigation to another company is refused during the run.' }),
+      input('tcPre', 'Preconditions', tc.preconditions, { area: true, placeholder: 'Data or setup that must already exist' }),
+      el('details', { class: 'more' }, el('summary', {}, 'More details'),
+        input('tcId', 'Id', tc.id, { placeholder: 'TC-VENDOR-001', help: editing.file ? 'Saved in ' + editing.file : 'Leave empty to derive it from the title.' }),
+        input('tcPriority', 'Priority (1 to 4)', tc.priority, { help: '1 is the most urgent.' }),
+        input('tcTags', 'Tags', (tc.tags || []).join(', '), { placeholder: 'smoke, vendor' }))),
     el('div', { class: 'err', id: 'caseErr', role: 'alert' }),
-    el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit' }, 'Save test case')));
+    el('div', { class: 'savebar' }, el('span', { class: 'spacer' }), el('button', { class: 'btn primary', type: 'submit' }, 'Save test case')));
   form.addEventListener('submit', (ev) => { ev.preventDefault(); saveCase().catch((e) => { $('caseErr').textContent = e.message; }); });
   ed.append(form); renumber();
 }
@@ -523,21 +858,23 @@ async function saveCase() {
     tags: $('tcTags').value.split(',').map((t) => t.trim()).filter(Boolean), preconditions: $('tcPre').value, steps };
   const q = '?dir=' + encodeURIComponent(caseDir()) + (editing.file ? '&file=' + encodeURIComponent(editing.file) : '');
   const res = await api('/api/testcases' + q, 'PUT', { testCase });
-  toast('Saved'); editing = null; await loadCases(res.file);
+  toast('Saved'); editing = null; runCasesLoaded = false; await loadCases(res.file);
 }
 async function deleteCase() {
-  if (!confirm('Delete the test case "' + editing.tc.title + '" (' + editing.file + ')?')) return;
+  if (!(await ask('Delete this test case?', '"' + editing.tc.title + '" (' + editing.file + ') is removed from the folder.', 'Delete test case', true))) return;
   await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(editing.file), 'DELETE');
-  toast('Deleted'); editing = null; await loadCases();
+  toast('Deleted'); editing = null; runCasesLoaded = false; await loadCases();
 }
-function runCase(id) {
+async function runCase(id) {
   document.querySelector('input[name=source][value=local]').checked = true;
   $('local').value = caseDir();
-  const sel = $('caseId'); sel.replaceChildren(el('option', { value: id }, id)); sel.value = id;
+  syncSource();
+  await loadRunCases(id);
   showTab('run');
 }
 $('caseDirLoad').addEventListener('click', () => { editing = null; loadCases().catch(fail); });
-$('caseNew').addEventListener('click', () => { editing = { file: null, tc: { id: '', title: '', steps: [{ action: 'Sign in to D365 F&O and open the default dashboard', expected: 'The dashboard is shown' }], tags: [] } }; renderCaseList(); renderCaseEditor(); });
+$('caseDir').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('caseDirLoad').click(); });
+$('caseNew').addEventListener('click', () => { editing = { file: null, tc: { id: '', title: '', steps: [{ action: 'Sign in to D365 F&O and open the default dashboard', expected: 'The dashboard is shown' }], tags: [] } }; renderCaseList(); renderCaseEditor(); $('tcTitle').focus(); });
 
 refresh().catch(fail);
 initRun();

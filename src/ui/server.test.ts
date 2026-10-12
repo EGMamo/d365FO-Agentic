@@ -380,3 +380,47 @@ describe('Open WebUI tool server', () => {
     assert.equal((await tcall('/runs/current/stop', { method: 'POST' })).status, 200);
   });
 });
+
+describe('settings handed to the commands the app starts', () => {
+  // Stands in for the real CLI: reports which settings it can see in its environment.
+  const FAKE_CLI = "console.log('PROFILE=' + process.env.D365FO_PROFILE + ' FROM_FILE=' + (process.env.D365_BASE_URL ?? 'unset') + ' REAL=' + (process.env.REAL_VAR ?? 'unset'));";
+  let dir = '';
+  let envUi: RunningUi;
+  const ecall = (path: string, method = 'GET', body?: unknown): Promise<Response> =>
+    fetch(`http://127.0.0.1:${envUi.port}${path}`, {
+      method,
+      headers: { cookie: `d365fo_ui=${envUi.token}`, 'x-requested-with': 'd365fo-ui', ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'd365ui-env-'));
+    await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
+    // The app itself read D365_BASE_URL from its own settings file; REAL_VAR came from the real environment.
+    const appEnv = { ...process.env, D365_BASE_URL: 'https://stale.example', REAL_VAR: 'kept' };
+    const childEnv = (): NodeJS.ProcessEnv => {
+      const { D365_BASE_URL: _fromFile, ...rest } = appEnv;
+      return rest;
+    };
+    envUi = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, childEnv });
+    assert.equal((await ecall('/api/profiles', 'POST', { name: 'Other', entries: [{ key: 'D365_BASE_URL', value: 'https://other.example' }] })).status, 201);
+  });
+  after(async () => {
+    await envUi.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('does not pass on what the app loaded from its own settings file, so the chosen profile is the one read', async () => {
+    const check = (await (await ecall('/api/profiles/Other/check', 'POST')).json()) as { output: string };
+    assert.equal(check.output, 'PROFILE=Other FROM_FILE=unset REAL=kept');
+
+    assert.equal((await ecall('/api/active', 'POST', { name: 'Other' })).status, 200);
+    assert.equal((await ecall('/api/run', 'POST', { source: 'local', local: 'cases', dryRun: true })).status, 200);
+    let lines: string[] = [];
+    for (let i = 0; i < 100 && !lines.some((l) => l.startsWith('PROFILE=')); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      lines = ((await (await ecall('/api/run')).json()) as { lines: string[] }).lines;
+    }
+    assert.ok(lines.includes('PROFILE=Other FROM_FILE=unset REAL=kept'), lines.join(' | '));
+  });
+});

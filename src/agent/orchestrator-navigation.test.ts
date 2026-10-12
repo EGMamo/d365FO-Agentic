@@ -32,7 +32,7 @@ async function run(turns: LlmCompleteResponse[], known?: KbEntry, over: Partial<
     async listTools() { return []; },
     async callTool(_s: string, tool: string, args: Record<string, unknown>) { h.calls.push({ tool, args }); return { content: `${tool} ok`, isError: false }; },
   };
-  const kb = { retrieve: () => [], recipeFor: () => known, upsert(e: Record<string, unknown>) { h.upserts.push(e); }, async save() {} };
+  const kb = { retrieve: () => [], recipeFor: () => known, upsert(e: Record<string, unknown>) { h.upserts.push(e); }, async save() {}, recordOutcome() { return 0; } };
   const res = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
   return { ...h, outcome: res.outcome };
 }

@@ -33,7 +33,7 @@ async function run(turns: LlmCompleteResponse[], over: Partial<AppConfig> = {}, 
     },
   };
   const mcp = { async listTools() { return []; }, callTool: callTool ?? (async () => ({ content: 'page', isError: false })) };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
+  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
   const result = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never).runTestCase(testCase);
   return { result, toolResults, dir };
 }

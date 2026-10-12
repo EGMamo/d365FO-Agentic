@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { AppConfig } from '../config/index.js';
-import type { StepResult, TestCase, TestResult } from '../testing/types.js';
+import type { TestCase, TestResult } from '../testing/types.js';
 import { fetchWithResilience } from '../utils/http.js';
 
 /**
@@ -107,7 +107,10 @@ export class AzureDevOpsClient {
    * Creates a test run in the configured Test Plan, publishes per-case results,
    * uploads any artifacts as attachments, and marks the run complete.
    */
-  async publishResults(planId: string, results: TestResult[]): Promise<{ runId: number; url: string }> {
+  async publishResults(planId: string, all: TestResult[]): Promise<{ runId: number; url: string }> {
+    // A case stopped by Ctrl+C has no verdict, so it is never published.
+    const results = all.filter((r) => !r.interrupted);
+    if (!results.length) throw new Error('Nothing to upload: no case finished before the run was interrupted.');
     const startedDate = results[0]?.startedAt ?? new Date().toISOString();
     const completedDate = results.at(-1)?.finishedAt ?? new Date().toISOString();
     const run = await this.request<{ id: number; url: string }>(

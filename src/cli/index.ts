@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { activeModel, ignoredModelHint, loadConfig, validateForRun } from '../config/index.js';
@@ -15,13 +15,15 @@ import {
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
-import { checkSession, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
+import { checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
-import { checkModelEndpoint } from '../llm/endpoint.js';
-import { isLoopbackUrl } from '../llm/index.js';
+import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, checkModelEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
+import { createLlmProvider, isLoopbackUrl } from '../llm/index.js';
+import { generateTestCases } from '../testing/generate.js';
+import { TestCaseFiles } from '../testing/store.js';
 import { D365ODataClient, hasAppRegistration } from '../d365fo/entra.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
-import { profileSelection } from '../config/load-env.js';
+import { environmentForChild, overriddenKeys, profileSelection } from '../config/load-env.js';
 import { agentHome, toolTokenFile } from '../profiles/paths.js';
 import { DEFAULT_PORT, findRunningUi, isLoopback, loadOrCreateToken, loadOrCreateToolToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
@@ -44,9 +46,33 @@ program
     const issues = validateForRun(cfg);
     for (const p of dotenvFileProblems()) issues.push(p.message);
     console.log(profileSelection.name ? `Settings profile: ${profileSelection.name}` : 'Settings profile: none (using .env)');
+    if (overriddenKeys.length) {
+      console.log(`  WARNING: ${overriddenKeys.join(', ')} ${overriddenKeys.length === 1 ? 'is' : 'are'} also set in this computer's environment, and that value is used instead of the one in ${profileSelection.name ? 'the profile' : '.env'}.`);
+    }
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     const modelHint = ignoredModelHint(cfg);
     if (modelHint) console.log(`  WARNING: ${modelHint}`);
+    if (cfg.LLM_PROVIDER === 'anthropic') {
+      const custom = normalizeAnthropicBaseUrl(cfg.ANTHROPIC_BASE_URL);
+      if (!custom) {
+        console.log(`Claude API URL: default (${ANTHROPIC_DEFAULT_BASE_URL})`);
+      } else if (!/^https?:\/\//i.test(custom)) {
+        console.log(`Claude API URL: INVALID (${custom})`);
+      } else {
+        const ep = await checkAnthropicEndpoint(custom, { apiKey: cfg.ANTHROPIC_API_KEY, authToken: cfg.ANTHROPIC_AUTH_TOKEN });
+        if (!ep.reachable) {
+          console.log(`Claude API URL: NOT REACHABLE at ${custom} (${ep.detail})`);
+          issues.push(`Cannot reach the custom Claude API URL ${custom} (${ep.detail}). Check the address, VPN or proxy.`);
+        } else if (!ep.authorized) {
+          console.log(`Claude API URL: reachable at ${custom}, but ${ep.detail}`);
+          issues.push(`The custom Claude API URL refused the credentials: check ANTHROPIC_API_KEY, or set ANTHROPIC_AUTH_TOKEN if the gateway expects a bearer token.`);
+        } else {
+          console.log(`Claude API URL: reachable at ${custom} (${ep.detail})`);
+          if (ep.models.length && !ep.models.includes(cfg.LLM_MODEL)) console.log(`  WARNING: model '${cfg.LLM_MODEL}' is not in the server's list: ${ep.models.slice(0, 8).join(', ')}`);
+        }
+        if (/^http:\/\//i.test(custom) && !isLoopbackUrl(custom)) console.log('  WARNING: this address is plain http, so the key and the page content sent to the model are not encrypted. Use https.');
+      }
+    }
     if (cfg.LLM_PROVIDER === 'openai-compatible') {
       const url = cfg.OPENAI_COMPATIBLE_BASE_URL;
       const ep = await checkModelEndpoint(url, cfg.OPENAI_COMPATIBLE_API_KEY);
@@ -171,19 +197,31 @@ program
   .option('--plan <id>', 'Azure DevOps test plan id')
   .option('--suite <id>', 'Azure DevOps test suite id')
   .option('--local <dir>', 'Load local test cases from a directory instead')
-  .option('--case <id>', 'Filter to a single test-case id')
+  .option('--case <ids>', 'Only these test-case ids (comma-separated)')
+  .option('--tag <tags>', 'Only cases with one of these tags (comma-separated, repeatable)', collect, [] as string[])
+  .option('--module <names>', 'Only cases whose module or area contains one of these (comma-separated, repeatable)', collect, [] as string[])
+  .option('--max-priority <n>', 'Only cases with this priority or more urgent (1 = highest)', intArg)
+  .option('--sort-by-priority', 'Run the most urgent cases first instead of in suite or file order')
+  .option('--fail-on <outcomes>', 'Exit with code 2 when any case ends with one of these outcomes (comma-separated, e.g. failed,blocked)')
   .option('--dry-run', 'Skip state-changing browser actions (click/type/fill/...); navigation and snapshots still run')
   .option('--upload', 'Upload results to Azure DevOps after the run')
-  .option('--reloop-max-retries <n>', 'Retries per case after first attempt', Number.parseInt)
+  .option('--probe-session', 'Before running tests, verify the saved D365 session with one HTTP probe and fail fast if it is expired')
+  .option('--reloop-max-retries <n>', 'Retries per case after first attempt', intArg)
   .option('--reloop-retry-on <csv>', 'Outcomes to retry (comma-separated)', 'failed,blocked')
-  .option('--reloop-cooldown-ms <ms>', 'Delay between retries in milliseconds', Number.parseInt)
+  .option('--reloop-cooldown-ms <ms>', 'Delay between retries in milliseconds', intArg)
   .action(async (opts: {
     plan?: string;
     suite?: string;
     local?: string;
     case?: string;
+    tag: string[];
+    module: string[];
+    maxPriority?: number;
+    sortByPriority?: boolean;
+    failOn?: string;
     dryRun?: boolean;
     upload?: boolean;
+    probeSession?: boolean;
     reloopMaxRetries?: number;
     reloopRetryOn?: string;
     reloopCooldownMs?: number;
@@ -205,6 +243,11 @@ program
           ['passed', 'failed', 'skipped', 'blocked'].includes(x),
         );
     }
+    const failOn = parseOutcomes(opts.failOn);
+    if (failOn === null) {
+      console.error('config: --fail-on takes a comma-separated list of passed, failed, skipped, blocked');
+      process.exit(1);
+    }
     const issues = validateForRun(cfg);
     // A credential cut off at a "#" would be typed into the sign-in page and can lock the account after a few tries.
     for (const p of dotenvFileProblems()) (p.secret ? issues : warnings).push(p.message);
@@ -217,26 +260,72 @@ program
     const modelHint = ignoredModelHint(cfg);
     if (modelHint) console.warn(`warning: ${modelHint}`);
 
-    const execution = await executeTestRun(cfg, {
-      plan: opts.plan,
-      suite: opts.suite,
-      local: opts.local,
-      caseId: opts.case,
-      dryRun: cfg.AGENT_DRY_RUN,
-      upload: opts.upload,
-      reloopMaxRetries: cfg.AGENT_RELOOP_MAX_RETRIES,
-      reloopRetryOn: cfg.AGENT_RELOOP_RETRY_ON,
-      reloopCooldownMs: cfg.AGENT_RELOOP_COOLDOWN_MS,
-    });
+    if (opts.probeSession) {
+      const probe = await probeSession(cfg);
+      console.log(`D365 session probe: ${probe.state.toUpperCase()} - ${probe.detail}`);
+      const stop = probeBlocksRun(probe);
+      if (stop) {
+        console.error(stop);
+        process.exit(1);
+      }
+    }
+
+    // First Ctrl+C stops the current case (marked interrupted) and writes reports; a second one exits at once.
+    const interrupt = new AbortController();
+    // SIGTERM (a cancelled CI job, `kill`) is handled the same way, with exit code 143.
+    let stopCode = 130;
+    const onStop = (sig: NodeJS.Signals): void => {
+      const code = sig === 'SIGTERM' ? 143 : 130;
+      if (interrupt.signal.aborted) process.exit(code);
+      stopCode = code;
+      interrupt.abort();
+      console.error(`\nInterrupted (${sig}): stopping the current case, then writing reports. ${sig === 'SIGTERM' ? 'Send it again' : 'Press Ctrl+C again'} to quit now.`);
+    };
+    process.on('SIGINT', onStop);
+    process.on('SIGTERM', onStop);
+    let execution: Awaited<ReturnType<typeof executeTestRun>>;
+    try {
+      execution = await executeTestRun(cfg, {
+        plan: opts.plan,
+        suite: opts.suite,
+        local: opts.local,
+        caseId: opts.case,
+        tags: opts.tag,
+        modules: opts.module,
+        maxPriority: opts.maxPriority,
+        sortByPriority: opts.sortByPriority,
+        signal: interrupt.signal,
+        dryRun: cfg.AGENT_DRY_RUN,
+        upload: opts.upload,
+        reloopMaxRetries: cfg.AGENT_RELOOP_MAX_RETRIES,
+        reloopRetryOn: cfg.AGENT_RELOOP_RETRY_ON,
+        reloopCooldownMs: cfg.AGENT_RELOOP_COOLDOWN_MS,
+      });
+    } finally {
+      process.off('SIGINT', onStop);
+      process.off('SIGTERM', onStop);
+    }
     if (execution.cases.length === 0) {
-      console.log('No test cases matched.');
+      // An empty selection is almost always a typo in a filter; exiting 0 would show green in CI with nothing tested.
+      console.error('No test cases matched the source and filters; nothing was run.');
+      process.exitCode = 1;
       return;
     }
     console.log(`\nReports:\n  ${execution.reportPaths.html}\n  ${execution.reportPaths.json}\n  ${execution.reportPaths.junit}`);
-    if (execution.aborted) {
+    if (execution.interrupted) {
+      console.error('\nThe run was interrupted; the case in flight is marked interrupted and the remaining cases were not run.');
+      if (opts.upload) console.error('Results were not uploaded to Azure DevOps.');
+      process.exitCode = stopCode;
+    } else if (execution.aborted) {
       console.error(`\nThe run was aborted by an LLM provider problem, not by the tests: ${execution.aborted}`);
       if (opts.upload) console.error('Results were not uploaded to Azure DevOps. Fix the cause and run again.');
       process.exitCode = 1;
+    } else if (failOn?.length) {
+      const hits = execution.results.filter((r) => failOn.includes(r.outcome));
+      if (hits.length) {
+        console.error(`\n${hits.length} case(s) ended ${[...new Set(hits.map((r) => r.outcome))].join('/')} (--fail-on ${failOn.join(',')}).`);
+        process.exitCode = 2;
+      }
     }
     if (execution.upload) console.log(`Uploaded to Azure DevOps run #${execution.upload.runId}: ${execution.upload.url}`);
   });
@@ -271,13 +360,95 @@ program
   });
 
 program
+  .command('generate')
+  .description('Draft local test cases from a plain-language description with the configured LLM')
+  .argument('<description...>', 'What to test, e.g. "create a vendor and post an invoice for it"')
+  .option('--dir <dir>', 'Folder (inside the current folder) to save the cases in', 'test-cases')
+  .option('--count <n>', 'How many cases to draft (1-10)', intArg, 1)
+  .option('--module <name>', 'D365 F&O module, e.g. "Accounts payable"')
+  .option('--legal-entity <code>', 'Company to test in, e.g. USMF')
+  .option('--dry-run', 'Print the drafts instead of saving them')
+  .action(async (words: string[], opts: { dir: string; count: number; module?: string; legalEntity?: string; dryRun?: boolean }) => {
+    const cfg = loadConfig();
+    const description = words.join(' ');
+    const files = new TestCaseFiles(process.cwd());
+    const existing = await files.list(opts.dir);
+    const kb = new KnowledgeBase(cfg.KB_DIR);
+    await kb.load();
+    const llm = createLlmProvider(cfg);
+    console.log(`Drafting with ${llm.name} (${activeModel(cfg)})…`);
+    const res = await generateTestCases(llm, description, {
+      count: Number.isNaN(opts.count) ? 1 : opts.count,
+      ...(opts.module ? { module: opts.module } : {}),
+      ...(opts.legalEntity ? { legalEntity: opts.legalEntity } : {}),
+      knowledge: kb.retrieve(description, [], 6, opts.module),
+      existingIds: existing.map((c) => c.id),
+    });
+    for (const r of res.rejected) console.error(`! ${r}`);
+    const wanted = Math.min(10, Math.max(1, opts.count));
+    if (res.cases.length && res.cases.length < wanted) console.error(`! Only ${res.cases.length} of ${wanted} test cases were drafted; run generate again for more.`);
+    if (!res.cases.length) {
+      console.error('No test case was drafted.');
+      process.exitCode = 1;
+      return;
+    }
+    const savedIds: string[] = [];
+    for (const tc of res.cases) {
+      if (opts.dryRun) {
+        console.log(JSON.stringify(tc, null, 2));
+        continue;
+      }
+      try {
+        const saved = await files.save(opts.dir, tc);
+        savedIds.push(tc.id);
+        console.log(`Saved ${join(opts.dir, saved.file)}: ${tc.title} (${tc.steps.length} steps)`);
+      } catch (e) {
+        console.error(`! Could not save ${tc.id} (${tc.title}): ${(e as Error).message}`);
+        process.exitCode = 1;
+      }
+    }
+    if (savedIds.length) console.log(`Review the steps, then run them with: d365fo-agent run --local ${opts.dir} --case ${savedIds.join(',')}`);
+  });
+
+program
   .command('learn')
-  .description('Dump the local knowledge base as JSON')
+  .description('Inspect or maintain the local knowledge base (default: dump it as JSON)')
   .option('--output <file>', 'Write to file instead of stdout')
-  .action(async (opts: { output?: string }) => {
+  .option('--stats', 'Show counts by kind and module, and how many known-good paths have gone stale')
+  .option('--search <query>', 'Show the entries the agent would retrieve for this text, with scores')
+  .option('--module <name>', 'Module hint for --search')
+  .option('--tag <tags>', 'Tags for --search, as on the test case (comma-separated, repeatable)', collect, [] as string[])
+  .option('--top <n>', 'With --search: how many entries to show (default 5, what a run retrieves)', intArg)
+  .option('--prune', 'Remove unreliable entries and stale known-good paths')
+  .option('--min-failures <n>', 'With --prune: remove entries that failed at least this often and more often than they succeeded (default 3)', intArg)
+  .option('--max-age-days <n>', 'With --prune: also remove never-confirmed entries older than this', intArg)
+  .action(async (opts: { output?: string; stats?: boolean; search?: string; module?: string; tag: string[]; top?: number; prune?: boolean; minFailures?: number; maxAgeDays?: number }) => {
     const cfg = loadConfig();
     const kb = new KnowledgeBase(cfg.KB_DIR);
     await kb.load();
+    if (opts.prune) {
+      const removed = kb.prune({
+        ...(opts.minFailures !== undefined && !Number.isNaN(opts.minFailures) ? { minFailures: opts.minFailures } : {}),
+        ...(opts.maxAgeDays !== undefined && !Number.isNaN(opts.maxAgeDays) ? { maxAgeDays: opts.maxAgeDays } : {}),
+      });
+      if (removed.length) await kb.save();
+      console.log(`Removed ${removed.length} entr${removed.length === 1 ? 'y' : 'ies'}.`);
+      for (const e of removed) console.log(`  - [${e.kind}] ${e.summary} (${e.successCount}✓ ${e.failureCount}✗)`);
+    }
+    if (opts.stats) {
+      const s = kb.stats();
+      console.log(`Knowledge base: ${s.total} entr${s.total === 1 ? 'y' : 'ies'} in ${cfg.KB_DIR}`);
+      console.log(`  by kind:   ${Object.entries(s.byKind).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
+      console.log(`  by module: ${Object.entries(s.byModule).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
+      console.log(`  known-good paths: ${s.knownPaths} (${s.staleKnownPaths} stale)`);
+    }
+    if (opts.search !== undefined) {
+      const tags = opts.tag.flatMap((t) => t.split(',')).map((t) => t.trim()).filter(Boolean);
+      const hits = kb.search(opts.search, tags, Math.max(1, opts.top ?? 5), opts.module);
+      if (!hits.length) console.log('No matching entries.');
+      for (const h of hits) console.log(`${h.score.toFixed(2).padStart(6)}  [${h.entry.kind}] ${h.entry.summary}${h.entry.module ? ` (${h.entry.module})` : ''}`);
+    }
+    if (opts.prune || opts.stats || opts.search !== undefined) return;
     const data = JSON.stringify(kb.all(), null, 2);
     if (opts.output) {
       await writeFile(resolve(opts.output), data);
@@ -287,6 +458,25 @@ program
     }
   });
 
+/** Whole-number option. Commander passes the previous value as a second argument, so `Number.parseInt` cannot be used directly. */
+function intArg(value: string): number {
+  if (!/^-?\d+$/.test(value.trim())) throw new InvalidArgumentError('Expected a whole number.');
+  return Number.parseInt(value, 10);
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+/** undefined when not given, null when it names an unknown outcome. */
+function parseOutcomes(csv: string | undefined): TestResult['outcome'][] | undefined | null {
+  if (csv === undefined) return undefined;
+  const all: TestResult['outcome'][] = ['passed', 'failed', 'skipped', 'blocked'];
+  const list = csv.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (!list.length || list.some((x) => !all.includes(x as TestResult['outcome']))) return null;
+  return list as TestResult['outcome'][];
+}
+
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
   return discoverTestCases(cfg, opts);
 }
@@ -294,7 +484,7 @@ async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: strin
 program
   .command('ui')
   .description('Start the local settings web app and open it in your browser')
-  .option('--port <n>', `Port to listen on (default ${DEFAULT_PORT})`, Number.parseInt)
+  .option('--port <n>', `Port to listen on (default ${DEFAULT_PORT})`, intArg)
   .option('--no-open', 'Do not open the browser')
   .option('--host <address>', 'Address to listen on (default 127.0.0.1). Use 0.0.0.0 only so Open WebUI in Docker on Linux can reach the tool server; the app itself still answers this computer only')
   .action(async (opts: { port?: number; open: boolean; host?: string }) => {
@@ -305,7 +495,7 @@ program
       if (opts.open) await openBrowser(existing);
       return;
     }
-    const ui = await startUiServer({ home, port: opts.port, host: opts.host });
+    const ui = await startUiServer({ home, port: opts.port, host: opts.host, childEnv: environmentForChild });
     console.log(`Settings app running at ${ui.url} (this computer only). Press Ctrl+C to stop.`);
     console.log(`Profiles are stored in ${home}`);
     console.log(`Open WebUI tool server: ${ui.url}tools (run "d365fo-agent openwebui" for the key and setup steps)`);
@@ -319,7 +509,7 @@ program
 program
   .command('openwebui')
   .description('Show the Open WebUI tool-server address and key for the settings app')
-  .option('--port <n>', `Port the settings app uses (default ${DEFAULT_PORT})`, Number.parseInt)
+  .option('--port <n>', `Port the settings app uses (default ${DEFAULT_PORT})`, intArg)
   .action(async (opts: { port?: number }) => {
     const home = agentHome();
     const key = await loadOrCreateToolToken(home);
@@ -354,7 +544,7 @@ program
       if (process.platform === 'linux') console.log('  On Linux, Open WebUI in Docker reaches it only if it was started with --host 0.0.0.0 (as this command does).');
     } else {
       // On Linux the container reaches the host through the Docker bridge, not loopback; only the key-protected /tools routes answer there.
-      ui = await startUiServer({ home, port: opts.port, host: process.platform === 'linux' ? '0.0.0.0' : undefined });
+      ui = await startUiServer({ home, port: opts.port, host: process.platform === 'linux' ? '0.0.0.0' : undefined, childEnv: environmentForChild });
       toolPort = ui.port;
       appUrl = ui.openUrl;
       console.log(`Settings app running at ${ui.url}`);
@@ -419,6 +609,3 @@ program.parseAsync(process.argv).catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
-// Silence: this helper keeps `join` imported when only used in one branch.
-void join;
