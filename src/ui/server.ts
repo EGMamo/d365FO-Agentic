@@ -15,6 +15,10 @@ import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { REPORT_FILES, RunHistory, type ReportFile } from './history.js';
 import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { callTool, chatTools, chatTurn, parseHistory } from './chat.js';
+import { parseConfig, type AppConfig } from '../config/index.js';
+import { createLlmProvider } from '../llm/index.js';
+import type { LlmProvider } from '../llm/types.js';
 import { PageMap } from '../knowledge/page-map.js';
 import type { TestResult } from '../testing/types.js';
 
@@ -59,6 +63,8 @@ export interface UiServerOptions {
    * Defaults to this process's environment.
    */
   childEnv?: () => NodeJS.ProcessEnv;
+  /** Builds the chat model from the profile in use. Defaults to the provider the profile selects; tests pass a fake. */
+  chatProvider?: (cfg: AppConfig) => LlmProvider;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -499,6 +505,30 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         if (!m[2] && method === 'DELETE') {
           await store.delete(name);
           return send(res, 200, { deleted: name });
+        }
+      }
+      if (method === 'POST' && url.pathname === '/api/chat') {
+        const history = parseHistory((await readJson(req)).messages);
+        if (!history) return send(res, 400, { error: 'Type a message first.' });
+        const active = await store.getActive();
+        if (!active) return send(res, 400, { error: 'Choose a profile on the Setup tab first: the chat uses its AI model.' });
+        let provider: LlmProvider;
+        try {
+          // Same order as a run: the computer's real environment wins over the profile.
+          const env = Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value]));
+          provider = (opts.chatProvider ?? createLlmProvider)(parseConfig({ ...env, ...childEnv() }));
+        } catch (e) {
+          return send(res, 400, { error: `The AI model of "${active}" is not set up: ${(e as Error).message.split('\n')[0]}` });
+        }
+        const base = `http://127.0.0.1:${port}${TOOLS_PREFIX}`;
+        const set = chatTools(openApiSpec(base));
+        try {
+          return send(res, 200, await chatTurn(provider, history, set.tools, (name, args) => callTool(set, base, toolToken, name, args)));
+        } catch (e) {
+          const secrets = await profileSecrets(store, active);
+          let msg = (e as Error).message;
+          for (const s of secrets) msg = msg.split(s).join('***');
+          return send(res, 502, { error: `The AI model did not answer: ${msg}` });
         }
       }
       if (method === 'GET' && url.pathname === '/api/cases') {
