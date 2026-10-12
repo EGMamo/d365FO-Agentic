@@ -102,7 +102,7 @@ async function startOpenWebUi(home) {
   const { parseConfig } = await lib('config/index.js');
   const paths = { uv: uvPath(), dataRoot: app.getPath('userData') };
   if (!(await owui.isInstalled(paths))) {
-    status('Setting up the chat for the first time. This downloads over 1 GB and takes a few minutes; later starts take under a minute.');
+    status('Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.');
     await owui.install(paths, (line) => status(undefined, line));
   }
   // The chat model Open WebUI starts with, from the profile in use (used on Open WebUI's first start).

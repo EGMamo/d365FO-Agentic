@@ -1,31 +1,50 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parseConfig } from '../config/index.js';
-import { chatConnection, install, isInstalled, layout, OPENWEBUI_VERSION, serveEnv } from './openwebui.js';
+import { chatConnection, DISABLED_FEATURES, EXCLUDED_PACKAGES, INSTALL_VARIANT, install, isInstalled, layout, OPENWEBUI_VERSION, overridesFile, serveEnv } from './openwebui.js';
 
 describe('desktop Open WebUI', () => {
   it('installs a pinned Open WebUI with uv into the app folder, and remembers the version', async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), 'owui-'));
     const paths = { uv: '/bin/uv', dataRoot, platform: 'linux' as const };
-    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
-    await install(paths, () => {}, async (_cmd, args, env) => {
-      calls.push({ args, env });
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; cwd?: string }> = [];
+    await install(paths, () => {}, async (_cmd, args, env, _onLine, cwd) => {
+      calls.push({ args, env, cwd });
       return 0;
     });
     assert.equal(calls[0].args[0], 'venv');
     assert.ok(calls[1].args.includes(`open-webui==${OPENWEBUI_VERSION}`));
     assert.ok(calls[0].args.includes('--managed-python'));
-    assert.ok(calls[1].args.includes('--torch-backend'), 'CPU PyTorch on Linux');
+    assert.ok(calls[1].args.includes('--overrides') && calls[1].args.includes('typer'));
+    assert.equal(calls[1].args[calls[1].args.indexOf('--overrides') + 1], 'overrides.txt', 'a bare name: uv cannot read an overrides path with a space');
+    assert.equal(calls[1].cwd, join(dataRoot, 'openwebui'));
+    assert.ok(readFileSync(join(dataRoot, 'openwebui', 'overrides.txt'), 'utf8').includes("torch ; sys_platform == 'never'"));
     assert.equal(calls[1].env.UV_PYTHON_INSTALL_DIR, join(dataRoot, 'openwebui', 'python'));
     assert.equal(await isInstalled(paths), false, 'no executable yet');
     const l = layout(paths);
     await mkdir(join(l.venv, 'bin'), { recursive: true });
     await writeFile(l.exe, '');
     assert.equal(await isInstalled(paths), true);
+    await writeFile(l.marker, JSON.stringify({ version: OPENWEBUI_VERSION }));
+    assert.equal(await isInstalled(paths), false, 'an install from before the slim variant is replaced');
+    await writeFile(l.marker, JSON.stringify({ version: OPENWEBUI_VERSION, variant: INSTALL_VARIANT }));
+    assert.equal(await isInstalled(paths), true);
     assert.equal(await isInstalled(paths, '9.9.9'), false, 'a newer pin reinstalls');
+  });
+
+  it('leaves out the heavy packages and switches off unused features', () => {
+    const lines = overridesFile().trim().split('\n');
+    assert.equal(lines.length, EXCLUDED_PACKAGES.length);
+    assert.ok(lines.every((l) => l.endsWith("; sys_platform == 'never'")));
+    const env = serveEnv({ dataDir: '/d', toolUrl: 'u', toolKey: 'k' }, {});
+    assert.equal(env.USE_SLIM_DOCKER, 'true');
+    for (const f of DISABLED_FEATURES) assert.equal(env[f], 'False', f);
+    assert.notEqual(env.ENABLE_OPENAI_API, 'False', 'the chat model connection stays on');
+    assert.ok(!DISABLED_FEATURES.includes('ENABLE_OPENAI_API'));
   });
 
   it('stops with a clear message when uv fails', async () => {

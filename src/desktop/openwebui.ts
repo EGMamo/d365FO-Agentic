@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import type { AppConfig } from '../config/index.js';
@@ -13,6 +13,36 @@ import type { AppConfig } from '../config/index.js';
  */
 export const OPENWEBUI_VERSION = '0.11.4';
 export const PYTHON_VERSION = '3.11';
+/** Bump when the set of installed packages changes, so an older install is replaced. */
+export const INSTALL_VARIANT = 'slim-1';
+
+/**
+ * Packages left out of the install. They are Open WebUI's local AI stack (PyTorch and its GPU libraries,
+ * embeddings, speech and image recognition, a bundled vector database) and cloud storage clients, none of which a
+ * test chat that talks to a hosted or local model needs. Open WebUI's own slim mode (USE_SLIM_DOCKER) skips the
+ * code that would import them. Leaving them out took the Linux install from 7.1 GB to 0.66 GB.
+ */
+export const EXCLUDED_PACKAGES = [
+  'torch', 'accelerate', 'einops', 'sentence-transformers', 'sentencepiece', 'transformers',
+  'chromadb', 'onnxruntime', 'opencv-python-headless', 'pyarrow', 'rapidocr', 'faster-whisper',
+  'azure-ai-documentintelligence', 'azure-storage-blob', 'boto3', 'google-cloud-storage', 'opensearch-py',
+];
+
+/** A uv overrides file: a requirement with a marker that is never true is dropped from the resolution, with everything only it needed. */
+export const overridesFile = (): string => `${EXCLUDED_PACKAGES.map((n) => `${n} ; sys_platform == 'never'`).join('\n')}\n`;
+
+/**
+ * Open WebUI features switched off for the desktop app. They are read on Open WebUI's first start; they hide what a
+ * test chat does not use (sharing, team spaces, image and code tools, memories, cloud drives, extra model calls).
+ */
+export const DISABLED_FEATURES = [
+  'ENABLE_COMMUNITY_SHARING', 'ENABLE_CHANNELS', 'ENABLE_NOTES', 'ENABLE_CALENDAR', 'ENABLE_FOLDERS', 'ENABLE_AUTOMATIONS',
+  'ENABLE_USER_WEBHOOKS', 'ENABLE_WEB_SEARCH', 'ENABLE_IMAGE_GENERATION', 'ENABLE_IMAGE_EDIT', 'ENABLE_CODE_EXECUTION',
+  'ENABLE_CODE_INTERPRETER', 'ENABLE_LOCAL_WEB_FETCH', 'ENABLE_MEMORIES', 'ENABLE_TAGGING', 'ENABLE_TAGS_GENERATION',
+  'ENABLE_TITLE_GENERATION', 'ENABLE_FOLLOW_UP_GENERATION', 'ENABLE_AUTOCOMPLETE_GENERATION', 'ENABLE_EVALUATION_ARENA_MODELS',
+  'ENABLE_MESSAGE_RATING', 'ENABLE_OLLAMA_API', 'ENABLE_DIRECT_CONNECTIONS', 'ENABLE_GOOGLE_DRIVE_INTEGRATION',
+  'ENABLE_ONEDRIVE_INTEGRATION', 'ENABLE_API_KEYS', 'ENABLE_ADMIN_EXPORT', 'ENABLE_ADMIN_ANALYTICS',
+];
 
 export interface OpenWebUiPaths {
   /** The uv binary shipped with the app. */
@@ -41,17 +71,18 @@ export async function isInstalled(p: OpenWebUiPaths, version = OPENWEBUI_VERSION
   const l = layout(p);
   if (!existsSync(l.exe)) return false;
   try {
-    return (JSON.parse(await readFile(l.marker, 'utf8')) as { version?: string }).version === version;
+    const m = JSON.parse(await readFile(l.marker, 'utf8')) as { version?: string; variant?: string };
+    return m.version === version && m.variant === INSTALL_VARIANT;
   } catch {
     return false;
   }
 }
 
-export type Exec = (command: string, args: string[], env: NodeJS.ProcessEnv, onLine: (line: string) => void) => Promise<number | null>;
+export type Exec = (command: string, args: string[], env: NodeJS.ProcessEnv, onLine: (line: string) => void, cwd?: string) => Promise<number | null>;
 
-export const exec: Exec = (command, args, env, onLine) =>
+export const exec: Exec = (command, args, env, onLine, cwd) =>
   new Promise((resolve) => {
-    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     for (const s of [child.stdout, child.stderr]) {
       let buf = '';
       s.setEncoding('utf8');
@@ -74,14 +105,20 @@ export async function install(p: OpenWebUiPaths, onLine: (line: string) => void,
   const l = layout(p);
   const env = { ...process.env, ...l.uvEnv };
   await mkdir(l.data, { recursive: true });
+  // A full install from an earlier app version is replaced: start from an empty environment.
+  await rm(l.venv, { recursive: true, force: true });
   onLine(`Preparing Python ${PYTHON_VERSION}…`);
   // Always uv's own Python, never one that happens to be installed on the computer.
   if ((await run(p.uv, ['venv', '--allow-existing', '--managed-python', '--python', PYTHON_VERSION, l.venv], env, onLine)) !== 0) throw new Error('Could not set up Python for Open WebUI.');
   onLine(`Installing Open WebUI ${version} (first start only)…`);
-  // PyTorch from PyPI is already the CPU build on macOS and Windows; on Linux it would pull several GB of GPU libraries.
-  const cpu = (p.platform ?? process.platform) === 'linux' ? ['--torch-backend', 'cpu'] : [];
-  if ((await run(p.uv, ['pip', 'install', '--python', l.python, ...cpu, `open-webui==${version}`], env, onLine)) !== 0) throw new Error('Could not install Open WebUI. Check the internet connection and try again.');
-  await writeFile(l.marker, JSON.stringify({ version, at: new Date().toISOString() }));
+  const folder = join(p.dataRoot, 'openwebui');
+  await writeFile(join(folder, 'overrides.txt'), overridesFile());
+  // uv cannot read an overrides file whose path has a space in it ("D365FO Agent"), so it runs in the folder and gets a bare name.
+  // typer is imported by Open WebUI's entry point but only came in through one of the left-out packages.
+  if ((await run(p.uv, ['pip', 'install', '--python', l.python, '--overrides', 'overrides.txt', 'typer', `open-webui==${version}`], env, onLine, folder)) !== 0) throw new Error('Could not install Open WebUI. Check the internet connection and try again.');
+  // The downloaded packages are no longer needed once installed; keeping uv's cache would only take disk space.
+  await rm(l.uvEnv.UV_CACHE_DIR, { recursive: true, force: true });
+  await writeFile(l.marker, JSON.stringify({ version, variant: INSTALL_VARIANT, at: new Date().toISOString() }));
 }
 
 export const PROMPT_SUGGESTIONS = [
@@ -119,6 +156,9 @@ export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: stri
     DATA_DIR: opts.dataDir,
     // One person on one computer: no sign-up screen.
     WEBUI_AUTH: 'False',
+    // Open WebUI's slim mode: no local embeddings, speech or vector database (those packages are not installed).
+    USE_SLIM_DOCKER: 'true',
+    ...Object.fromEntries(DISABLED_FEATURES.map((f) => [f, 'False'])),
     // Open WebUI reads these on its first start and keeps them in its own settings after that.
     TOOL_SERVER_CONNECTIONS: JSON.stringify([
       {
@@ -133,9 +173,7 @@ export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: stri
     ]),
     DEFAULT_PROMPT_SUGGESTIONS: JSON.stringify(PROMPT_SUGGESTIONS),
     ...(opts.chat ? { ENABLE_OPENAI_API: 'True', OPENAI_API_BASE_URL: opts.chat.url, OPENAI_API_KEY: opts.chat.key } : {}),
-    // No local embedding model download on start; document search can be set up later in Open WebUI.
     BYPASS_EMBEDDING_AND_RETRIEVAL: 'True',
-    RAG_EMBEDDING_MODEL_AUTO_UPDATE: 'False',
     SCARF_NO_ANALYTICS: 'true',
     DO_NOT_TRACK: 'true',
     ANONYMIZED_TELEMETRY: 'false',
