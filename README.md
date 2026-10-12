@@ -29,7 +29,11 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - CLI: `ui`, `studio`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
-## Get started: chat with it in the app
+## Get started: the desktop app
+
+For people who should not need a terminal there is an installer for macOS and Windows: one app with Open WebUI as the chat, already connected to the test runner, and the settings app in a second window. Nothing else needs to be installed; the first start sets up Open WebUI by itself. See [desktop/README.md](desktop/README.md).
+
+## Get started from the project folder: chat in the settings app
 
 The friendliest way to use the agent is the **Chat** tab of the settings app. It needs only Node.js 20 or later: no Docker, no Open WebUI.
 
@@ -188,6 +192,7 @@ Redaction cannot recognise arbitrary business data (customer names, amounts) tha
 
 ## Documentation
 
+- [Desktop app and installer](desktop/README.md)
 - [Open WebUI front end](docs/openwebui.md)
 - [Providers](docs/providers.md)
 - [Azure DevOps setup](docs/azure-devops.md)
