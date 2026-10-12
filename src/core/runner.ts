@@ -12,12 +12,24 @@ import { writeReports } from '../reporting/reporters.js';
 import type { StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { LlmUnavailableError } from '../llm/errors.js';
+import { FAILURE_CATEGORY_HINTS, summarizeFailures } from '../testing/triage.js';
 
 export interface RunExecutionOptions {
   plan?: string;
   suite?: string;
   local?: string;
+  /** One id, or several separated by commas. */
   caseId?: string;
+  /** Only cases with at least one of these tags (case-insensitive). */
+  tags?: string[];
+  /** Only cases whose module or area contains one of these (case-insensitive). */
+  modules?: string[];
+  /** Only cases with this priority or a more urgent one (1 = highest). Cases without a priority are kept. */
+  maxPriority?: number;
+  /** Run the most urgent cases first instead of in discovered order. Ignored when `caseId` lists the order. */
+  sortByPriority?: boolean;
+  /** Stops the run (Ctrl+C): the case in flight is marked interrupted, the rest are not run, reports are still written. */
+  signal?: AbortSignal;
   dryRun?: boolean;
   upload?: boolean;
   reloopMaxRetries?: number;
@@ -32,6 +44,8 @@ export interface RunExecutionResult {
   upload?: { runId: number; url: string };
   /** Set when the run stopped early because the LLM provider was unavailable; remaining cases were not run. */
   aborted?: string;
+  /** Set when `signal` stopped the run before every case had finished. */
+  interrupted?: boolean;
 }
 
 export async function discoverTestCases(cfg: AppConfig, opts: Pick<RunExecutionOptions, 'plan' | 'suite' | 'local'>): Promise<TestCase[]> {
@@ -56,7 +70,9 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   assertSafeEnvironment(cfg);
 
   const cases = await discoverTestCases(cfg, opts);
-  const filtered = opts.caseId ? cases.filter((c) => c.id === opts.caseId) : cases;
+  const filtered = selectCases(cases, opts);
+  const unknown = unknownCaseIds(cases, opts.caseId);
+  if (unknown.length) console.warn(`warning: no test case with id ${unknown.join(', ')} was found; check --case.`);
   if (filtered.length === 0) {
     return {
       cases: filtered,
@@ -83,7 +99,7 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   let results: TestResult[] = [];
   let aborted: string | undefined;
   try {
-    ({ results, aborted } = await runCases(orchestrator, filtered));
+    ({ results, aborted } = await runCases(orchestrator, filtered, console.log, opts.signal));
   } finally {
     await mcp.closeAll();
     await kb.save();
@@ -105,7 +121,43 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
     upload = await client.publishResults(planId, results);
   }
 
-  return { cases: filtered, results, reportPaths, upload, aborted };
+  return { cases: filtered, results, reportPaths, upload, aborted, interrupted: (opts.signal?.aborted && (results.length < filtered.length || results.some((r) => r.interrupted))) || undefined };
+}
+
+/**
+ * Applies the run filters (ids, tags, modules, priority). Cases keep their discovered order, because a suite may
+ * depend on it; with `sortByPriority` the most urgent run first, keeping the original order among equal priorities.
+ */
+export function selectCases(cases: TestCase[], opts: Pick<RunExecutionOptions, 'caseId' | 'tags' | 'modules' | 'maxPriority' | 'sortByPriority'>): TestCase[] {
+  const ids = [...new Set(splitList(opts.caseId))];
+  const tags = (opts.tags ?? []).flatMap((t) => splitList(t)).map((t) => t.toLowerCase());
+  const modules = (opts.modules ?? []).flatMap((m) => splitList(m)).map((m) => m.toLowerCase());
+  const selected = cases.filter((c) => {
+    if (ids.length && !ids.includes(c.id)) return false;
+    if (tags.length && !(c.tags ?? []).some((t) => tags.includes(t.toLowerCase()))) return false;
+    if (modules.length) {
+      const where = `${c.module ?? ''} ${c.area ?? ''}`.toLowerCase();
+      if (!modules.some((m) => where.includes(m))) return false;
+    }
+    if (opts.maxPriority !== undefined && c.priority !== undefined && c.priority > opts.maxPriority) return false;
+    return true;
+  });
+  if (ids.length) return ids.flatMap((id) => selected.filter((c) => c.id === id));
+  if (!opts.sortByPriority) return selected;
+  return selected
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (a.c.priority ?? 99) - (b.c.priority ?? 99) || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/** Ids asked for with `caseId` that no discovered case has. */
+export function unknownCaseIds(cases: TestCase[], caseId: string | undefined): string[] {
+  const known = new Set(cases.map((c) => c.id));
+  return [...new Set(splitList(caseId))].filter((id) => !known.has(id));
+}
+
+function splitList(s: string | undefined): string[] {
+  return (s ?? '').split(',').map((x) => x.trim()).filter(Boolean);
 }
 
 /**
@@ -116,18 +168,33 @@ export async function runCases(
   orchestrator: Pick<AgentOrchestrator, 'runTestCase'>,
   cases: TestCase[],
   log: (line: string) => void = console.log,
+  signal?: AbortSignal,
 ): Promise<{ results: TestResult[]; aborted?: string }> {
   const results: TestResult[] = [];
   for (const [i, tc] of cases.entries()) {
+    if (signal?.aborted) {
+      const reason = 'Run interrupted';
+      log(`\n${reason}: ${cases.length - i} case(s) were not run.`);
+      logTriage(results, log);
+      return { results, aborted: reason };
+    }
     log(`\n▶ Running [${tc.id}] ${tc.title}`);
     try {
-      const result = await orchestrator.runTestCase(tc);
+      const result = await orchestrator.runTestCase(tc, signal);
       results.push(result);
+      if (result.interrupted) {
+        const reason = 'Run interrupted';
+        log(`  → interrupted before it finished; recorded as not a test result`);
+        log(`\n${reason}: ${cases.length - i - 1} further case(s) were not run.`);
+        logTriage(results.filter((r) => !r.interrupted), log);
+        return { results, aborted: reason };
+      }
       const attempts = result.attemptCount ?? 1;
       log(`  → ${result.outcome} (${attempts} attempt${attempts > 1 ? 's' : ''}) in ${(result.durationMs / 1000).toFixed(1)}s`);
       if (result.outcome !== 'passed' && result.outcome !== 'skipped' && result.errorMessage) {
         log(`    reason: ${result.errorMessage.replace(/\s+/g, ' ').slice(0, 300)}`);
       }
+      if (result.failureCategory) log(`    category: ${result.failureCategory} — ${FAILURE_CATEGORY_HINTS[result.failureCategory]}`);
     } catch (e) {
       if (!(e instanceof LlmUnavailableError)) throw e;
       const now = new Date().toISOString();
@@ -142,6 +209,7 @@ export async function runCases(
         steps: [],
         artifacts: [],
         errorMessage: `Run aborted, not a test result: ${e.message}`,
+        failureCategory: 'infrastructure',
       });
       const notRun = cases.length - i - 1;
       log(`  ✖ ${e.message}`);
@@ -149,5 +217,12 @@ export async function runCases(
       return { results, aborted: e.message };
     }
   }
+  logTriage(results, log);
   return { results };
+}
+
+function logTriage(results: TestResult[], log: (line: string) => void): void {
+  const counts = summarizeFailures(results);
+  if (!counts.length) return;
+  log(`\nWhy cases did not pass: ${counts.map(([c, n]) => `${c} ${n}`).join(', ')}`);
 }

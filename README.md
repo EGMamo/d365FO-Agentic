@@ -19,11 +19,13 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Plan → act → report loop with pluggable LLM providers.
 - MCP client for stdio (Playwright) and HTTP streamable (Learn) servers.
 - Azure DevOps ingestion of test cases + publishing of test runs, results, and attachments (PAT via `.env`).
-- Deterministic, structured reports: HTML, JSON, JUnit XML.
+- Deterministic, structured reports: HTML, JSON, JUnit XML. In JUnit a failed case is a `<failure>`, a blocked case an `<error>` (it could not be judged, so CI should not read it as a harmless skip), and a skipped or interrupted case `<skipped>`.
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
-- Self-learning knowledge base (`knowledge/kb.json`) with keyword retrieval.
+- Self-learning knowledge base (`knowledge/kb.json`): BM25 retrieval with F&O synonyms, outcome feedback, stale-path detection and pruning.
+- Reflexion on retries (the agent is told what went wrong last time) and failure triage in every report: each case that did not pass gets a category (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure` or `blocked`) and a hint for what to do.
+- `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that plans without mutating the target environment.
-- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
+- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Desktop icon and settings app
@@ -37,15 +39,22 @@ npm run launcher:install   # builds, then puts a "D365FO Agent" icon on your des
 
 Double-click the icon: it starts a small local web app and opens it in your browser (macOS `.command`, Windows `.lnk`, Linux `.desktop`). Close the window it opens to stop. `npm run ui` does the same from a terminal; `npm run launcher:remove` removes the icon.
 
-In the app you can create, edit, duplicate and delete **named profiles** (one per environment, for example "Sandbox UAT" and "Dev"), choose the one in use, and press **Check setup** to run `doctor` against it. Secrets are masked in the browser. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). The server listens on `127.0.0.1` only and requires a per-machine token.
+In the app you create **named profiles**, one per environment (for example "Sandbox UAT" and "Dev"), and choose the one in use. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). Secrets are masked in the browser. The server listens on `127.0.0.1` only and requires a per-machine token.
 
 The app has five tabs:
 
-- **Profiles**: environments and their settings, as above.
-- **Test cases**: open a folder inside the project (default `examples/testcases`), then create, edit, duplicate and delete local test cases with a step editor (action and expected result per step). "Run this case" takes you to the Run tab with it selected.
-- **Run**: run a local folder or an Azure DevOps plan/suite, one case or all, with dry run, retries and optional upload; the log streams live and a run can be stopped.
-- **Results**: the latest run (or one picked from History), with the HTML report and JSON / JUnit XML downloads.
+- **Setup**: profiles and their settings.
+  - A first-run welcome walks through the three steps to a first run.
+  - A "ready to run" checklist at the top shows what is still missing (F&O address, sign-in, AI model, in use), with a link to the field.
+  - Only the chosen AI provider's fields are shown. For Claude that includes **Claude API URL**, for sending requests through your own gateway or proxy (see [Providers](docs/providers.md#custom-claude-api-url)).
+  - Rarely changed settings sit under "More settings". Addresses and numbers are checked as you type, and unsaved changes are flagged before you leave.
+  - **Check setup** runs `doctor` against the profile and shows each check with a pass, warning or problem mark, and the list of things to fix.
+- **Test cases**: open a folder inside the project (default `examples/testcases`), then create, edit, duplicate and delete local test cases with a step editor (action and expected result per step, reorderable). "Run this case" takes you to the Run tab with it selected.
+- **Run**: shows which profile and environment the run will use. Run a local folder or an Azure DevOps plan/suite, one case or all, with dry run, upload, and (under "More options") tag and module filters, retries and priority order. A real run asks for confirmation first. The log streams live with a running tally, and **Stop** lets the run save its report before it ends.
+- **Results**: the latest run (or one picked from History) with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
 - **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
+
+Checks and runs started from the app read the profile in use, not the `.env` file in the project folder. A variable set in the computer's real environment still wins over both, and **Check setup** warns when that happens.
 
 ### Open WebUI
 
@@ -77,7 +86,23 @@ node dist/cli/index.js run --plan 1234 --suite 5678 --upload
 
 # 6. Run with retries (reloop)
 node dist/cli/index.js run --local examples/testcases --reloop-max-retries 2 --reloop-retry-on failed,blocked
+
+# 7. Optional: fail fast when an MFA session has expired
+node dist/cli/index.js run --local examples/testcases --probe-session
+
+# 8. Run a subset, and fail CI only on real failures
+node dist/cli/index.js run --local examples/testcases --module "Accounts payable" --tag smoke --max-priority 2 --fail-on failed
+node dist/cli/index.js run --local examples/testcases --case TC-VENDOR-001,TC-PO-002
+
+# 9. Draft new test cases, review them, then run them
+node dist/cli/index.js generate "create a vendor and post an invoice for it" --module "Accounts payable" --count 2
 ```
+
+Cases run in the order they are discovered (suite or file order), so cases that depend on an earlier one keep working. `--sort-by-priority` runs the most urgent first instead; `--case` always runs the ids in the order you list them.
+
+When the source and filters match no test case, `run` exits with code 1, and a `--case` id that matches nothing is reported as a warning. Number options such as `--max-priority` and `--count` reject anything that is not a whole number.
+
+`--fail-on <outcomes>` makes `run` exit with code 2 when any case ends with one of the listed outcomes (`passed`, `failed`, `skipped`, `blocked`). Without it, failing cases do not change the exit code. Press Ctrl+C once to stop the run and write the reports (exit 130); press it again to quit at once. SIGTERM (a cancelled CI job, `kill`) does the same with exit code 143. On macOS and Linux the Playwright server is started in its own process group, so the first Ctrl+C does not kill the browser and the run can save its trace and close the browser cleanly (`MCP_SHIELD=false` turns this off); on Windows the browser may still close with the first Ctrl+C. The case that was running is marked interrupted: it is reported as blocked with the reason "Run interrupted, not a test result", it is not retried, nothing is learned from it, and it is never uploaded to Azure DevOps. Cases that had already finished keep their results.
 
 Reports are written to `./reports` and the knowledge base to `./knowledge/kb.json`.
 
@@ -91,6 +116,7 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | --- | --- |
 | `LLM_PROVIDER` | `anthropic` (default), `openai`, `azure-openai`, `github-models`, `github-copilot`, `openai-compatible` (local models) |
 | `ANTHROPIC_API_KEY` | Required when provider is `anthropic` |
+| `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` | Optional: a custom Claude API URL (gateway or proxy) and a bearer token for it, see [Providers](docs/providers.md#custom-claude-api-url) |
 | `OPENAI_COMPATIBLE_MODEL` / `OPENAI_COMPATIBLE_BASE_URL` | Provider `openai-compatible`: model name and server URL (default Ollama, `http://localhost:11434/v1`) |
 | `GITHUB_COPILOT_TOKEN` / `GITHUB_COPILOT_MODEL` | Provider `github-copilot`: token (or run `copilot-login` to save one) and model |
 | `D365_BASE_URL` | Your F&O sandbox URL |
@@ -124,6 +150,7 @@ The agent is prompted as a **QA persona** that cites Microsoft Learn for product
 - **Scrubbed, bounded results.** Configured secrets and token-shaped strings are redacted, and sizes capped, before model-written text reaches reports, the knowledge base or Azure DevOps. Invalid tool arguments are rejected instead of recorded.
 - **Audit trail.** Every refused call is listed under `policyBlocks` in `results.json` and in the HTML report; an attempt that keeps probing the guardrails is stopped.
 - **Run limits per attempt.** A page, menu item or path that cannot be opened is never retried (navigating to it again is refused), the step is reported blocked and the run moves on, and the test is not re-run by the reloop; after `AGENT_MAX_UNREACHABLE_TARGETS` (3) different missing pages it stops. MFA prompts and refused sign-ins stop the test at once (`AGENT_STOP_ON_AUTH_FAILURE`). Also bounded: wall-clock time (`AGENT_TEST_TIMEOUT_MS`), tokens (`AGENT_MAX_TOKENS_PER_TEST`), failing tool calls in a row (`AGENT_MAX_CONSECUTIVE_ERRORS`), identical calls in a row (`AGENT_MAX_REPEATED_CALLS`) and model turns (`AGENT_MAX_STEPS`). `0` turns a limit off.
+- **Optional session preflight.** `run --probe-session` asks `D365_BASE_URL` whether the saved session is still accepted (same probe as `doctor --probe`) and fails before test execution when the session is expired or the host is unreachable.
 - **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
 - **Dry-run** (`AGENT_DRY_RUN=true` / `--dry-run`) skips state-changing browser tools.
 

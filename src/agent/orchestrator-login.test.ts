@@ -68,7 +68,7 @@ describe('D365 login credentials', () => {
         return { content: `typed ${String(args.text)}`, isError: false };
       },
     };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
+    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
     const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, kb, mcpServers: [] } as never);
     const res = await orch.runTestCase(tc);
 
@@ -112,7 +112,7 @@ describe('D365 login credentials', () => {
         return { content: [{ type: 'text', text: `bad element, text was ${String(args.text)}` }], isError: true };
       },
     };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
+    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
     const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, kb, mcpServers: ['playwright'] } as never);
     await orch.runTestCase(tc);
     assert.equal(seen[0].ref, 'e9');

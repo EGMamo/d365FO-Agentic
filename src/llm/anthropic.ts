@@ -5,12 +5,25 @@ import type {
   LlmProvider,
   LlmToolCall,
 } from './types.js';
+import { ANTHROPIC_DEFAULT_BASE_URL, normalizeAnthropicBaseUrl } from './endpoint.js';
 
 const EPHEMERAL = { cache_control: { type: 'ephemeral' } } as const;
 
 /** The slice of the SDK client this adapter uses; tests inject a fake. */
 export interface AnthropicClientLike {
   messages: { create(params: never): Promise<Anthropic.Message> };
+}
+
+/**
+ * Options for the SDK client. Everything is passed explicitly (null when unset), so the client uses
+ * exactly what the configuration says and never the SDK's own reading of ANTHROPIC_* variables.
+ */
+export function anthropicClientOptions(opts: { apiKey?: string; authToken?: string; baseURL?: string }): { apiKey: string | null; authToken: string | null; baseURL: string } {
+  return {
+    apiKey: opts.apiKey || null,
+    authToken: opts.authToken || null,
+    baseURL: normalizeAnthropicBaseUrl(opts.baseURL) ?? ANTHROPIC_DEFAULT_BASE_URL,
+  };
 }
 
 /**
@@ -32,14 +45,19 @@ export class AnthropicProvider implements LlmProvider {
   private promptCache: boolean;
 
   constructor(opts: {
-    apiKey: string;
+    /** Anthropic API key (`x-api-key`). Optional when `authToken` is given. */
+    apiKey?: string;
+    /** Bearer token for a gateway that takes one in place of an API key. */
+    authToken?: string;
+    /** Claude-compatible endpoint to call instead of api.anthropic.com. */
+    baseURL?: string;
     model: string;
     maxTokens: number;
     temperature: number;
     promptCache?: boolean;
     client?: AnthropicClientLike;
   }) {
-    this.client = opts.client ?? (new Anthropic({ apiKey: opts.apiKey }) as unknown as AnthropicClientLike);
+    this.client = opts.client ?? (new Anthropic(anthropicClientOptions(opts)) as unknown as AnthropicClientLike);
     this.model = opts.model;
     this.defaultMaxTokens = opts.maxTokens;
     this.defaultTemperature = opts.temperature;

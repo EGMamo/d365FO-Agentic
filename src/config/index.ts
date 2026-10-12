@@ -33,6 +33,16 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() !== 'false'),
 
   ANTHROPIC_API_KEY: z.string().optional(),
+  // A Claude-compatible endpoint other than api.anthropic.com: a company gateway, a proxy, or a model router.
+  ANTHROPIC_BASE_URL: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
+  // Sent as `Authorization: Bearer` for gateways that expect a token in place of an Anthropic API key.
+  ANTHROPIC_AUTH_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || undefined),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-4o'),
   AZURE_OPENAI_ENDPOINT: z.string().optional(),
@@ -164,16 +174,20 @@ export type AppConfig = z.infer<typeof envSchema>;
 
 let cached: AppConfig | undefined;
 
-export function loadConfig(): AppConfig {
-  if (cached) return cached;
-  const parsed = envSchema.safeParse(process.env);
+/** Parses settings from a set of variables (defaults applied). `loadConfig` does this once for `process.env`. */
+export function parseConfig(env: Record<string, string | undefined>): AppConfig {
+  const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  cached = parsed.data;
+  return parsed.data;
+}
+
+export function loadConfig(): AppConfig {
+  cached ??= parseConfig(process.env);
   return cached;
 }
 
@@ -186,7 +200,10 @@ export function validateForRun(cfg: AppConfig): string[] {
 
   switch (cfg.LLM_PROVIDER) {
     case 'anthropic':
-      if (!cfg.ANTHROPIC_API_KEY) issues.push('ANTHROPIC_API_KEY is required for provider=anthropic');
+      if (!cfg.ANTHROPIC_API_KEY && !cfg.ANTHROPIC_AUTH_TOKEN) {
+        issues.push(cfg.ANTHROPIC_BASE_URL ? 'ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for the custom Claude API URL' : 'ANTHROPIC_API_KEY is required for provider=anthropic');
+      }
+      if (cfg.ANTHROPIC_BASE_URL && !isHttpUrl(cfg.ANTHROPIC_BASE_URL)) issues.push(`ANTHROPIC_BASE_URL is not a valid http(s) URL: ${cfg.ANTHROPIC_BASE_URL}`);
       break;
     case 'openai':
       if (!cfg.OPENAI_API_KEY) issues.push('OPENAI_API_KEY is required for provider=openai');

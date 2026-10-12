@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { validateForRun, type AppConfig } from '../config/index.js';
 import { buildDefaultManager } from '../mcp/registry.js';
 import { d365SystemGuidance } from './guidance.js';
-import { activeSessionFile, checkSession, interactiveSessionLogin, probeSession, sessionLoginArgs, type ProbeFetch } from './session.js';
+import { activeSessionFile, checkSession, interactiveSessionLogin, probeBlocksRun, probeSession, sessionLoginArgs, type ProbeFetch } from './session.js';
 
 const NOW = Date.UTC(2026, 0, 10, 12);
 const base = { D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_SESSION_MAX_AGE_HOURS: 12 };
@@ -162,5 +162,17 @@ describe('probeSession', () => {
     await probeSession(await cfgFor(), async (_u, init) => { seen = { cookie: init.headers.cookie, redirect: init.redirect }; return { status: 200, headers: { get: () => null } }; });
     assert.equal(seen.cookie, 'DynamicsOwinAuth=TOPSECRET');
     assert.equal(seen.redirect, 'manual');
+  });
+});
+
+describe('probeBlocksRun (run --probe-session)', () => {
+  it('stops the run for an expired session or an unreachable host, with what to do', () => {
+    assert.match(probeBlocksRun({ state: 'expired', detail: 'x' }) ?? '', /session-login/);
+    assert.match(probeBlocksRun({ state: 'unreachable', detail: 'x' }) ?? '', /unreachable/);
+  });
+
+  it('lets the run start when the session is live or there is nothing to probe', () => {
+    assert.equal(probeBlocksRun({ state: 'live', detail: 'x' }), undefined);
+    assert.equal(probeBlocksRun({ state: 'skipped', detail: 'x' }), undefined);
   });
 });

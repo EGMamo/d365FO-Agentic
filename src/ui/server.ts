@@ -7,7 +7,8 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultRepoRoot } from '../launcher/install.js';
-import { FIELD_CATALOG } from '../profiles/catalog.js';
+import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.js';
+import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
 import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { loadLocalTestCases } from '../testing/loader.js';
@@ -51,6 +52,12 @@ export interface UiServerOptions {
   host?: string;
   /** Project folder: test-case folders and the report folder are resolved inside it. Defaults to the repo root. */
   root?: string;
+  /**
+   * Environment for the commands the app starts (checks, runs, uploads). It must not contain what this process
+   * read from its own settings file, or those values would override the profile the command is told to use.
+   * Defaults to this process's environment.
+   */
+  childEnv?: () => NodeJS.ProcessEnv;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -132,11 +139,11 @@ async function profileSecrets(store: ProfileStore, name: string): Promise<string
 }
 
 /** Runs `doctor` against a profile and returns its output with that profile's secrets scrubbed. */
-async function runDoctor(store: ProfileStore, name: string, cliPath: string): Promise<{ exitCode: number | null; output: string }> {
+async function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
   const secrets = await profileSecrets(store, name);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cliPath, 'doctor'], {
-      env: { ...process.env, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
+      env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -167,6 +174,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   let port = opts.port ?? DEFAULT_PORT;
   const cliPath = opts.cliPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'index.js');
   const repoRoot = opts.root ?? defaultRepoRoot();
+  const childEnv = opts.childEnv ?? (() => process.env);
   const caseFiles = new TestCaseFiles(repoRoot);
   let run: RunState | undefined;
   let runSeq = 0;
@@ -180,7 +188,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
 
   /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
   function runCli(args: string[], active?: string): ChildProcess {
-    const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' };
+    const env: NodeJS.ProcessEnv = { ...childEnv(), FORCE_COLOR: '0', NO_COLOR: '1' };
     if (active) {
       env.D365FO_PROFILE = active;
       env.D365FO_AGENT_HOME = store.home;
@@ -213,6 +221,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (!ID.test(caseId)) return { error: 'Invalid case id' };
       args.push('--case', caseId);
     }
+    for (const [flag, key] of [['--tag', 'tags'], ['--module', 'modules']] as const) {
+      const v = str(key);
+      if (!v) continue;
+      if (v.length > 200 || /[\r\n]/.test(v) || v.startsWith('-')) return { error: `Invalid ${key} filter` };
+      args.push(flag, v);
+    }
+    if (body.sortByPriority === true) args.push('--sort-by-priority');
     if (body.dryRun === true) args.push('--dry-run');
     if (body.upload === true) args.push('--upload');
     if (body.retries !== undefined && body.retries !== '') {
@@ -309,7 +324,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       }
     };
     kill('SIGTERM');
-    setTimeout(() => run?.child === child && kill('SIGKILL'), 5000).unref();
+    // SIGTERM lets the run mark the case in flight as interrupted and write its reports; give it time to do so.
+    setTimeout(() => run?.child === child && kill('SIGKILL'), 20_000).unref();
     return true;
   }
 
@@ -439,7 +455,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return void res.end(await readFile(join(WEB_DIR, 'icon.svg')));
       }
       if (method === 'GET' && url.pathname === '/api/state') {
-        return send(res, 200, { profiles: await store.list(), active: (await store.getActive()) ?? null, home: opts.home, catalog: FIELD_CATALOG });
+        return send(res, 200, { profiles: await store.list(), active: (await store.getActive()) ?? null, home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
@@ -456,7 +472,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       const m = /^\/api\/profiles\/([^/]+)(\/check)?$/.exec(url.pathname);
       if (m) {
         const name = decodeURIComponent(m[1]);
-        if (m[2] && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath));
+        if (m[2] && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
         if (!m[2] && method === 'GET') return send(res, 200, { name, entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');

@@ -21,9 +21,11 @@ export function isLoopbackUrl(url: string): boolean {
 export function createLlmProvider(cfg: AppConfig): LlmProvider {
   switch (cfg.LLM_PROVIDER) {
     case 'anthropic': {
-      if (!cfg.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is required');
+      if (!cfg.ANTHROPIC_API_KEY && !cfg.ANTHROPIC_AUTH_TOKEN) throw new Error('ANTHROPIC_API_KEY is required (or ANTHROPIC_AUTH_TOKEN for a gateway that takes a bearer token)');
       return new AnthropicProvider({
         apiKey: cfg.ANTHROPIC_API_KEY,
+        authToken: cfg.ANTHROPIC_AUTH_TOKEN,
+        baseURL: cfg.ANTHROPIC_BASE_URL,
         model: cfg.LLM_MODEL,
         maxTokens: cfg.LLM_MAX_TOKENS,
         temperature: cfg.LLM_TEMPERATURE,

@@ -27,7 +27,7 @@ videos/
 # Knowledge base (local, machine-specific)
 knowledge/kb.local.json
 knowledge/index/
-knowledge/
+/knowledge/
 
 # OS / editor
 .DS_Store

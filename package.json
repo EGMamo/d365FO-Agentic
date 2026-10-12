@@ -20,8 +20,9 @@
     "openwebui:down": "docker compose -f openwebui/docker-compose.yml down",
     "launcher:install": "npm run build && node dist/cli/index.js install-launcher",
     "launcher:remove": "node dist/cli/index.js uninstall-launcher",
-    "lint": "eslint \"src/**/*.ts\"",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
     "node": ">=20"

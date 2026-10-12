@@ -5,8 +5,9 @@ import type { AppConfig } from '../config/index.js';
 import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
-import { knownPathSummary, type KnowledgeBase } from '../knowledge/kb.js';
-import type { RunState, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import { knownPathSummary, type KbEntry, type KbEntryInput, type KnowledgeBase } from '../knowledge/kb.js';
+import type { RunState, StepCause, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import { classifyFailure, hintsMayBeAtFault, type FailureCategory } from '../testing/triage.js';
 import { D365ODataClient, hasAppRegistration, ODATA_TOOL, ODATA_TOOL_NAME } from '../d365fo/entra.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { isMenuItemName, loadMenuItems, menuItemUrl, openMenuItemTool, OPEN_MENU_ITEM_TOOL_NAME, resolveMenuItem, type MenuItem } from '../d365fo/navigation.js';
@@ -22,6 +23,7 @@ const DEFAULT_CONTEXT_KEEP_RECENT = 3;
 const MAX_POLICY_BLOCKS = 5;
 const MAX_LEARNINGS = 10;
 const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
+const STEP_CAUSES: readonly StepCause[] = ['not_found', 'no_access', 'sign_in', 'other'];
 const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
 const MAX_DATA_KEYS = 20;
 /** Lines kept in a recorded known-good path. */
@@ -116,7 +118,11 @@ interface RunOptions {
   mcpServers: string[];
 }
 
+/** Starts with "Run interrupted" so triage files it under infrastructure, not as a test failure. */
+export const INTERRUPTED_MESSAGE = 'Run interrupted, not a test result: stopped (Ctrl+C or SIGTERM) before the case finished.';
+
 interface AttemptResult {
+  interrupted?: boolean;
   outcome: StepStatus;
   runState: RunState;
   startedAt: string;
@@ -129,6 +135,8 @@ interface AttemptResult {
   timeouts: string[];
   data: Record<string, string>;
   errorMessage?: string;
+  /** Successful UI actions of the attempt, used to record what worked after an earlier failure. */
+  path?: string[];
   /** A retry of the whole test cannot change the outcome (missing target, sign-in, spent budget). */
   nonRetryable?: boolean;
 }
@@ -167,23 +175,21 @@ export class AgentOrchestrator {
     if (hasAppRegistration(opts.cfg) && opts.cfg.D365_BASE_URL) this.odata = new D365ODataClient(opts.cfg);
   }
 
-  async runTestCase(tc: TestCase): Promise<TestResult> {
-    let state: RunState = 'pending';
+  /** `signal` (Ctrl+C) stops the case at the next model turn; the result is then marked `interrupted` and nothing is learned from it. */
+  async runTestCase(tc: TestCase, signal?: AbortSignal): Promise<TestResult> {
     const attempts: AttemptResult[] = [];
     const maxAttempts = Math.max(1, this.cfg.AGENT_RELOOP_MAX_RETRIES + 1);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      state = attempt === 1 ? 'running' : 'retrying';
-      const result = await this.runAttempt(tc);
+      const result = await this.runAttempt(tc, attempts.at(-1), signal);
       attempts.push(result);
 
-      if (result.nonRetryable || !shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) {
-        state = result.outcome === 'passed' || result.outcome === 'skipped' ? 'completed' : result.runState;
-        break;
-      }
+      if (result.interrupted || result.nonRetryable || !shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) break;
       if (this.cfg.AGENT_RELOOP_COOLDOWN_MS > 0) {
         await sleep(this.cfg.AGENT_RELOOP_COOLDOWN_MS);
       }
+      // Interrupted between attempts: keep the finished attempt as the result instead of starting another.
+      if (signal?.aborted) break;
     }
 
     const first = attempts[0];
@@ -202,16 +208,20 @@ export class AgentOrchestrator {
       errorMessage: 'No attempts were executed',
     };
 
+    if (final.outcome === 'passed' && attempts.length > 1 && !this.cfg.AGENT_DRY_RUN) await this.learnFromRecovery(tc, attempts);
+
     const previous = attempts.length > 1 ? attempts[attempts.length - 2] : undefined;
     const policyBlocks = Array.from(new Set(attempts.flatMap((a) => a.policyBlocks))).slice(0, 20);
     const timeouts = Array.from(new Set(attempts.flatMap((a) => a.timeouts))).slice(0, 20);
     const finalState: RunState =
       final.outcome === 'passed' || final.outcome === 'skipped' ? 'completed' : final.outcome === 'failed' ? 'failed' : 'blocked';
 
+    const failureCategory = classifyFailure({ ...final, policyBlocks, timeouts });
     return {
       testCaseId: tc.id,
       title: tc.title,
       outcome: final.outcome,
+      ...(failureCategory ? { failureCategory } : {}),
       runState: finalState,
       startedAt: first.startedAt,
       finishedAt: final.finishedAt,
@@ -223,6 +233,7 @@ export class AgentOrchestrator {
       ...(policyBlocks.length ? { policyBlocks } : {}),
       ...(timeouts.length ? { timeouts } : {}),
       ...(Object.keys(final.data).length ? { data: final.data } : {}),
+      ...(final.interrupted ? { interrupted: true } : {}),
       attemptCount: attempts.length,
       firstOutcome: first.outcome,
       previousOutcome: previous?.outcome,
@@ -239,7 +250,7 @@ export class AgentOrchestrator {
     };
   }
 
-  private async runAttempt(tc: TestCase): Promise<AttemptResult> {
+  private async runAttempt(tc: TestCase, previous?: AttemptResult, signal?: AbortSignal): Promise<AttemptResult> {
     const startedAt = new Date();
     const artifactsDir = join(this.cfg.REPORT_DIR, 'artifacts', tc.id);
     await mkdir(artifactsDir, { recursive: true });
@@ -274,11 +285,7 @@ export class AgentOrchestrator {
       ...(canOpenPages && this.menuItems ? [openMenuItemTool(this.menuItems)] : []),
     ];
 
-    const retrieved = this.kb.retrieve(
-      `${tc.title} ${tc.module ?? ''} ${tc.tags?.join(' ') ?? ''}`,
-      tc.tags ?? [],
-      5,
-    );
+    const retrieved = this.kb.retrieve(retrievalQuery(tc), tc.tags ?? [], 5, tc.module);
 
     let traceBefore: Set<string> | undefined;
     if (tracingEnabled(this.cfg) && this.mcpServers.includes('playwright')) {
@@ -292,7 +299,9 @@ export class AgentOrchestrator {
     }
 
     const knownPath = this.kb.recipeFor(tc.id);
-    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, retrieved, knownPath) }];
+    const messages: LlmMessage[] = [
+      { role: 'user', content: testCaseUserPrompt(tc, retrieved, knownPath, previous ? reflectOn(previous, knownPath) : undefined) },
+    ];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
     const artifacts: string[] = [];
@@ -310,7 +319,7 @@ export class AgentOrchestrator {
     const flags = { nonRetryable: false };
 
     try {
-      for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped; iter++) {
+      for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped && !signal?.aborted; iter++) {
         const compacted = compactHistory(messages, this.cfg.AGENT_CONTEXT_KEEP_RECENT ?? DEFAULT_CONTEXT_KEEP_RECENT);
         if (this.cfg.AGENT_VERBOSE && compacted > 0) this.log(`context: collapsed ${compacted} older tool result(s)`);
         const overBudget = guard.checkBudgets();
@@ -399,6 +408,13 @@ export class AgentOrchestrator {
       overallError = this.clean(`Transient orchestration failure: ${(e as Error).message}`, LIMITS.error);
     }
 
+    // Ctrl+C also reaches the browser, so whatever this attempt reported cannot be trusted as a verdict.
+    const interrupted = Boolean(signal?.aborted);
+    if (interrupted) {
+      outcome = 'blocked';
+      overallError = INTERRUPTED_MESSAGE;
+    }
+
     if ((outcome === 'failed' || outcome === 'blocked') && !overallError) {
       const bad = steps.find((s) => s.status === 'failed' || s.status === 'blocked');
       overallError = bad
@@ -416,6 +432,10 @@ export class AgentOrchestrator {
 
     if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN && path.some((l) => !l.startsWith('-- '))) {
       await this.saveKnownPath(tc, path);
+    }
+    if (!this.cfg.AGENT_DRY_RUN && !interrupted) {
+      const category = classifyFailure({ outcome, errorMessage: overallError, steps, policyBlocks, timeouts });
+      await this.learnFromOutcome(tc, outcome, category, steps, retrieved, knownPath);
     }
 
     if (traceBefore) {
@@ -442,7 +462,9 @@ export class AgentOrchestrator {
       policyBlocks,
       timeouts,
       data,
+      path,
       ...(flags.nonRetryable ? { nonRetryable: true } : {}),
+      ...(interrupted ? { interrupted: true } : {}),
     };
   }
 
@@ -484,6 +506,7 @@ export class AgentOrchestrator {
         index,
         status: args.status as StepStatus,
         ...(typeof args.verified === 'boolean' ? { verified: args.verified } : {}),
+        ...((args.status === 'failed' || args.status === 'blocked') && STEP_CAUSES.includes(args.cause as StepCause) ? { cause: args.cause as StepCause } : {}),
         observed: typeof args.observed === 'string' ? this.clean(args.observed, LIMITS.observed) : undefined,
         errorMessage: typeof args.errorMessage === 'string' ? this.clean(args.errorMessage, LIMITS.error) : undefined,
         durationMs: 0,
@@ -576,7 +599,8 @@ export class AgentOrchestrator {
       const errorMessage = typeof args.errorMessage === 'string' ? this.clean(args.errorMessage, LIMITS.error) : undefined;
       const summary = typeof args.summary === 'string' ? this.clean(args.summary, LIMITS.summary) : '';
       if (summary) ctx.learnings.push(summary);
-      const rawLearnings = Array.isArray(args.learnings) ? args.learnings.slice(0, MAX_LEARNINGS) : [];
+      // A dry run acts on nothing, so what the model claims to have learned from it is not kept.
+      const rawLearnings = Array.isArray(args.learnings) && !this.cfg.AGENT_DRY_RUN ? args.learnings.slice(0, MAX_LEARNINGS) : [];
       for (const l of rawLearnings as Array<Record<string, unknown>>) {
         if (!l || !LEARNING_KINDS.includes(l.kind as (typeof LEARNING_KINDS)[number])) continue;
         if (typeof l.summary !== 'string' || typeof l.details !== 'string' || !l.summary.trim()) continue;
@@ -591,7 +615,7 @@ export class AgentOrchestrator {
           failureCount: outcome === 'failed' ? 1 : 0,
         });
       }
-      await this.kb.save();
+      if (rawLearnings.length) await this.kb.save();
       return {
         content: JSON.stringify({ ok: true }),
         done: true,
@@ -727,6 +751,43 @@ export class AgentOrchestrator {
     return { ...nav, content: `Opened ${label} (${mi}) in ${company}; the page may still be loading.\n${nav.content}` };
   }
 
+  /**
+   * Feeds the outcome back into the knowledge base: hints offered to a passing run gain credibility, and
+   * hints offered to a run that did not pass lose some, but only when the failure is one they could have caused
+   * (`hintsMayBeAtFault`). A known-good path is judged the same way, so it stops being offered once it
+   * fails repeatedly for such a reason. A likely product defect does not count against it: the route was fine.
+   */
+  private async learnFromOutcome(tc: TestCase, outcome: StepStatus, category: FailureCategory | undefined, steps: StepResult[], retrieved: KbEntry[], knownPath?: KbEntry): Promise<void> {
+    const blamed = hintsMayBeAtFault(category, steps);
+    const pathBroken = blamed || steps.some((s) => s.cause === 'not_found');
+    const ids = retrieved.map((e) => e.id);
+    try {
+      let changed = false;
+      if (outcome === 'passed') changed = this.kb.recordOutcome(ids, true) > 0 || changed;
+      else if (blamed) changed = this.kb.recordOutcome(ids, false) > 0 || changed;
+      if (knownPath && pathBroken) changed = this.kb.recordOutcome([knownPath.id], false) > 0 || changed;
+      if (changed) await this.kb.save();
+    } catch (e) {
+      console.warn(`[agent] could not update the knowledge base for ${tc.id}: ${(e as Error).message}`);
+    }
+  }
+
+  /** A case that failed and then passed on a retry taught the agent something: keep what broke and what worked. */
+  private async learnFromRecovery(tc: TestCase, attempts: AttemptResult[]): Promise<void> {
+    const lesson = recoveryLesson(tc, attempts);
+    if (!lesson) return;
+    try {
+      this.kb.upsert({
+        ...lesson,
+        summary: this.clean(lesson.summary, LIMITS.learningSummary),
+        details: this.clean(lesson.details, LIMITS.learningDetails),
+      });
+      await this.kb.save();
+    } catch (e) {
+      console.warn(`[agent] could not save the recovery lesson for ${tc.id}: ${(e as Error).message}`);
+    }
+  }
+
   /** Saves the UI actions of a passing attempt as the test case's known-good path, replacing the previous one. */
   private async saveKnownPath(tc: TestCase, path: string[]): Promise<void> {
     const lines = path.length > MAX_PATH_LINES ? [...path.slice(0, MAX_PATH_LINES), `… ${path.length - MAX_PATH_LINES} more actions`] : path;
@@ -834,6 +895,59 @@ function isMutatingBrowserTool(name: string): boolean {
 function isTimeoutError(e: unknown): boolean {
   const err = e as { code?: unknown; message?: unknown };
   return err?.code === -32001 || /request timed out|timed out/i.test(String(err?.message ?? ''));
+}
+
+/** Free-text query for knowledge-base retrieval: what the case is about and what its steps do. */
+export function retrievalQuery(tc: TestCase): string {
+  const steps = tc.steps.map((s) => `${s.action} ${s.expected ?? ''}`).join(' ');
+  return `${tc.title} ${tc.module ?? ''} ${tc.area ?? ''} ${tc.tags?.join(' ') ?? ''} ${steps}`.slice(0, 4000);
+}
+
+/**
+ * A short account of why the previous attempt did not pass, given to the next attempt so it does not repeat
+ * the same mistake (reflexion). Only facts the run recorded; the model decides what to change.
+ */
+export function reflectOn(previous: Pick<AttemptResult, 'outcome' | 'errorMessage' | 'steps' | 'policyBlocks' | 'timeouts'>, knownPath?: KbEntry): string {
+  const lines = [`The previous attempt ended ${previous.outcome}.`];
+  if (previous.errorMessage) lines.push(`Reason: ${previous.errorMessage.replace(/\s+/g, ' ').slice(0, 500)}`);
+  const passed = previous.steps.filter((s) => s.status === 'passed').map((s) => s.index);
+  if (passed.length) lines.push(`Steps that passed: ${passed.join(', ')}. Data they created may already exist; check before creating it again.`);
+  for (const s of previous.steps.filter((x) => x.status === 'failed' || x.status === 'blocked').slice(0, 5)) {
+    const detail = (s.errorMessage ?? s.observed ?? '').replace(/\s+/g, ' ').slice(0, 300);
+    lines.push(`Step ${s.index} ${s.status}${s.cause ? ` (${s.cause})` : ''}${detail ? `: ${detail}` : ''}`);
+  }
+  if (previous.policyBlocks.length) lines.push(`Refused by policy: ${previous.policyBlocks.slice(0, 3).join('; ')}`);
+  if (previous.timeouts.length) lines.push(`Timed out: ${previous.timeouts.slice(0, 3).join('; ')}`);
+  if (knownPath) lines.push('The known-good path below was offered last time too; if it led to the failure, work the step out from the page instead.');
+  lines.push('Take a fresh snapshot, start from a clean page, and try a different approach where the last one went wrong.');
+  return lines.join('\n');
+}
+
+/**
+ * What a recovered test teaches: where the first failing attempt went wrong and the route that then worked.
+ * Built only from what the runs recorded, so it needs no model call. Undefined when nothing useful was recorded.
+ */
+export function recoveryLesson(tc: TestCase, attempts: Array<Pick<AttemptResult, 'outcome' | 'errorMessage' | 'steps' | 'path'>>): KbEntryInput | undefined {
+  const final = attempts.at(-1);
+  const failed = attempts.slice(0, -1).find((a) => a.outcome === 'failed' || a.outcome === 'blocked');
+  const worked = (final?.path ?? []).filter((l) => !l.startsWith('-- '));
+  if (!final || final.outcome !== 'passed' || !failed || !worked.length) return undefined;
+  const bad = failed.steps.find((s) => s.status === 'failed' || s.status === 'blocked');
+  const what = (bad?.errorMessage ?? bad?.observed ?? failed.errorMessage ?? '').replace(/\s+/g, ' ').slice(0, 300);
+  const lines = [
+    `Test case ${tc.id} (${tc.title}) failed at first${bad ? ` on step ${bad.index}${bad.cause ? ` (${bad.cause})` : ''}` : ''}${what ? `: ${what}` : ''}.`,
+    'A later attempt passed by doing this:',
+    ...worked.slice(0, MAX_PATH_LINES),
+  ];
+  return {
+    kind: 'remediation',
+    summary: `Recovered ${tc.id}${bad ? ` after step ${bad.index} ${bad.status}` : ''}: ${tc.title}`,
+    details: lines.join('\n'),
+    module: tc.module,
+    testCaseId: tc.id,
+    tags: [...(tc.tags ?? []), 'self-healed'],
+    successCount: 1,
+  };
 }
 
 /** Steps with an expected result that were not both reported as passed and marked verified (or not reported at all). */

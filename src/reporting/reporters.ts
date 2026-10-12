@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TestResult } from '../testing/types.js';
+import { FAILURE_CATEGORY_HINTS, summarizeFailures, type FailureCategory } from '../testing/triage.js';
 
 /**
  * Writes JSON, JUnit XML, and a self-contained HTML report to `dir`. Returns
@@ -19,8 +20,13 @@ export async function writeReports(dir: string, results: TestResult[]): Promise<
   return { json: jsonPath, junit: junitPath, html: htmlPath };
 }
 
-function xmlEscape(s: string): string {
-  return s
+/** Hint for a category; empty for one this version does not know (a results file from elsewhere or edited by hand). */
+function categoryHint(c: string): string {
+  return FAILURE_CATEGORY_HINTS[c as FailureCategory] ?? '';
+}
+
+function xmlEscape(s: unknown): string {
+  return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -31,19 +37,25 @@ function xmlEscape(s: string): string {
 function toJUnit(results: TestResult[]): string {
   const total = results.length;
   const failures = results.filter((r) => r.outcome === 'failed').length;
-  const skipped = results.filter((r) => r.outcome === 'skipped' || r.outcome === 'blocked').length;
+  // Blocked means the case could not be judged (sign-in, missing page, budget): JUnit's <error>, so CI does not
+  // read it as a harmless skip. A case stopped by Ctrl+C was simply not run to the end and stays <skipped>.
+  const isError = (r: TestResult): boolean => r.outcome === 'blocked' && !r.interrupted;
+  const errors = results.filter(isError).length;
+  const skipped = results.filter((r) => r.outcome === 'skipped' || (r.outcome === 'blocked' && r.interrupted)).length;
   const timeSec = (results.reduce((s, r) => s + r.durationMs, 0) / 1000).toFixed(3);
   const cases = results
     .map((r) => {
       const t = (r.durationMs / 1000).toFixed(3);
-      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}${r.timeouts?.length ? `; timeouts=${r.timeouts.length}` : ''}`;
+      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.failureCategory ? `; category=${r.failureCategory}` : ''}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}${r.timeouts?.length ? `; timeouts=${r.timeouts.length}` : ''}`;
       let body = '';
       if (r.outcome === 'failed') {
-        body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}">${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
+        body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}"${r.failureCategory ? ` type="${xmlEscape(r.failureCategory)}"` : ''}>${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
           retryMeta,
         )}</system-out>`;
+      } else if (isError(r)) {
+        body = `<error message="${xmlEscape(`blocked: ${r.errorMessage ?? ''}`)}"${r.failureCategory ? ` type="${xmlEscape(r.failureCategory)}"` : ''}>${xmlEscape(r.errorMessage ?? '')}</error><system-out>${xmlEscape(retryMeta)}</system-out>`;
       } else if (r.outcome === 'skipped' || r.outcome === 'blocked') {
-        body = `<skipped/><system-out>${xmlEscape(retryMeta)}</system-out>`;
+        body = `${r.outcome === 'blocked' ? `<skipped message="${xmlEscape(`blocked${r.failureCategory ? ` (${r.failureCategory})` : ''}: ${r.errorMessage ?? ''}`)}"/>` : '<skipped/>'}<system-out>${xmlEscape(retryMeta)}</system-out>`;
       } else {
         body = `<system-out>${xmlEscape(retryMeta)}</system-out>`;
       }
@@ -51,7 +63,7 @@ function toJUnit(results: TestResult[]): string {
     })
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="d365fo-agentic" tests="${total}" failures="${failures}" skipped="${skipped}" time="${timeSec}">
+<testsuite name="d365fo-agentic" tests="${total}" failures="${failures}" errors="${errors}" skipped="${skipped}" time="${timeSec}">
 ${cases}
 </testsuite>`;
 }
@@ -63,7 +75,8 @@ function toHtml(results: TestResult[]): string {
 <tr class="row ${r.outcome}">
   <td>${xmlEscape(r.testCaseId)}</td>
   <td>${xmlEscape(r.title)}</td>
-  <td><span class="badge ${r.outcome}">${r.outcome}</span></td>
+  <td><span class="badge ${xmlEscape(r.outcome)}">${xmlEscape(r.outcome)}</span></td>
+  <td>${r.failureCategory ? `<span class="cat" title="${xmlEscape(categoryHint(r.failureCategory))}">${xmlEscape(r.failureCategory)}</span>` : ''}</td>
   <td>${r.attemptCount ?? 1}</td>
   <td>${xmlEscape(`${r.firstOutcome ?? r.outcome} → ${r.outcome}`)}</td>
   <td>${(r.durationMs / 1000).toFixed(2)}s</td>
@@ -88,6 +101,12 @@ function toHtml(results: TestResult[]): string {
     recoveredByRetry: results.filter((r) => (r.firstOutcome ?? r.outcome) !== 'passed' && r.outcome === 'passed').length,
     unresolvedAfterRetry: results.filter((r) => r.outcome === 'failed' || r.outcome === 'blocked').length,
   };
+  const triage = summarizeFailures(results);
+  const triageBlock = triage.length
+    ? `<h2>Why cases did not pass</h2><ul class="triage">${triage
+        .map(([c, n]) => `<li><b>${xmlEscape(c)}</b> × ${n} — ${xmlEscape(categoryHint(c))}</li>`)
+        .join('')}</ul>`
+    : '';
   const firstPassRate = summary.total ? ((summary.firstPassPassed / summary.total) * 100).toFixed(1) : '0.0';
   const postRetryRate = summary.total ? ((summary.passed / summary.total) * 100).toFixed(1) : '0.0';
   return `<!doctype html><html><head><meta charset="utf-8"><title>d365fo-agentic report</title>
@@ -105,6 +124,9 @@ th{background:#fafafa}
 .badge.blocked{background:#c07a1f}
 .badge.skipped{background:#7a7a80}
 .data{margin-top:6px;padding:6px 8px;border-left:3px solid #4a6fa5;background:#f1f5fb;font-size:12px}
+.cat{padding:2px 6px;border-radius:6px;background:#eef;font-size:12px;cursor:help}
+h2{font-size:16px;margin:16px 0 6px}
+.triage{margin:0 0 16px;padding-left:20px;font-size:14px}
 .guard{margin-top:6px;padding:6px 8px;border-left:3px solid #c07a1f;background:#fff8ec;font-size:12px}
 </style></head><body>
 <h1>d365fo-agentic — test run</h1>
@@ -119,8 +141,9 @@ th{background:#fafafa}
   <div>Recovered by retry: ${summary.recoveredByRetry}</div>
   <div>Unresolved after retry: ${summary.unresolvedAfterRetry}</div>
 </div>
+${triageBlock}
 <table>
-<thead><tr><th>ID</th><th>Title</th><th>Outcome</th><th>Attempts</th><th>First→Final</th><th>Duration</th><th>Steps</th><th>Error</th></tr></thead>
+<thead><tr><th>ID</th><th>Title</th><th>Outcome</th><th>Category</th><th>Attempts</th><th>First→Final</th><th>Duration</th><th>Steps</th><th>Error</th></tr></thead>
 <tbody>${rows}</tbody></table>
 </body></html>`;
 }
