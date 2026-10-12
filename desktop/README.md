@@ -10,7 +10,7 @@ settings app: profiles, test cases, runs, results and history. No Docker, Node.j
 2. The app starts the settings app and its tool server on `127.0.0.1` on Electron's own Node runtime.
 3. **First start only:** the bundled [uv](https://github.com/astral-sh/uv) downloads a standalone Python 3.11 and
    installs the pinned Open WebUI (`src/desktop/openwebui.ts`) into the app's data folder. This needs internet access
-   to PyPI and GitHub (python-build-standalone), takes about 4 minutes on a fast connection and is roughly 3 GB on disk (measured on Linux with the CPU build of PyTorch; macOS and Windows get the same CPU build from PyPI). A splash screen
+   to PyPI and GitHub (python-build-standalone), takes about 4 minutes on a fast connection. Measured on Linux with the default PyTorch build it was 6.9 GB on disk, 3.2 GB of which is NVIDIA GPU libraries; macOS and Windows PyPI builds of PyTorch have no such libraries, so their size is not measured yet. A splash screen
    shows progress.
 4. Open WebUI starts (20 to 40 seconds; the window shows progress meanwhile) on a free loopback port without a sign-in screen (one local user), with the tool server, starter
    prompts and, when the profile in use speaks an OpenAI-style API (OpenAI, Anthropic, GitHub Models, Ollama or another
@@ -62,6 +62,6 @@ See <https://docs.openwebui.com/license/>.
 ## Follow-ups
 
 - Code signing and notarization (above), and auto-update (electron-builder `publish` plus `electron-updater`).
-- An offline installer that ships Python and Open WebUI inside (about 3 GB per OS and architecture).
+- An offline installer that ships Python and Open WebUI inside (several GB per OS; the Linux figure is 6.9 GB before dropping the GPU libraries).
 - Session sign-in (`session-login`) still runs through `npx playwright`; use a test account and password in the
   profile, or save the session from a computer with Node.js.
