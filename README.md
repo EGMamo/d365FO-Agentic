@@ -21,17 +21,12 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Azure DevOps ingestion of test cases + publishing of test runs, results, and attachments (PAT via `.env`).
 - Deterministic, structured reports: HTML, JSON, JUnit XML. In JUnit a failed case is a `<failure>`, a blocked case an `<error>` (it could not be judged, so CI should not read it as a harmless skip), and a skipped or interrupted case `<skipped>`.
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
-<<<<<<< HEAD
+- Self-learning per-form control map (`knowledge/pages.json`), learned live during runs.
 - Self-learning knowledge base (`knowledge/kb.json`): BM25 retrieval with F&O synonyms, outcome feedback, stale-path detection and pruning.
 - Reflexion on retries (the agent is told what went wrong last time) and failure triage in every report: each case that did not pass gets a category (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure` or `blocked`) and a hint for what to do.
 - `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that plans without mutating the target environment.
-- CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
-=======
-- Self-learning: per-form control map (`knowledge/pages.json`) learned live during runs, plus a knowledge base (`knowledge/kb.json`) with keyword retrieval.
-- Dry-run mode that plans without mutating the target environment.
-- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
->>>>>>> origin/main
+- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Get started: chat with it in Open WebUI
@@ -89,15 +84,12 @@ The app has five tabs:
 - **Results**: the latest run (or one picked from History) with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
 - **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
 
-<<<<<<< HEAD
 Checks and runs started from the app read the profile in use, not the `.env` file in the project folder. A variable set in the computer's real environment still wins over both, and **Check setup** warns when that happens.
 
 ### Open WebUI
 
 Prefer a chat? The app also serves an OpenAPI tool server for [Open WebUI](https://openwebui.com): `npm run openwebui:up` starts Open WebUI in Docker, `npm run openwebui` prints the address and key to add under External Tools, and a chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
 
-=======
->>>>>>> origin/main
 The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
 
 ## Command line
@@ -190,12 +182,8 @@ The agent is prompted as a **QA persona** that cites Microsoft Learn for product
 - **Scrubbed, bounded results.** Configured secrets and token-shaped strings are redacted, and sizes capped, before model-written text reaches reports, the knowledge base or Azure DevOps. Invalid tool arguments are rejected instead of recorded.
 - **Audit trail.** Every refused call is listed under `policyBlocks` in `results.json` and in the HTML report; an attempt that keeps probing the guardrails is stopped.
 - **Run limits per attempt.** A page, menu item or path that cannot be opened is never retried (navigating to it again is refused), the step is reported blocked and the run moves on, and the test is not re-run by the reloop; after `AGENT_MAX_UNREACHABLE_TARGETS` (3) different missing pages it stops. MFA prompts and refused sign-ins stop the test at once (`AGENT_STOP_ON_AUTH_FAILURE`). Also bounded: wall-clock time (`AGENT_TEST_TIMEOUT_MS`), tokens (`AGENT_MAX_TOKENS_PER_TEST`), failing tool calls in a row (`AGENT_MAX_CONSECUTIVE_ERRORS`), identical calls in a row (`AGENT_MAX_REPEATED_CALLS`) and model turns (`AGENT_MAX_STEPS`). `0` turns a limit off.
-<<<<<<< HEAD
 - **Optional session preflight.** `run --probe-session` asks `D365_BASE_URL` whether the saved session is still accepted (same probe as `doctor --probe`) and fails before test execution when the session is expired or the host is unreachable.
-- **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
-=======
 - **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like (by label or by F&O control name, such as `SystemDefinedDeleteButton`) are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
->>>>>>> origin/main
 - **Dry-run** (`AGENT_DRY_RUN=true` / `--dry-run`) skips state-changing browser tools.
 
 Redaction cannot recognise arbitrary business data (customer names, amounts) that a page shows, so treat `reports/` and `knowledge/` as sensitive.
