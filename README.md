@@ -21,12 +21,47 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Azure DevOps ingestion of test cases + publishing of test runs, results, and attachments (PAT via `.env`).
 - Deterministic, structured reports: HTML, JSON, JUnit XML. In JUnit a failed case is a `<failure>`, a blocked case an `<error>` (it could not be judged, so CI should not read it as a harmless skip), and a skipped or interrupted case `<skipped>`.
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
+<<<<<<< HEAD
 - Self-learning knowledge base (`knowledge/kb.json`): BM25 retrieval with F&O synonyms, outcome feedback, stale-path detection and pruning.
 - Reflexion on retries (the agent is told what went wrong last time) and failure triage in every report: each case that did not pass gets a category (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure` or `blocked`) and a hint for what to do.
 - `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that plans without mutating the target environment.
 - CLI: `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
+=======
+- Self-learning: per-form control map (`knowledge/pages.json`) learned live during runs, plus a knowledge base (`knowledge/kb.json`) with keyword retrieval.
+- Dry-run mode that plans without mutating the target environment.
+- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`.
+>>>>>>> origin/main
 - GitHub Actions workflow for scheduled or on-demand runs.
+
+## Get started: chat with it in Open WebUI
+
+The friendliest way to use the agent is a chat in [Open WebUI](https://openwebui.com). One command sets it up:
+
+```bash
+npm install
+npm run studio
+```
+
+`studio` starts the local settings app, starts Open WebUI in Docker with the **D365FO test runner** tools already connected, and opens `http://localhost:3000`. Then:
+
+1. Create your Open WebUI account (stays on this computer) and pick a chat model that supports tool calling.
+2. Open the settings app once (`npm run ui`, or the desktop icon) and create a **profile** for your environment: F&O URL, test account or saved session, Azure DevOps PAT, and the LLM the test runs use. Secrets stay in the settings app and never reach the chat.
+3. In a chat, turn on the tools with the **+** button and ask in plain words, for example *"Check my setup"*, *"Dry-run examples/testcases and tell me what failed"*, *"Write a test case that creates a vendor"* or *"Upload the last run to Azure DevOps"*.
+
+No Docker? `studio` still starts the settings app and prints the address and key to add to any Open WebUI you already have. Details: [docs/openwebui.md](docs/openwebui.md).
+
+## Fast and learning on F&O
+
+The F&O web client is heavy: deep menus, forms that load asynchronously, and very large pages. The agent is built around that:
+
+- **Direct form links.** Pages open by display menu item (`?cmp=<company>&mi=<MenuItem>`, Microsoft's deep-link format) in one step instead of clicking through the navigation pane.
+- **Stable control names.** Playwright runs with F&O's `data-dyn-controlname` attribute as its test id, so a control resolves to `getByTestId('<AOT control name>')`, the same names Task Recorder and RSAT record. They do not change with language, release or personalisation.
+- **Learns while it works.** Every control the agent uses is stored per form in `knowledge/pages.json` with how often it worked. The next time any test opens that form, the agent gets the list and acts on those controls directly, without reading the whole page first. Every form it visits also becomes openable by caption. The agent can add notes about a form ("Vendor group is on the General FastTab") with `d365_page_note`. Passing cases also keep their known-good path.
+- **Waits for F&O, not for the model.** After each click or entry the run waits for F&O's *Please wait* overlay itself, and retries a learned control once when the form had not finished loading, so the model does not spend a turn on it.
+- **Smaller pages for the model.** Anonymous wrapper nodes are dropped from page snapshots, older snapshots are collapsed, and the agent is told to search the page (`browser_find`) or snapshot one part of it instead of the whole form.
+
+See [Self-learning](docs/self-learning.md) and [D365 F&O notes](docs/d365fo.md#fast-navigation-and-known-good-paths).
 
 ## Desktop icon and settings app
 
@@ -54,15 +89,18 @@ The app has five tabs:
 - **Results**: the latest run (or one picked from History) with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
 - **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
 
+<<<<<<< HEAD
 Checks and runs started from the app read the profile in use, not the `.env` file in the project folder. A variable set in the computer's real environment still wins over both, and **Check setup** warns when that happens.
 
 ### Open WebUI
 
 Prefer a chat? The app also serves an OpenAPI tool server for [Open WebUI](https://openwebui.com): `npm run openwebui:up` starts Open WebUI in Docker, `npm run openwebui` prints the address and key to add under External Tools, and a chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
 
+=======
+>>>>>>> origin/main
 The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
 
-## Quick start
+## Command line
 
 ```bash
 # 1. Install
@@ -126,6 +164,8 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `D365_STORAGE_STATE` | Optional saved browser session (see [docs/d365fo.md](docs/d365fo.md#signing-in-with-a-saved-session-optional)); replaces the password when set |
 | `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
+| `PW_ACTION_TIMEOUT_MS` | How long an action waits for its element (default 15 s; F&O renders slowly) |
+| `AGENT_LEARN_PAGES` / `AGENT_FNO_AUTO_WAIT` / `AGENT_SLIM_SNAPSHOTS` | F&O learning and speed-ups (all on by default): learn controls per form, wait for the busy overlay after actions, smaller snapshots |
 | `PW_BROWSER` / `PW_AUTO_INSTALL` | Playwright browser (`chromium` default) and whether to download it automatically when missing (default `true`) |
 | `AGENT_ALLOW_PRODUCTION` / `AGENT_ALLOWED_HOSTS` / `AGENT_ALLOWED_TOOLS_EXTRA` | Guardrail overrides (production runs, extra navigable hosts, extra MCP tools) |
 | `AGENT_CONTEXT_KEEP_RECENT` / `LLM_PROMPT_CACHE` | Prompt size and cost: how many recent page snapshots stay verbatim, and Anthropic prompt caching |
@@ -150,14 +190,19 @@ The agent is prompted as a **QA persona** that cites Microsoft Learn for product
 - **Scrubbed, bounded results.** Configured secrets and token-shaped strings are redacted, and sizes capped, before model-written text reaches reports, the knowledge base or Azure DevOps. Invalid tool arguments are rejected instead of recorded.
 - **Audit trail.** Every refused call is listed under `policyBlocks` in `results.json` and in the HTML report; an attempt that keeps probing the guardrails is stopped.
 - **Run limits per attempt.** A page, menu item or path that cannot be opened is never retried (navigating to it again is refused), the step is reported blocked and the run moves on, and the test is not re-run by the reloop; after `AGENT_MAX_UNREACHABLE_TARGETS` (3) different missing pages it stops. MFA prompts and refused sign-ins stop the test at once (`AGENT_STOP_ON_AUTH_FAILURE`). Also bounded: wall-clock time (`AGENT_TEST_TIMEOUT_MS`), tokens (`AGENT_MAX_TOKENS_PER_TEST`), failing tool calls in a row (`AGENT_MAX_CONSECUTIVE_ERRORS`), identical calls in a row (`AGENT_MAX_REPEATED_CALLS`) and model turns (`AGENT_MAX_STEPS`). `0` turns a limit off.
+<<<<<<< HEAD
 - **Optional session preflight.** `run --probe-session` asks `D365_BASE_URL` whether the saved session is still accepted (same probe as `doctor --probe`) and fails before test execution when the session is expired or the host is unreachable.
 - **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
+=======
+- **No destructive clicks.** Clicks on controls labelled delete, remove, purge, void and the like (by label or by F&O control name, such as `SystemDefinedDeleteButton`) are refused unless `AGENT_ALLOW_DESTRUCTIVE=true`.
+>>>>>>> origin/main
 - **Dry-run** (`AGENT_DRY_RUN=true` / `--dry-run`) skips state-changing browser tools.
 
 Redaction cannot recognise arbitrary business data (customer names, amounts) that a page shows, so treat `reports/` and `knowledge/` as sensitive.
 
 ## Documentation
 
+- [Open WebUI front end](docs/openwebui.md)
 - [Providers](docs/providers.md)
 - [Azure DevOps setup](docs/azure-devops.md)
 - [D365 F&O notes](docs/d365fo.md)

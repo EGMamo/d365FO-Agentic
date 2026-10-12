@@ -118,6 +118,21 @@ export function openApiSpec(serverUrl: string): Record<string, unknown> {
           responses: ok('Results'),
         },
       },
+      '/setup/check': {
+        post: {
+          operationId: 'check_setup',
+          summary: 'Check the profile in use: LLM, F&O URL and sign-in, saved session, Azure DevOps and the browser. Takes up to a minute. Secrets are masked.',
+          responses: ok('Check output'),
+        },
+      },
+      '/knowledge/pages': {
+        get: {
+          operationId: 'list_learned_pages',
+          summary: 'F&O forms the agent has learned while running tests: menu item, caption, visits, how many controls it knows there, and notes. Learned forms can be opened by caption in later runs.',
+          parameters: [query('search', 'Only forms whose caption or menu item contains this text (optional).')],
+          responses: ok('Learned forms'),
+        },
+      },
       '/history': {
         get: {
           operationId: 'list_runs',
@@ -137,6 +152,23 @@ export function openApiSpec(serverUrl: string): Record<string, unknown> {
       },
     },
   };
+}
+
+/** Per-case progress of a run, read from its log ("▶ Running [id] title" then "→ outcome …"). */
+export function runProgress(lines: readonly string[]): { finished: number; current?: string; cases: Array<{ id: string; title: string; outcome?: string }> } {
+  const cases: Array<{ id: string; title: string; outcome?: string }> = [];
+  for (const line of lines) {
+    const start = /^▶ Running \[(.+?)\] (.*)$/.exec(line.trim());
+    if (start) {
+      cases.push({ id: start[1], title: start[2] });
+      continue;
+    }
+    const done = /^→ (passed|failed|blocked|skipped)\b/.exec(line.trim());
+    const last = cases.at(-1);
+    if (done && last && !last.outcome) last.outcome = done[1];
+  }
+  const current = cases.at(-1);
+  return { finished: cases.filter((c) => c.outcome).length, ...(current && !current.outcome ? { current: `${current.id} ${current.title}` } : {}), cases };
 }
 
 /** A compact view of results.json for a chat model: totals plus one line per case. */

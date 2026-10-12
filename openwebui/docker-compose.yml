@@ -1,26 +1,40 @@
-# Open WebUI as a chat front end for the D365FO test runner.
+# Open WebUI as the chat front end for the D365FO test runner.
 #
-#   1. Start the settings app on this computer:  npm run ui
-#      (Linux only: npm run ui -- --host 0.0.0.0, so the container can reach it)
-#   2. Start Open WebUI:                         npm run openwebui:up
-#   3. Open http://localhost:3000, create the admin account, then add the tool server
-#      (Admin Panel > Settings > External Tools) with the address and key that
-#      `npm run openwebui` prints. Full steps: docs/openwebui.md
+# Easiest: `npm run studio`. It starts the settings app, writes openwebui/.env (tool-server address and key),
+# runs this file and opens http://localhost:3000 with the "D365FO test runner" tools already connected.
+#
+# By hand: start the settings app (`npm run ui`, on Linux `npm run ui -- --host 0.0.0.0`), put
+# D365FO_TOOL_KEY=<key from `npm run openwebui`> in openwebui/.env, then
+# `docker compose -f openwebui/docker-compose.yml up -d`. Full steps: docs/openwebui.md
 services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: d365fo-open-webui
     ports:
-      - "${OPENWEBUI_PORT:-3000}:8080"
+      # This computer only.
+      - "127.0.0.1:${OPENWEBUI_PORT:-3000}:8080"
     extra_hosts:
       # Lets the container reach the settings app on this computer as host.docker.internal (needed on Linux).
       - "host.docker.internal:host-gateway"
     environment:
-      # Optional: point Open WebUI at an OpenAI-compatible model endpoint for the chat itself.
-      # The test runs still use the LLM set in the active D365FO profile.
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      WEBUI_NAME: "D365FO Test Studio"
+      # Registers the settings app's OpenAPI tool server. Open WebUI reads this on first start and then keeps it
+      # in its own settings; if the key or port changes later, update it under Admin Panel > Settings > External Tools.
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"type": "openapi", "url": "${D365FO_TOOL_URL:-http://host.docker.internal:4365/tools}", "path": "openapi.json",
+        "auth_type": "bearer", "key": "${D365FO_TOOL_KEY:-}", "config": {"enable": true},
+        "info": {"id": "d365fo", "name": "D365FO test runner", "description": "Run and manage Dynamics 365 Finance & Operations tests"}}]
+      DEFAULT_PROMPT_SUGGESTIONS: >-
+        [{"title": ["Check my setup", "for the profile in use"], "content": "Which profile is in use? Check its setup and tell me in plain words what is missing."},
+        {"title": ["Dry-run the examples", "and summarise the results"], "content": "Dry-run the test cases in examples/testcases, wait for the run to finish and tell me what passed and what failed, with the reason."},
+        {"title": ["Write a test case", "from a description"], "content": "Write a test case in examples/testcases: open All vendors, create a vendor with a new account number, save, and check the vendor appears in the list."},
+        {"title": ["What has it learned?", "about F&O forms"], "content": "List the F&O forms the agent has learned so far and what it knows about each."},
+        {"title": ["Upload the last run", "to Azure DevOps"], "content": "Show the latest run in the history and upload it to Azure DevOps."}]
+      # Optional: an OpenAI-compatible model endpoint or Ollama for the chat itself. The test runs still use the
+      # LLM set in the active D365FO profile.
+      OPENAI_API_BASE_URL: "${OPENAI_API_BASE_URL:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
     volumes:
       - open-webui:/app/backend/data
     restart: unless-stopped

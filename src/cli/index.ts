@@ -27,6 +27,7 @@ import { environmentForChild, overriddenKeys, profileSelection } from '../config
 import { agentHome, toolTokenFile } from '../profiles/paths.js';
 import { DEFAULT_PORT, findRunningUi, isLoopback, loadOrCreateToken, loadOrCreateToolToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
+import { composeUp, DEFAULT_WEBUI_PORT, dockerComposeAvailable, dockerToolUrl, waitForHttp, writeComposeEnv } from '../ui/studio.js';
 import { defaultRepoRoot, desktopDirectory, installLauncher, uninstallLauncher, type LauncherContext } from '../launcher/install.js';
 
 const program = new Command();
@@ -520,6 +521,67 @@ program
     console.log(`  URL, Open WebUI in Docker (Admin Settings > External Tools):          http://host.docker.internal:${port}/tools`);
     console.log(`  Key:  ${key}\n`);
     console.log(`To issue a new key, delete ${toolTokenFile(home)} and restart the settings app. See docs/openwebui.md.`);
+  });
+
+program
+  .command('studio')
+  .description('One step to the chat front end: start the settings app and Open WebUI (Docker) already connected to it, and open Open WebUI')
+  .option('--port <n>', `Port for the settings app (default ${DEFAULT_PORT})`, Number.parseInt)
+  .option('--webui-port <n>', `Port for Open WebUI on this computer (default ${DEFAULT_WEBUI_PORT})`, Number.parseInt)
+  .option('--no-open', 'Do not open the browser')
+  .action(async (opts: { port?: number; webuiPort?: number; open: boolean }) => {
+    const home = agentHome();
+    const toolKey = await loadOrCreateToolToken(home);
+    const webuiPort = opts.webuiPort ?? DEFAULT_WEBUI_PORT;
+    const running = await findRunningUi(home, await loadOrCreateToken(home));
+    let ui: Awaited<ReturnType<typeof startUiServer>> | undefined;
+    let appUrl: string;
+    let toolPort: number;
+    if (running) {
+      toolPort = Number(new URL(running).port);
+      appUrl = running;
+      console.log(`Using the settings app that is already running on port ${toolPort}.`);
+      if (process.platform === 'linux') console.log('  On Linux, Open WebUI in Docker reaches it only if it was started with --host 0.0.0.0 (as this command does).');
+    } else {
+      // On Linux the container reaches the host through the Docker bridge, not loopback; only the key-protected /tools routes answer there.
+      ui = await startUiServer({ home, port: opts.port, host: process.platform === 'linux' ? '0.0.0.0' : undefined, childEnv: environmentForChild });
+      toolPort = ui.port;
+      appUrl = ui.openUrl;
+      console.log(`Settings app running at ${ui.url}`);
+    }
+    const dir = join(defaultRepoRoot(), 'openwebui');
+    await writeComposeEnv(dir, { toolPort, toolKey, webuiPort });
+    const webuiUrl = `http://localhost:${webuiPort}`;
+    const manual = () => {
+      console.log('\nAdd the tool server in Open WebUI yourself (Admin Panel > Settings > External Tools, type OpenAPI, Bearer auth):');
+      console.log(`  URL: ${dockerToolUrl(toolPort)}  (http://localhost:${toolPort}/tools when added under your own Settings > Tools)`);
+      console.log(`  Key: ${toolKey}`);
+    };
+    if (!(await dockerComposeAvailable())) {
+      console.log('\nDocker is not available, so Open WebUI was not started. Install Docker Desktop and run this again, or use an Open WebUI you already have.');
+      manual();
+      if (opts.open) await openBrowser(appUrl);
+    } else {
+      console.log('\nStarting Open WebUI (the first start downloads its image, which takes a few minutes)...');
+      if (!(await composeUp(dir))) {
+        console.log('docker compose failed; see the output above.');
+        manual();
+      } else if (await waitForHttp(`${webuiUrl}/health`, 180_000)) {
+        console.log(`\nOpen WebUI is ready at ${webuiUrl} with the "D365FO test runner" tools connected.`);
+        console.log('Pick a chat model with tool calling, turn the tools on with the + button, and ask for example: "List my profiles and dry-run examples/testcases".');
+        console.log('If you already had Open WebUI data from before, check the key under Admin Panel > Settings > External Tools:');
+        manual();
+        if (opts.open) await openBrowser(webuiUrl);
+      } else {
+        console.log(`Open WebUI did not answer at ${webuiUrl} yet. Check it with: docker compose -f openwebui/docker-compose.yml logs`);
+      }
+    }
+    if (ui) {
+      console.log('\nKeep this window open while you use the chat. Press Ctrl+C to stop the settings app (Open WebUI keeps running; stop it with npm run openwebui:down).');
+      const stop = (): void => void ui!.close().then(() => process.exit(0));
+      process.on('SIGINT', stop);
+      process.on('SIGTERM', stop);
+    }
   });
 
 async function launcherContext(): Promise<LauncherContext> {

@@ -128,7 +128,7 @@ describe('orchestrator run limits', () => {
     assert.equal(blocked.reached.length, 0);
     assert.equal(blocked.result.policyBlocks?.length, 1);
     const allowed = await run(turns(), [], { AGENT_ALLOW_DESTRUCTIVE: true });
-    assert.equal(allowed.reached.length, 1);
+    assert.equal(allowed.reached.filter((a) => !('textGone' in a)).length, 1, 'the click reached the browser (the F&O busy wait after it is not counted)');
   });
 
   it('stops when the token budget is spent', async () => {

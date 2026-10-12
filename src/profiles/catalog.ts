@@ -75,6 +75,8 @@ export const FIELD_CATALOG: FieldSpec[] = [
 
   { group: 'Browser', key: 'PW_HEADLESS', label: 'Hide the browser window', options: bool, help: 'Choose false to watch the browser while a test runs.' },
   { group: 'Browser', key: 'PW_BROWSER', label: 'Browser', options: ['chromium', 'firefox', 'webkit'], advanced: true },
+  { group: 'Browser', key: 'AGENT_LEARN_PAGES', label: 'Learn controls per form', options: bool, advanced: true, help: 'Remembers the controls it used on each F&O form and reuses them on later runs.' },
+  { group: 'Browser', key: 'AGENT_FNO_AUTO_WAIT', label: 'Wait for F&O after each action', options: bool, advanced: true },
 
   { group: 'Safety limits', key: 'AGENT_DRY_RUN', label: 'Dry run (no clicks or typing)', options: bool },
   { group: 'Safety limits', key: 'AGENT_RELOOP_MAX_RETRIES', label: 'Retries after a failed attempt', type: 'number', placeholder: '1' },

@@ -72,7 +72,9 @@ const DESTRUCTIVE_LABEL = /\b(delete|remove|purge|void|wipe|truncate|erase|disca
 /** Returns why a click is refused because it would destroy data, or undefined when it is not destructive. */
 export function destructiveClick(tool: string, args: Record<string, unknown>): string | undefined {
   if (tool !== 'browser_click') return undefined;
-  const label = [args.element, args.text, args.name].filter((v): v is string => typeof v === 'string').join(' ');
+  // A target can be a locator such as getByTestId('SystemDefinedDeleteButton'): split camel case so control names are checked too.
+  const target = typeof args.target === 'string' ? args.target.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
+  const label = [args.element, args.text, args.name, target].filter((v): v is string => typeof v === 'string' && v !== '').join(' ');
   const hit = DESTRUCTIVE_LABEL.exec(label);
   return hit ? `clicking "${label.slice(0, 80)}" looks destructive ("${hit[0]}")` : undefined;
 }

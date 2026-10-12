@@ -2,9 +2,34 @@
 
 The agent maintains a local, file-backed knowledge base (KB) so useful facts discovered during one run become planning context for the next.
 
+## Learning F&O forms while it works
+
+The most useful learning happens during a run, not at the end of it. `<KB_DIR>/pages.json` (default
+`./knowledge/pages.json`) is a map of the F&O forms the agent has worked on:
+
+- **Which form.** Each browser result carries the page URL and title. A form is keyed by its display menu item
+  (`mi=` in the URL), else by its caption. Every form visited, however it was reached (search box, a button, a
+  link), is added to the pages `d365_open_menu_item` can open by caption.
+- **Which controls.** After each successful click, entry, selection or hover, Playwright reports the locator the
+  action resolved to. With F&O's `data-dyn-controlname` set as the test-id attribute that is usually
+  `getByTestId('<AOT control name>')`, otherwise a role and name such as `getByRole('textbox', { name: 'Vendor
+  account' })`. It is stored under the form with the element description the model used and a success count.
+  Snapshot refs and position-based locators (`nth`, `first`) are never stored, nor are typed values.
+- **When it is used.** The first time the browser lands on a known form in an attempt, the tool result lists up to
+  15 learned controls with their targets. The model passes a target straight to `browser_click` / `browser_type`, so
+  a form it has seen before needs no full snapshot. A target that no longer matches is retried once after F&O
+  finishes loading, counted as a failure, and dropped once it fails more often than it worked.
+- **Notes.** `d365_page_note` saves a short fact about the current form (a field on a collapsed FastTab, a dialog
+  after Save); it is shown with the form's controls from then on.
+
+The map is updated in memory as the run goes (later cases in the same run benefit straight away) and written at the
+end of each attempt and after each note. Turn it off with `AGENT_LEARN_PAGES=false`. The settings app's chat tools
+show it with `list_learned_pages`. Delete the file to start over; edit it to correct a control. It holds no data
+values, but captions and control labels come from your environment, so treat it like the rest of `knowledge/`.
+
 ## Storage
 
-Location: `${KB_DIR}/kb.json` (default `./knowledge/kb.json`). It is a plain JSON file, easy to inspect and diff. There is no external database.
+Location: `${KB_DIR}/kb.json` (the form map above is `${KB_DIR}/pages.json`) (default `./knowledge/kb.json`). It is a plain JSON file, easy to inspect and diff. There is no external database.
 
 ## Entry kinds
 
