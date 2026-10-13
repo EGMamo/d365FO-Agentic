@@ -7,7 +7,7 @@ switch. Switching is off while a run is in progress. No Docker, Node.js or Pytho
 
 ## What happens on a user's computer
 
-1. They install `D365FO Agent-<version>.dmg` (macOS) or `D365FO Agent Setup <version>.exe` (Windows) and open it.
+1. They install `D365FO Agent-<version>.dmg` (macOS, Apple Silicon only: M1 or newer, no Intel build) or `D365FO Agent Setup <version>.exe` (Windows) and open it.
 2. The app starts the settings app and its tool server on `127.0.0.1` on Electron's own Node runtime.
 3. **First start only:** the bundled [uv](https://github.com/astral-sh/uv) downloads a standalone Python 3.11 and
    installs the pinned Open WebUI (`src/desktop/openwebui.ts`) into the app's data folder. This needs internet access

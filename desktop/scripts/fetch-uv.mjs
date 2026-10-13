@@ -16,7 +16,7 @@ const TRIPLES = {
   'linux-x64': 'x86_64-unknown-linux-gnu',
   'linux-arm64': 'aarch64-unknown-linux-gnu',
 };
-const defaults = { darwin: ['mac-arm64', 'mac-x64'], win32: ['win-x64'], linux: [`linux-${process.arch === 'arm64' ? 'arm64' : 'x64'}`] };
+const defaults = { darwin: ['mac-arm64'], win32: ['win-x64'], linux: [`linux-${process.arch === 'arm64' ? 'arm64' : 'x64'}`] };
 const targets = process.argv.slice(2).length ? process.argv.slice(2) : defaults[process.platform];
 
 for (const target of targets) {
