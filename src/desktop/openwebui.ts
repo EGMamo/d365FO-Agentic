@@ -149,6 +149,45 @@ export function chatConnection(cfg: AppConfig | undefined): { url: string; key: 
   }
 }
 
+/** The D365FO tool server as Open WebUI stores it. */
+export function toolConnection(opts: { toolUrl: string; toolKey: string }): Record<string, unknown> {
+  return {
+    type: 'openapi',
+    url: opts.toolUrl,
+    path: 'openapi.json',
+    auth_type: 'bearer',
+    key: opts.toolKey,
+    config: { enable: true },
+    info: { id: TOOL_SERVER_ID, name: 'D365FO test runner', description: 'Run and manage Dynamics 365 Finance & Operations tests' },
+  };
+}
+const TOOL_SERVER_ID = 'd365fo';
+
+/**
+ * Open WebUI keeps its settings after the first start, so the tool server's address and key are written again on every
+ * start through its own API. Only this one connection is replaced; other tool servers and the chat model (a global
+ * setting, managed in Open WebUI) are left as the user has them.
+ */
+export async function syncToolServer(baseUrl: string, conn: Record<string, unknown>, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const call = async (path: string, token: string | undefined, body?: unknown): Promise<any> => {
+    const res = await fetchImpl(`${baseUrl}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!res.ok) throw new Error(`Open WebUI ${path} answered ${res.status}.`);
+    return res.json();
+  };
+  // With sign-in switched off, Open WebUI signs in its one built-in local user (this is what its own page does).
+  const token = (await call('/api/v1/auths/signin', undefined, { email: 'admin@localhost', password: 'admin' })).token as string | undefined;
+  const current = ((await call('/api/v1/configs/tool_servers', token)).TOOL_SERVER_CONNECTIONS ?? []) as Array<{ info?: { id?: string } }>;
+  const others = current.filter((c) => c.info?.id !== TOOL_SERVER_ID);
+  const next = [conn, ...others];
+  const mine = current.find((c) => c.info?.id === TOOL_SERVER_ID);
+  if (mine && others.length === current.length - 1 && JSON.stringify(mine) === JSON.stringify(conn)) return;
+  await call('/api/v1/configs/tool_servers', token, { TOOL_SERVER_CONNECTIONS: next });
+}
+
 /** Environment for `open-webui serve`. */
 export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; chat?: { url: string; key: string } }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
@@ -159,18 +198,8 @@ export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: stri
     // Open WebUI's slim mode: no local embeddings, speech or vector database (those packages are not installed).
     USE_SLIM_DOCKER: 'true',
     ...Object.fromEntries(DISABLED_FEATURES.map((f) => [f, 'False'])),
-    // Open WebUI reads these on its first start and keeps them in its own settings after that.
-    TOOL_SERVER_CONNECTIONS: JSON.stringify([
-      {
-        type: 'openapi',
-        url: opts.toolUrl,
-        path: 'openapi.json',
-        auth_type: 'bearer',
-        key: opts.toolKey,
-        config: { enable: true },
-        info: { id: 'd365fo', name: 'D365FO test runner', description: 'Run and manage Dynamics 365 Finance & Operations tests' },
-      },
-    ]),
+    // Open WebUI reads these on its first start and keeps them in its own settings after that (the tool server is written again on every start: syncToolServer).
+    TOOL_SERVER_CONNECTIONS: JSON.stringify([toolConnection(opts)]),
     DEFAULT_PROMPT_SUGGESTIONS: JSON.stringify(PROMPT_SUGGESTIONS),
     ...(opts.chat ? { ENABLE_OPENAI_API: 'True', OPENAI_API_BASE_URL: opts.chat.url, OPENAI_API_KEY: opts.chat.key } : {}),
     BYPASS_EMBEDDING_AND_RETRIEVAL: 'True',

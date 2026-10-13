@@ -16,7 +16,7 @@ switch. Switching is off while a run is in progress. No Docker, Node.js or Pytho
 4. Open WebUI starts (20 to 40 seconds; the window shows progress meanwhile) on a free loopback port without a sign-in screen (one local user), with the tool server, starter
    prompts and, when the profile in use speaks an OpenAI-style API (OpenAI, Anthropic, GitHub Models, Ollama or another
    OpenAI-compatible server), that model as its chat model. With GitHub Copilot, add a model under Admin Panel >
-   Settings > Connections. Open WebUI keeps these settings after its first start.
+   Settings > Connections. Open WebUI keeps the chat model after its first start, so it is a global setting you manage in Open WebUI, not per profile. The tool server's address and key are refreshed on every start.
 5. The first test run downloads the Playwright browser (about 300 MB), using the Playwright MCP bundled in the app.
 
 If Open WebUI cannot be installed or started, the app opens the settings app instead; its **Chat** tab uses the

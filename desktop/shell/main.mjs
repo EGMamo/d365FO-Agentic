@@ -193,6 +193,12 @@ async function startOpenWebUi(home) {
   const url = `http://127.0.0.1:${port}`;
   const up = await waitFor(`${url}/health`, 240_000, () => failed);
   if (!up) throw failed ?? new Error('Open WebUI did not start in time.');
+  // Open WebUI keeps its first-start settings; the tool server address and key are refreshed every time.
+  try {
+    await owui.syncToolServer(url, owui.toolConnection({ toolUrl: `${ui.url}tools`, toolKey: ui.toolToken }));
+  } catch (e) {
+    status(undefined, `Could not refresh the tool server in the chat: ${e.message}`);
+  }
   ready = true;
   return url;
 }
