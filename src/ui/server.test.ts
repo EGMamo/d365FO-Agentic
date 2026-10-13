@@ -149,6 +149,9 @@ describe('run management', () => {
     const first = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '8', suite: '9', caseId: 'slow' }) });
     assert.equal(first.status, 200);
     assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'x' }) })).status, 409);
+    const switched = await rcall('/api/active', { method: 'POST', body: JSON.stringify({}) });
+    assert.equal(switched.status, 409, 'the profile cannot change while a run is in progress');
+    assert.match(((await switched.json()) as any).error, /run is in progress/);
     const stopped = await rcall('/api/run/stop', { method: 'POST', body: '{}' });
     assert.equal(stopped.status, 200);
     const r = await pollStatus('stopped');

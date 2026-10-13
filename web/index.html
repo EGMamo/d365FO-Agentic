@@ -155,9 +155,12 @@
   .chatbar { display:flex; gap:.5rem; align-items:flex-end; }
   .chatbar textarea { flex:1; min-height:2.8rem; max-height:10rem; }
   .suggest { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.7rem; }
+  /* Inside the desktop app the side strip does the navigation. */
+  body.embedded > header { display:none; }
 </style>
 </head>
 <body>
+<script>if (location.hash === '#embedded') document.body.classList.add('embedded');</script>
 <header>
   <img src="/icon.svg" alt="">
   <h1>D365FO Agent</h1>

@@ -1,8 +1,9 @@
 # D365FO Agent desktop app
 
-An installer for people who should not need a terminal. It opens one app window with **Open WebUI** as the chat,
-already connected to the D365FO test runner tools, and a second window (App > Settings, or Ctrl/Cmd+2) with the
-settings app: profiles, test cases, runs, results and history. No Docker, Node.js or Python needs to be installed.
+An installer for people who should not need a terminal. It opens one window with a strip of icons down the left side: **Chat** (Open WebUI,
+already connected to the D365FO test runner tools), then **Profiles**, **Test cases**, **Run**, **Results** and
+**History** from the settings app (Ctrl/Cmd+1 to 6). The profile in use is shown at the bottom of the strip; click it to
+switch. Switching is off while a run is in progress. No Docker, Node.js or Python needs to be installed.
 
 ## What happens on a user's computer
 

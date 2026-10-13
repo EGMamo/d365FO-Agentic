@@ -489,6 +489,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
+        if (run?.status === 'running') return send(res, 409, { error: 'A run is in progress. Wait for it to finish or stop it before switching profiles.' });
         await store.setActive(typeof body.name === 'string' ? body.name : undefined);
         return send(res, 200, { active: (await store.getActive()) ?? null });
       }

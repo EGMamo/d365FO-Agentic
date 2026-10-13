@@ -2,7 +2,7 @@
 // It starts the settings app (with its tool server) and Open WebUI on this computer, shows Open WebUI as the main
 // window and the settings app in a second window. Open WebUI is installed by the bundled uv on first start; when it
 // cannot start, the settings app opens instead, whose Chat tab works without it.
-import { app, BrowserWindow, dialog, Menu, shell } from 'electron';
+import { app, BaseWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron';
 import { spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,8 +14,17 @@ const lib = (p) => import(pathToFileURL(join(appDir, 'dist', p)).href);
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
-let chatWin;
-let settingsWin;
+const RAIL_WIDTH = 76;
+/** The strip down the left, the chat page (Open WebUI, first the splash) and the settings app, one window. */
+let win;
+let rail;
+let chatView;
+let settingsView;
+/** Which page is showing: chat, or a tab of the settings app. */
+let current = 'chat';
+/** Open WebUI is up, so Chat shows it; otherwise Chat is the settings app's own chat tab. */
+let chatReady = false;
+let profileInfo = { active: null, profiles: [], busy: false };
 let ui;
 let webui;
 let quitting = false;
@@ -40,12 +49,12 @@ function uvPath() {
 
 function status(text, line) {
   if (text || line) console.log(`[app] ${text ?? line}`);
-  if (!chatWin || chatWin.isDestroyed()) return;
-  chatWin.webContents.executeJavaScript(`window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)})`).catch(() => {});
+  if (!chatView || chatView.webContents.isDestroyed()) return;
+  chatView.webContents.executeJavaScript(`window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)})`).catch(() => {});
 }
 
-function guardLinks(win) {
-  win.webContents.setWindowOpenHandler(({ url }) => {
+function guardLinks(contents) {
+  contents.setWindowOpenHandler(({ url }) => {
     // Reports and downloads of the settings app open inside the app; anything else in the default browser.
     if (ui && url.startsWith(ui.url)) return { action: 'allow' };
     if (/^https?:/.test(url)) void shell.openExternal(url);
@@ -53,12 +62,62 @@ function guardLinks(win) {
   });
 }
 
-function openSettings() {
-  if (!ui) return;
-  if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
-  settingsWin = new BrowserWindow({ width: 1180, height: 820, title: 'D365FO Agent settings', autoHideMenuBar: true });
-  guardLinks(settingsWin);
-  void settingsWin.loadURL(ui.openUrl);
+function layout() {
+  if (!win || win.isDestroyed()) return;
+  const { width, height } = win.getContentBounds();
+  rail.setBounds({ x: 0, y: 0, width: RAIL_WIDTH, height });
+  for (const v of [chatView, settingsView]) v?.setBounds({ x: RAIL_WIDTH, y: 0, width: Math.max(width - RAIL_WIDTH, 0), height });
+}
+
+const run = (view, code) => view.webContents.executeJavaScript(code).catch(() => undefined);
+
+/** Chat, or one tab of the settings app: 'chat' | 'profiles' | 'cases' | 'run' | 'results' | 'history'. */
+async function go(id) {
+  if (!win || win.isDestroyed()) return;
+  const chatPage = id === 'chat' && chatReady;
+  if (!chatPage && !settingsView) return; // the settings app is still starting
+  current = id;
+  chatView.setVisible(chatPage);
+  settingsView?.setVisible(!chatPage);
+  if (!chatPage) await run(settingsView, `${id === 'results' ? 'viewRun = null; ' : ''}showTab(${JSON.stringify(id)})`);
+  (chatPage ? chatView : settingsView).webContents.focus();
+  pushState();
+}
+
+function pushState() {
+  if (rail && !rail.webContents.isDestroyed()) rail.webContents.send('rail:state', { current, profile: profileInfo.active, busy: profileInfo.busy });
+}
+
+/** Reads the profile in use and whether a run is going, from the settings app's own page. */
+async function pollProfiles() {
+  if (!settingsView || settingsView.webContents.isDestroyed()) return;
+  const info = await run(
+    settingsView,
+    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
+  );
+  if (!info) return;
+  profileInfo = info;
+  pushState();
+}
+
+function profileMenu() {
+  if (!settingsView) return;
+  const { active, profiles, busy } = profileInfo;
+  const items = profiles.map((name) => ({
+    label: name,
+    type: 'radio',
+    checked: name === active,
+    enabled: !busy,
+    click: async () => {
+      await run(settingsView, `use(${JSON.stringify(name)}).catch(fail)`);
+      void pollProfiles();
+    },
+  }));
+  if (!items.length) items.push({ label: 'No profiles yet', enabled: false });
+  items.push({ type: 'separator' });
+  if (busy) items.push({ label: 'A run is in progress; switching is off until it ends', enabled: false });
+  items.push({ label: 'Manage profiles…', click: () => void go('profiles') });
+  Menu.buildFromTemplate(items).popup({ window: win });
 }
 
 function buildMenu() {
@@ -67,8 +126,14 @@ function buildMenu() {
     {
       label: 'App',
       submenu: [
-        { label: 'Chat', accelerator: 'CmdOrCtrl+1', click: () => chatWin?.show() },
-        { label: 'Settings, test cases and results', accelerator: 'CmdOrCtrl+2', click: openSettings },
+        ...[
+          ['Chat', 'chat'],
+          ['Profiles and setup', 'profiles'],
+          ['Test cases', 'cases'],
+          ['Run', 'run'],
+          ['Results', 'results'],
+          ['History', 'history'],
+        ].map(([label, id], i) => ({ label, accelerator: `CmdOrCtrl+${i + 1}`, click: () => void go(id) })),
         { type: 'separator' },
         { label: 'Open the workspace folder', click: () => shell.openPath(workspace()) },
         { type: 'separator' },
@@ -141,12 +206,21 @@ function stopOpenWebUi() {
 async function main() {
   await app.whenReady();
   buildMenu();
-  chatWin = new BrowserWindow({ width: 1280, height: 860, title: 'D365FO Agent', show: true });
-  guardLinks(chatWin);
-  chatWin.on('close', () => {
+  win = new BaseWindow({ width: 1320, height: 860, minWidth: 900, minHeight: 600, title: 'D365FO Agent' });
+  rail = new WebContentsView({ webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true } });
+  chatView = new WebContentsView();
+  win.contentView.addChildView(chatView);
+  win.contentView.addChildView(rail);
+  win.on('resize', layout);
+  win.on('close', () => {
     if (process.platform !== 'darwin') app.quit();
   });
-  await chatWin.loadFile(join(here, 'splash.html'));
+  guardLinks(chatView.webContents);
+  ipcMain.on('rail:go', (_e, id) => void go(id));
+  ipcMain.on('rail:profile-menu', profileMenu);
+  layout();
+  await Promise.all([rail.webContents.loadFile(join(here, 'rail.html')), chatView.webContents.loadFile(join(here, 'splash.html'))]);
+  pushState();
 
   const root = workspace();
   process.chdir(root);
@@ -158,28 +232,42 @@ async function main() {
   status('Starting the settings app…');
   ui = await startUiServer({ home, root, childEnv });
 
+  // The settings app loads right away, so profiles can be set up while the chat installs on first start.
+  settingsView = new WebContentsView();
+  win.contentView.addChildView(settingsView);
+  settingsView.setVisible(false);
+  guardLinks(settingsView.webContents);
+  layout();
+  await settingsView.webContents.loadURL(ui.openUrl);
+  await run(settingsView, `document.body.classList.add('embedded')`);
+  void pollProfiles();
+  setInterval(() => void pollProfiles(), 2000).unref();
+
   try {
     const url = await startOpenWebUi(home);
-    if (!quitting) await chatWin.loadURL(url);
+    if (quitting) return;
+    await chatView.webContents.loadURL(url);
+    chatReady = true;
+    if (current === 'chat') await go('chat');
   } catch (e) {
     if (quitting) return;
     status(`The chat could not start: ${e.message}`);
-    await dialog.showMessageBox(chatWin, {
+    await dialog.showMessageBox(win, {
       type: 'warning',
       message: 'Open WebUI could not start',
-      detail: `${e.message}\n\nThe settings app opens instead; its Chat tab works without Open WebUI.`,
+      detail: `${e.message}\n\nThe Chat button now opens the settings app's own chat, which works without Open WebUI.`,
     });
-    await chatWin.loadURL(ui.openUrl);
+    if (current === 'chat') await go('chat');
   }
 }
 
 app.on('second-instance', () => {
-  if (chatWin) {
-    if (chatWin.isMinimized()) chatWin.restore();
-    chatWin.focus();
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
   }
 });
-app.on('activate', () => chatWin?.show());
+app.on('activate', () => win?.show());
 app.on('before-quit', () => {
   quitting = true;
   stopOpenWebUi();
