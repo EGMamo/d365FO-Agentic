@@ -297,14 +297,14 @@
 
 <dialog id="newDlg">
   <form method="dialog" id="newForm">
-    <h3>New profile</h3>
-    <p class="muted small">A profile holds the settings for one environment.</p>
+    <h3 id="newTitle">New profile</h3>
+    <p class="muted small" id="newHint">A profile holds the settings for one environment.</p>
     <label for="newName">Name</label>
     <input type="text" id="newName" maxlength="60" placeholder="e.g. Sandbox UAT" required autocomplete="off">
-    <label for="newFrom">Start from</label>
+    <label for="newFrom" id="newFromLabel">Start from</label>
     <select id="newFrom"></select>
     <div class="err" id="newErr" role="alert"></div>
-    <div class="row"><button class="btn" type="button" id="newCancel">Cancel</button><button class="btn primary" type="submit">Create</button></div>
+    <div class="row"><button class="btn" type="button" id="newCancel">Cancel</button><button class="btn primary" type="submit" id="newOk">Create</button></div>
   </form>
 </dialog>
 <dialog id="askDlg" aria-labelledby="askTitle">
@@ -502,6 +502,7 @@ function renderEditor() {
     isActive ? null : el('button', { class: 'btn primary', type: 'button', onclick: () => use(current.name).catch(fail) }, 'Use this profile'),
     el('button', { class: 'btn', type: 'button', id: 'checkBtn', onclick: () => checkSetup().catch(fail) }, 'Check setup'),
     el('button', { class: 'btn', type: 'button', onclick: () => openNew(current.name) }, 'Duplicate'),
+    el('button', { class: 'btn', type: 'button', onclick: () => openRename() }, 'Rename'),
     el('button', { class: 'btn danger', type: 'button', onclick: () => remove().catch(fail) }, 'Delete')));
   ed.append(el('ul', { class: 'checklist', id: 'checklist', 'aria-label': 'Ready to run?' }), el('div', { id: 'checkOut' }));
 
@@ -641,7 +642,20 @@ async function checkSetup() {
       el('button', { class: 'btn', type: 'button', onclick: () => $('checkOut').replaceChildren() }, 'Close'))));
   box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
+let renaming = false;
+function setNewMode(rename) {
+  renaming = rename;
+  $('newTitle').textContent = rename ? 'Rename profile' : 'New profile';
+  $('newHint').textContent = rename ? 'Only the name changes. The profile keeps its settings and its report folder.' : 'A profile holds the settings for one environment.';
+  $('newOk').textContent = rename ? 'Rename' : 'Create';
+  $('newFrom').hidden = $('newFromLabel').hidden = rename;
+}
+function openRename() {
+  setNewMode(true); $('newName').value = current.name; $('newErr').textContent = '';
+  $('newDlg').showModal(); $('newName').select();
+}
 function openNew(from) {
+  setNewMode(false);
   $('newName').value = ''; $('newErr').textContent = '';
   const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'A blank profile'));
   for (const p of state.profiles) sel.append(el('option', { value: p.name }, 'A copy of ' + p.name));
@@ -655,6 +669,10 @@ $('newForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const name = $('newName').value.trim(), copyFrom = $('newFrom').value;
   try {
+    if (renaming) {
+      await api('/api/profiles/' + encodeURIComponent(current.name), 'PATCH', { name });
+      $('newDlg').close(); current = null; toast('Renamed to "' + name + '"'); return await refresh(name);
+    }
     await api('/api/profiles', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [] });
     $('newDlg').close(); current = null;
     if (!state.active) await api('/api/active', 'POST', { name });

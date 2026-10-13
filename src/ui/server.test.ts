@@ -159,12 +159,14 @@ describe('run management', () => {
 describe('test-case editor, run history and upload', () => {
   // Fake CLI: `run` writes a results.json like the real one, `upload` prints the line the real one prints.
   const FAKE_CLI = [
-    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
     "const args = process.argv.slice(2);",
+    "let dir = 'reports';",
+    "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
-    "  mkdirSync('reports', { recursive: true });",
-    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 5 }]));",
-    "  writeFileSync('reports/report.html', '<html>report</html>');",
+    "  mkdirSync(dir, { recursive: true });",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 5 }]));",
+    "  writeFileSync(dir + '/report.html', '<html>report</html>');",
     "  process.exitCode = 1;",
     "} else if (args[0] === 'upload') {",
     "  console.log('INPUT ' + args[2] + ' PLAN ' + (args[4] ?? '-'));",
@@ -250,11 +252,13 @@ describe('test-case editor, run history and upload', () => {
 
 describe('Open WebUI tool server', () => {
   const FAKE_CLI = [
-    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
     "const args = process.argv.slice(2);",
+    "let dir = 'reports';",
+    "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
-    "  mkdirSync('reports', { recursive: true });",
-    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
+    "  mkdirSync(dir, { recursive: true });",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
     "  console.log('ran ' + args.join(' '));",
     "} else if (args[0] === 'upload') {",
     "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",

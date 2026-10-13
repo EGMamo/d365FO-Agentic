@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import dotenv from 'dotenv';
@@ -8,6 +9,10 @@ import { profilesDir, stateFile } from './paths.js';
 export const MASK = '••••••••';
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,59}$/;
+/** Stored in the profile file; never shown or edited in the UI. It does not change when the profile is renamed. */
+export const ID_KEY = 'PROFILE_ID';
+const ID = /^[a-z0-9]{8,32}$/;
+const newId = (): string => randomBytes(5).toString('hex');
 const KEY = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 const MAX_ENTRIES = 200;
 const MAX_VALUE = 4096;
@@ -118,7 +123,9 @@ export class ProfileStore {
     const stored = await this.find(name);
     if (!stored) throw new ProfileError(`No profile named "${name}".`, 404);
     const text = await readFile(this.fileFor(stored), 'utf8');
-    return this.parseOrdered(text).map((e) => (!reveal && isSecretKey(e.key) && e.value ? { key: e.key, value: MASK } : e));
+    return this.parseOrdered(text)
+      .filter((e) => reveal || e.key !== ID_KEY)
+      .map((e) => (!reveal && isSecretKey(e.key) && e.value ? { key: e.key, value: MASK } : e));
   }
 
   private parseOrdered(text: string): ProfileEntry[] {
@@ -140,7 +147,11 @@ export class ProfileStore {
     if (mode === 'replace' && !existing) throw new ProfileError(`No profile named "${name}".`, 404);
     const stored = existing ?? name;
     const old = existing ? new Map((await this.read(stored, true)).map((e) => [e.key, e.value])) : new Map<string, string>();
-    const final = checked
+    const id = old.get(ID_KEY) && ID.test(old.get(ID_KEY)!) ? old.get(ID_KEY)! : newId();
+    const final = [
+      ...checked.filter((e) => e.key !== ID_KEY),
+      { key: ID_KEY, value: id },
+    ]
       .map((e) => (e.value === MASK && isSecretKey(e.key) ? { key: e.key, value: old.get(e.key) ?? '' } : e))
       .filter((e) => !(isSecretKey(e.key) && e.value === MASK));
     await mkdir(this.dir(), { recursive: true, mode: 0o700 });
@@ -163,9 +174,39 @@ export class ProfileStore {
     const stored = await this.find(validateName(from));
     if (!stored) throw new ProfileError(`No profile named "${from}".`, 404);
     if (await this.find(to)) throw new ProfileError(`A profile named "${to}" already exists.`, 409);
-    const text = await readFile(this.fileFor(stored), 'utf8');
+    const entries = (await this.read(stored, true)).filter((e) => e.key !== ID_KEY);
     await mkdir(this.dir(), { recursive: true, mode: 0o700 });
-    await writeFile(this.fileFor(to), text, { mode: 0o600 });
+    await writeFile(this.fileFor(to), serialize([...entries, { key: ID_KEY, value: newId() }]), { mode: 0o600 });
+  }
+
+  /** The profile's permanent id, added to older profiles on first use. */
+  async idOf(name: string): Promise<string> {
+    const stored = await this.find(validateName(name));
+    if (!stored) throw new ProfileError(`No profile named "${name}".`, 404);
+    const entries = await this.read(stored, true);
+    const id = entries.find((e) => e.key === ID_KEY)?.value;
+    if (id && ID.test(id)) return id;
+    const fresh = newId();
+    const target = this.fileFor(stored);
+    await writeFile(target, serialize([...entries.filter((e) => e.key !== ID_KEY), { key: ID_KEY, value: fresh }]), { mode: 0o600 });
+    return fresh;
+  }
+
+  /** Gives a profile a new display name. Its id, and so its report folder, stay the same. */
+  async rename(from: string, to: string): Promise<void> {
+    validateName(to);
+    const stored = await this.find(validateName(from));
+    if (!stored) throw new ProfileError(`No profile named "${from}".`, 404);
+    const clash = await this.find(to);
+    if (clash && clash !== stored) throw new ProfileError(`A profile named "${clash}" already exists.`, 409);
+    await this.idOf(stored);
+    const wasActive = (await this.getActive()) === stored;
+    if (stored !== to) {
+      const tmp = `${this.fileFor(stored)}.rename`;
+      await rename(this.fileFor(stored), tmp);
+      await rename(tmp, this.fileFor(to));
+    }
+    if (wasActive) await this.setActive(to);
   }
 
   async getActive(): Promise<string | undefined> {

@@ -269,6 +269,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     onDone?: (state: RunState) => Promise<void>,
   ): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
     const active = await store.getActive();
+    if (active) await store.idOf(active); // older profiles get their id (and report folder) before the run reads the file
     const secrets = active ? await profileSecrets(store, active) : [];
     const state: RunState = { id: ++runSeq, kind, status: 'running', args, startedAt: new Date().toISOString(), lines: [] };
     run = state;
@@ -351,7 +352,12 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return resolve(repoRoot, dir);
   }
   /** The report folder the CLI writes to, honouring REPORT_DIR from the active profile. */
-  const reportDir = (): Promise<string> => profileDir('REPORT_DIR', 'reports');
+  const reportDir = async (): Promise<string> => {
+    const active = await store.getActive();
+    const explicit = active ? (await store.read(active, true)).find((e) => e.key === 'REPORT_DIR')?.value : undefined;
+    if (explicit) return resolve(repoRoot, explicit);
+    return resolve(repoRoot, active ? join('reports', await store.idOf(active)) : 'reports');
+  };
   const history = new RunHistory(reportDir);
 
   /** Reads a report written by the CLI: the latest run's, or a run from the history. */
@@ -501,6 +507,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');
           return send(res, 200, { name });
+        }
+        if (!m[2] && method === 'PATCH') {
+          const to = String((await readJson(req)).name ?? '');
+          await store.rename(name, to);
+          return send(res, 200, { name: to });
         }
         if (!m[2] && method === 'DELETE') {
           await store.delete(name);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -37,7 +37,7 @@ describe('ProfileStore', () => {
     await s.write('Sandbox', [{ key: 'D365_BASE_URL', value: 'https://y' }, { key: 'D365_PASSWORD', value: MASK }], 'replace');
     assert.equal((await s.read('Sandbox', true)).find((e) => e.key === 'D365_PASSWORD')?.value, 'pw#1', 'masked value keeps the stored secret');
     await s.write('Sandbox', [{ key: 'D365_BASE_URL', value: 'https://y' }], 'replace');
-    assert.equal((await s.read('Sandbox', true)).length, 1, 'omitting a secret removes it');
+    assert.deepEqual((await s.read('Sandbox', true)).map((e) => e.key), ['D365_BASE_URL', 'PROFILE_ID'], 'omitting a secret removes it');
     await s.delete('Sandbox');
     assert.deepEqual((await s.list()).map((p) => p.name), ['Other']);
   });
@@ -74,6 +74,36 @@ describe('ProfileStore', () => {
     await s.delete('B');
     assert.equal(await s.getActive(), undefined, 'deleting the active profile clears it');
     await assert.rejects(s.setActive('Missing'), /No profile/);
+  });
+
+  it('gives each profile a permanent id that survives renaming, hidden from the UI', async () => {
+    const s = await fresh();
+    await s.write('A', [{ key: 'D365_COMPANY', value: 'USMF' }, { key: 'PROFILE_ID', value: 'hacked' }], 'create');
+    const id = await s.idOf('A');
+    assert.match(id, /^[a-z0-9]{8,32}$/);
+    assert.notEqual(id, 'hacked');
+    assert.deepEqual((await s.read('A')).map((e) => e.key), ['D365_COMPANY']);
+    await s.write('A', [{ key: 'D365_COMPANY', value: 'DEMF' }], 'replace');
+    assert.equal(await s.idOf('A'), id, 'saving keeps the id');
+    await s.setActive('A');
+    await s.rename('A', 'Sandbox UAT');
+    assert.equal(await s.getActive(), 'Sandbox UAT');
+    assert.equal(await s.idOf('Sandbox UAT'), id);
+    assert.equal((await s.read('Sandbox UAT'))[0].value, 'DEMF');
+    await s.duplicate('Sandbox UAT', 'Copy');
+    assert.notEqual(await s.idOf('Copy'), id, 'a copy gets its own id');
+    await assert.rejects(s.rename('Copy', 'sandbox uat'), /already exists/);
+  });
+
+  it('adds an id to a profile saved before ids existed', async () => {
+    const s = await fresh();
+    await writeFile(s.fileFor('Old'), 'D365_COMPANY=USMF\n').catch(async () => {
+      await mkdir(join(s.home, 'profiles'), { recursive: true });
+      await writeFile(s.fileFor('Old'), 'D365_COMPANY=USMF\n');
+    });
+    const id = await s.idOf('Old');
+    assert.equal(await s.idOf('Old'), id);
+    assert.equal((await s.read('Old'))[0].value, 'USMF');
   });
 
   it('serializes in a form dotenv reads back', () => {
