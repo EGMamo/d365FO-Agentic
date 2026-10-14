@@ -1,8 +1,8 @@
 # D365FO Agent desktop app
 
 An installer for people who should not need a terminal. It opens one window with a strip of icons down the left side: **Chat** (Open WebUI,
-already connected to the D365FO test runner tools), then **Profiles**, **Test cases**, **Run**, **Results** and
-**History** from the settings app (Ctrl/Cmd+1 to 6). The profile in use is shown at the bottom of the strip; click it to
+already connected to the D365FO test runner tools), then **Profiles**, **AI models**, **Test cases**, **Run**, **Results** and
+**History** from the settings app (Ctrl/Cmd+1 to 7). The Chat page has a bar for the chat AI model, shared by every profile. The profile in use is shown at the bottom of the strip; click it to
 switch. Switching is off while a run is in progress. No Docker, Node.js or Python needs to be installed.
 
 ## What happens on a user's computer
@@ -14,9 +14,9 @@ switch. Switching is off while a run is in progress. No Docker, Node.js or Pytho
    to PyPI and GitHub (python-build-standalone), takes about 2 to 3 minutes on a fast connection and about 0.8 GB on disk (measured on Linux; macOS and Windows not measured yet). Open WebUI runs in its own slim mode: the install leaves out its local AI stack (PyTorch and its GPU libraries, embeddings, speech and image recognition, the bundled vector database) and the cloud storage clients, which took the Linux install from 7.1 GB to 0.7 GB. The list is `EXCLUDED_PACKAGES` in `src/desktop/openwebui.ts`. Chats use a hosted or local model through a connection, so none of that is needed; uploading documents for search and local voice input do not work. Features a test chat does not use are switched off with Open WebUI's own settings (`DISABLED_FEATURES` in the same file): sharing, channels, notes, folders, calendar, automations, web search, image and code tools, memories, cloud drives and extra model calls. A splash screen
    shows progress.
 4. Open WebUI starts (20 to 40 seconds; the window shows progress meanwhile) on a free loopback port without a sign-in screen (one local user), with the tool server, starter
-   prompts and, when the profile in use speaks an OpenAI-style API (OpenAI, Anthropic, GitHub Models, Ollama or another
+   prompts and, when the chat AI model speaks an OpenAI-style API (OpenAI, Anthropic, GitHub Models, Ollama or another
    OpenAI-compatible server), that model as its chat model. With GitHub Copilot, add a model under Admin Panel >
-   Settings > Connections. Open WebUI keeps the chat model after its first start, so it is a global setting you manage in Open WebUI, not per profile. The tool server's address and key are refreshed on every start.
+   Settings > Connections. The chat AI model is one setting for every profile: pick it in the bar above the chat, and the app writes it to Open WebUI's first connection (on every start and on every change). The tool server's address and key are refreshed on every start.
 5. The first test run downloads the Playwright browser (about 300 MB), using the Playwright MCP bundled in the app.
 
 If Open WebUI cannot be installed or started, the app opens the settings app instead; its **Chat** tab uses the

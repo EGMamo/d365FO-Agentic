@@ -6,3 +6,10 @@ contextBridge.exposeInMainWorld('rail', {
   profileMenu: () => ipcRenderer.send('rail:profile-menu'),
   onState: (cb) => ipcRenderer.on('rail:state', (_e, state) => cb(state)),
 });
+
+// The Chat model bar above Open WebUI (chatbar.html).
+contextBridge.exposeInMainWorld('bar', {
+  setModel: (id) => ipcRenderer.send('bar:set-model', id),
+  newChat: () => ipcRenderer.send('bar:new-chat'),
+  onState: (cb) => ipcRenderer.on('bar:state', (_e, state) => cb(state)),
+});

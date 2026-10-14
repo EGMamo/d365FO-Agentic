@@ -145,6 +145,17 @@ describe('run management', () => {
     assert.match(r.lines.join('\n'), /PROFILE none/);
   });
 
+  it('passes a ticked list of cases, an AI model for this run and the priority limit to the run', async () => {
+    const made = (await (await rcall('/api/models', { method: 'POST', body: JSON.stringify({ name: 'Run model', entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] }) })).json()) as any;
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC-1', 'TC-2'], model: 'Run model', maxPriority: 2, sortByPriority: true, dryRun: true }) });
+    assert.equal(started.status, 200);
+    const r = await pollStatus('passed');
+    assert.match(r.lines.join('\n'), new RegExp(`ARGS run --local cases --case TC-1,TC-2 --model ${made.id} --max-priority 2 --sort-by-priority --dry-run`));
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', model: 'Nope' }) })).status, 400);
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC 1; x'] }) })).status, 400);
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', maxPriority: 9 }) })).status, 400);
+  });
+
   it('refuses a second run while busy and can stop the first', async () => {
     const first = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '8', suite: '9', caseId: 'slow' }) });
     assert.equal(first.status, 200);
@@ -173,6 +184,7 @@ describe('test-case editor, run history and upload', () => {
     "  process.exitCode = 1;",
     "} else if (args[0] === 'upload') {",
     "  console.log('INPUT ' + args[2] + ' PLAN ' + (args[4] ?? '-'));",
+    "  console.log('UPLOAD_PROFILE ' + process.env.D365FO_PROFILE);",
     "  console.log('Uploaded run #42: https://dev.azure.com/org/p/_testManagement/runs?runId=42');",
     "}",
   ].join('\n');
@@ -250,6 +262,25 @@ describe('test-case editor, run history and upload', () => {
     assert.equal((await (await hcall('/api/history')).json() as any[]).length, 1, 'an upload is not a new run');
     assert.equal((await hcall(`/api/history/${id}`, { method: 'DELETE' })).status, 200);
     assert.deepEqual(await (await hcall('/api/history')).json(), []);
+  });
+
+  it('uploads a run with the profile it belongs to, not the one in use now, and keeps each profile\'s runs apart', async () => {
+    for (const name of ['Alpha', 'Beta']) assert.equal((await hcall('/api/profiles', { method: 'POST', body: JSON.stringify({ name, entries: [] }) })).status, 201);
+    assert.equal((await hcall('/api/active', { method: 'POST', body: JSON.stringify({ name: 'Alpha' }) })).status, 200);
+    assert.equal((await hcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases' }) })).status, 200);
+    await waitFor((r) => r.status === 'failed' && r.lines.some((l: string) => l.startsWith('Saved to run history')));
+    const [run] = (await (await hcall('/api/history')).json()) as any[];
+    assert.equal(run.profile, 'Alpha');
+    assert.ok(run.profileId);
+    assert.equal((await hcall('/api/active', { method: 'POST', body: JSON.stringify({ name: 'Beta' }) })).status, 200);
+    assert.equal((await hcall(`/api/history/${run.id}/upload`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
+    const up = await waitFor((r) => r.kind === 'upload' && r.status === 'passed');
+    assert.match(up.lines.join('\n'), /UPLOAD_PROFILE Alpha/);
+    // Renamed profile: the run still finds it by id.
+    assert.equal((await hcall('/api/profiles/Alpha', { method: 'PATCH', body: JSON.stringify({ name: 'Alpha 2' }) })).status, 200);
+    assert.equal((await hcall(`/api/history/${run.id}/upload`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
+    const again = await waitFor((r) => r.kind === 'upload' && r.status === 'passed' && r.lines.some((l: string) => l.includes('Alpha 2')));
+    assert.match(again.lines.join('\n'), /UPLOAD_PROFILE Alpha 2/);
   });
 });
 

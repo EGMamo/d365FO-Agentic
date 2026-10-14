@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Chat model</title>
+<style>
+  :root { --bg:#fff; --fg:#374151; --muted:#6b7280; --line:#d9dce1; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1f2024; --fg:#e5e7eb; --muted:#9aa0aa; --line:#2a2c31; --accent:#60a5fa; } }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display:flex; align-items:center; gap:10px; padding:0 14px; border-bottom:1px solid var(--line); }
+  label { font-weight:600; }
+  select { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 8px; max-width:260px; }
+  .note { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .note b { color:var(--fg); font-weight:600; }
+  .spacer { flex:1; }
+  button { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 10px; cursor:pointer; }
+  a { color:var(--accent); cursor:pointer; }
+</style>
+</head>
+<body>
+<label for="m">Chat model</label>
+<select id="m"></select>
+<span class="note" id="note"></span>
+<span class="spacer"></span>
+<button id="fresh" type="button">New chat</button>
+<script>
+  const sel = document.getElementById('m');
+  sel.addEventListener('change', () => bar.setModel(sel.value));
+  document.getElementById('fresh').addEventListener('click', () => bar.newChat());
+  bar.onState(({ models, chatModel, profile, error }) => {
+    sel.replaceChildren(...(models.length ? models : [{ id: '', name: 'No AI model yet' }]).map((m) => Object.assign(new Option(m.name, m.id), { selected: m.id === chatModel })));
+    sel.disabled = !models.length;
+    const n = document.getElementById('note'); n.replaceChildren();
+    if (error) { n.textContent = error; return; }
+    n.append('Same for every profile · tools run on ', Object.assign(document.createElement('b'), { textContent: profile || 'no profile yet' }));
+  });
+</script>
+</body>
+</html>

@@ -188,6 +188,33 @@ export async function syncToolServer(baseUrl: string, conn: Record<string, unkno
   await call('/api/v1/configs/tool_servers', token, { TOOL_SERVER_CONNECTIONS: next });
 }
 
+/**
+ * Points Open WebUI's first OpenAI connection at the chat AI model. The chat model is global, so this runs on every
+ * start and whenever the model is changed on the Chat page; further connections the user added stay as they are.
+ */
+export async function syncChatModel(baseUrl: string, conn: { url: string; key: string } | undefined, fetchImpl: typeof fetch = fetch): Promise<void> {
+  if (!conn) return;
+  const call = async (path: string, token: string | undefined, body?: unknown): Promise<any> => {
+    const res = await fetchImpl(`${baseUrl}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!res.ok) throw new Error(`Open WebUI ${path} answered ${res.status}.`);
+    return res.json();
+  };
+  const token = (await call('/api/v1/auths/signin', undefined, { email: 'admin@localhost', password: 'admin' })).token as string | undefined;
+  const cur = await call('/openai/config', token);
+  const urls = [...((cur.OPENAI_API_BASE_URLS ?? []) as string[])];
+  const keys = [...((cur.OPENAI_API_KEYS ?? []) as string[])];
+  const configs = { ...((cur.OPENAI_API_CONFIGS ?? {}) as Record<string, unknown>) };
+  if (urls[0] === conn.url && keys[0] === conn.key && cur.ENABLE_OPENAI_API === true) return;
+  urls[0] = conn.url;
+  keys[0] = conn.key;
+  configs['0'] = { ...((configs['0'] ?? {}) as object), enable: true };
+  await call('/openai/config/update', token, { ENABLE_OPENAI_API: true, OPENAI_API_BASE_URLS: urls, OPENAI_API_KEYS: keys, OPENAI_API_CONFIGS: configs });
+}
+
 /** Environment for `open-webui serve`. */
 export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; chat?: { url: string; key: string } }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {

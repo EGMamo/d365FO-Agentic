@@ -250,6 +250,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (v.length > 200 || /[\r\n]/.test(v) || v.startsWith('-')) return { error: `Invalid ${key} filter` };
       args.push(flag, v);
     }
+    if (body.maxPriority !== undefined && body.maxPriority !== '') {
+      const n = Number(body.maxPriority);
+      if (!Number.isInteger(n) || n < 1 || n > 4) return { error: 'Priority must be 1-4' };
+      args.push('--max-priority', String(n));
+    }
     if (body.sortByPriority === true) args.push('--sort-by-priority');
     if (body.dryRun === true) args.push('--dry-run');
     if (body.upload === true) args.push('--upload');
@@ -397,6 +402,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
   const history = new HistoryIndex(allReportDirs);
 
+  async function activeIdOf(): Promise<string | null> {
+    const active = await store.getActive();
+    return active ? store.idOf(active) : null;
+  }
+
   /** The AI model setup the profile in use points to. */
   async function activeModelOf(): Promise<{ id: string; name: string } | null> {
     const active = await store.getActive();
@@ -543,7 +553,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return void res.end(await readFile(join(WEB_DIR, 'icon.svg')));
       }
       if (method === 'GET' && url.pathname === '/api/state') {
-        return send(res, 200, { profiles: await store.list(), models: await modelList(), chatModel: (await models.getChat()) ?? null, active: (await store.getActive()) ?? null, activeModel: await activeModelOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
+        return send(res, 200, { profiles: await store.list(), models: await modelList(), chatModel: (await models.getChat()) ?? null, active: (await store.getActive()) ?? null, activeId: await activeIdOf(), activeModel: await activeModelOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
@@ -562,7 +572,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (m) {
         const name = decodeURIComponent(m[1]);
         if (m[2] && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
-        if (!m[2] && method === 'GET') return send(res, 200, { name, entries: await store.read(name) });
+        if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');
           return send(res, 200, { name });

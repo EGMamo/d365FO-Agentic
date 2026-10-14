@@ -51,6 +51,7 @@
   .item small { display:block; color:var(--muted); }
   .pill { font-size:.72rem; padding:.1rem .5rem; border-radius:99px; background:var(--accent); color:var(--accent-text); white-space:nowrap; }
   .pill.right { margin-left:auto; }
+  .pill.bad { background:var(--danger); color:#fff; }
 
   fieldset.group { border:1px solid var(--line); border-radius:var(--radius); padding:.9rem 1rem .5rem; margin:0 0 1rem; min-width:0; }
   fieldset.group > legend { font-weight:600; padding:0 .4rem; font-size:1rem; }
@@ -155,6 +156,8 @@
   .chatbar { display:flex; gap:.5rem; align-items:flex-end; }
   .chatbar textarea { flex:1; min-height:2.8rem; max-height:10rem; }
   .suggest { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.7rem; }
+  .checks { display:flex; flex-direction:column; gap:.15rem; max-height:16rem; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:.3rem .5rem; background:var(--sunk); }
+  .checks label.check { display:flex; align-items:baseline; gap:.5rem; padding:.2rem 0; } .checks small { color:var(--muted); margin-left:.3rem; }
   /* Inside the desktop app the side strip does the navigation. */
   body.embedded > header { display:none; }
 </style>
@@ -166,6 +169,7 @@
   <h1>D365FO Agent</h1>
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button role="tab" data-tab="profiles" aria-selected="true" type="button">Setup</button>
+    <button role="tab" data-tab="models" aria-selected="false" type="button">AI models</button>
     <button role="tab" data-tab="chat" aria-selected="false" type="button">Chat</button>
     <button role="tab" data-tab="cases" aria-selected="false" type="button">Test cases</button>
     <button role="tab" data-tab="run" aria-selected="false" type="button">Run</button>
@@ -187,6 +191,18 @@
         <p class="muted small" id="homeInfo" style="margin-top:.9rem;word-break:break-all"></p>
       </aside>
       <section class="panel" id="editor" aria-live="polite"></section>
+    </div>
+  </section>
+
+  <section class="view" id="tab-models" role="tabpanel">
+    <div class="layout">
+      <aside class="panel">
+        <h2>AI models</h2>
+        <p class="muted small">Set up each AI connection once. Profiles and Chat pick one from this list.</p>
+        <div id="modelList"></div>
+        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="modelNew" type="button">+ New AI model</button></div>
+      </aside>
+      <section class="panel" id="modelEditor" aria-live="polite"></section>
     </div>
   </section>
 
@@ -218,8 +234,11 @@
       <div class="field" data-src="devops" hidden><label for="plan">Test plan and suite</label>
         <div class="row"><input type="text" id="plan" placeholder="Plan ID (default from the profile)" style="width:16rem" inputmode="numeric"><input type="text" id="suite" placeholder="Suite ID (optional)" style="width:14rem" inputmode="numeric"></div>
         <div class="help">The whole plan or suite runs. Needs the Azure DevOps settings in the profile.</div></div>
-      <div class="field" data-src="local"><label for="caseId">Which case</label>
-        <select id="caseId"><option value="">All cases</option></select><div class="help" id="caseHelp"></div></div>
+      <div class="field" data-src="local"><label id="casesLabel">Test cases</label>
+        <div>
+          <div class="row" style="margin-bottom:.3rem"><b id="selCount" role="status"></b><button class="link small" id="selAll" type="button">Select all</button><button class="link small" id="selNone" type="button">Clear</button></div>
+          <div class="checks" id="caseChecks" role="group" aria-labelledby="casesLabel"></div><div class="help" id="caseHelp"></div>
+        </div></div>
       <div class="field" data-src="devops" hidden><label for="caseIdText">One case only</label>
         <input type="text" id="caseIdText" placeholder="Work item ID (optional)" style="max-width:16rem"></div>
       <div class="field">
@@ -234,7 +253,9 @@
             <div class="field"><label for="tags">Only tags</label><input type="text" id="tags" placeholder="smoke, vendor"></div>
             <div class="field"><label for="modules">Only modules</label><input type="text" id="modules" placeholder="Accounts payable"></div>
             <div class="field"><label for="retries">Retries per case</label><input type="number" id="retries" min="0" max="10" placeholder="From the profile" style="max-width:12rem"></div>
+            <div class="field"><label for="maxPrio">Most urgent priority</label><select id="maxPrio" style="max-width:12rem"><option value="">Any priority</option><option value="1">1 only</option><option value="2">1 to 2</option><option value="3">1 to 3</option></select></div>
             <div class="field"><label></label><label class="check"><input type="checkbox" id="sortPrio"> Run the most urgent cases first (by priority)</label></div>
+            <div class="field"><label for="runModel">AI model for this run</label><select id="runModel" style="max-width:24rem"></select><div class="help">Same as --model in the terminal. The profile is not changed.</div></div>
           </details>
         </div>
       </div>
@@ -260,7 +281,8 @@
         <span class="spacer"></span>
         <button class="btn" id="chatClear" type="button">New chat</button>
       </div>
-      <p class="muted small">Ask in plain words. The chat uses the AI model of the profile in use and can check the setup, write test cases, start runs and read results. It is told to ask before a real run or an upload.</p>
+      <div class="row" style="margin-bottom:.5rem"><label for="chatModelSel" class="small"><b>Chat model</b></label><select id="chatModelSel" style="max-width:20rem"></select><span class="muted small">Same for every profile · tools run on <b id="chatTools"></b></span></div>
+      <p class="muted small">Ask in plain words. The chat can check the setup, write test cases, start runs and read results. It is told to ask before a real run or an upload.</p>
       <div id="chatLog" aria-live="polite"></div>
       <div class="suggest" id="chatSuggest"></div>
       <form class="chatbar" id="chatForm">
@@ -271,17 +293,25 @@
   </section>
 
   <section class="view" id="tab-results" role="tabpanel">
-    <div class="panel">
-      <div class="actions" style="margin-bottom:.8rem">
-        <h3 id="resultsTitle">Latest run</h3>
-        <span class="spacer"></span>
-        <label class="check"><input type="checkbox" id="onlyBad"> Only cases that did not pass</label>
-        <button class="btn" id="refreshResults" type="button">Refresh</button>
-        <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Full report ↗</a>
-        <a class="btn" id="jsonLink" href="/download/results.json">JSON</a>
-        <a class="btn" id="junitLink" href="/download/results.junit.xml">JUnit XML</a>
-      </div>
-      <div id="results"></div>
+    <div class="layout">
+      <aside class="panel">
+        <h2>Runs</h2>
+        <label class="check small" style="margin-bottom:.5rem"><input type="checkbox" id="resMine" checked> <span id="resMineText">Only the profile in use</span></label>
+        <div id="resultRuns"></div>
+      </aside>
+      <section class="panel">
+        <div class="actions" style="margin-bottom:.3rem">
+          <h3 id="resultsTitle">Latest run</h3>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="onlyBad"> Only cases that did not pass</label>
+          <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Full report ↗</a>
+          <a class="btn" id="jsonLink" href="/download/results.json">JSON</a>
+          <a class="btn" id="junitLink" href="/download/results.junit.xml">JUnit XML</a>
+          <span id="resultUpload"></span>
+        </div>
+        <p class="muted small" id="resultMeta" style="margin:0 0 .8rem"></p>
+        <div id="results"></div>
+      </section>
     </div>
   </section>
 
@@ -289,11 +319,13 @@
     <div class="panel">
       <div class="actions" style="margin-bottom:.8rem">
         <h3>Run history</h3>
+        <label class="check small"><input type="checkbox" id="histMine" checked> <span id="histMineText">Only the profile in use</span></label>
         <span class="spacer"></span>
         <label class="row small">Plan for upload <input type="text" id="uploadPlan" placeholder="Default from the profile" style="width:13rem"></label>
         <button class="btn" id="refreshHistory" type="button">Refresh</button>
       </div>
       <div id="history"></div>
+      <p class="muted small" style="margin-top:.8rem">Uploads always use the profile the run belongs to, whatever profile is in use now.</p>
     </div>
   </section>
 </main>
@@ -360,10 +392,17 @@ function ask(title, body, okLabel, danger) {
 // ── Chat ──
 let chat = [];
 const CHAT_IDEAS = ['Check my setup', 'Dry-run examples/testcases and tell me what failed', 'Write a test case that creates a vendor', 'Summarise the last run'];
+function renderChatModel() {
+  const sel = $('chatModelSel'); if (!sel) return;
+  sel.replaceChildren(...(state.models.length ? state.models.map((m) => el('option', { value: m.id }, m.name)) : [el('option', { value: '' }, 'No AI model yet')]));
+  sel.value = state.chatModel || '';
+  $('chatTools').textContent = state.active || 'the .env file';
+}
+$('chatModelSel').addEventListener('change', () => api('/api/chat-model', 'POST', { id: $('chatModelSel').value }).then(() => refresh()).catch(fail));
 function renderChat() {
   const log = $('chatLog');
   log.replaceChildren(...(chat.length ? chat.map((m) => el('div', { class: 'msg ' + m.role }, m.content, m.used && m.used.length ? el('span', { class: 'used' }, 'Used: ' + m.used.join(', ')) : null))
-    : [el('p', { class: 'empty' }, state.active ? 'Using the AI model of "' + state.active + '".' : 'Choose a profile on the Setup tab first: the chat uses its AI model.')]));
+    : [el('p', { class: 'empty' }, state.chatModel ? 'Using the AI model "' + modelName(state.chatModel) + '".' : 'Add an AI model on the AI models tab first: the chat uses it.')]));
   $('chatSuggest').replaceChildren(...(chat.length ? [] : CHAT_IDEAS.map((t) => el('button', { class: 'btn small', type: 'button', onclick: () => { $('chatInput').value = t; sendChat(); } }, t))));
   log.scrollTop = log.scrollHeight;
 }
@@ -397,7 +436,9 @@ async function refresh(select) {
   $('activeInfo').textContent = state.active ? 'Runs use "' + state.active + '".' : 'No profile is in use: runs read the .env file in the project folder.';
   $('noneBtn').hidden = !state.active;
   await refreshUsing();
-  renderList();
+  renderList(); renderModelList(); renderChatModel();
+  if (curModel && !state.models.some((m) => m.id === curModel.id)) curModel = null;
+  if (!curModel) renderModelEditor();
   if (select === null) { current = null; return renderEditor(); }
   const name = select || (current && state.profiles.some((p) => p.name === current.name) ? current.name : (state.active || (state.profiles[0] && state.profiles[0].name)));
   if (name) await open(name, true); else { current = null; renderEditor(); }
@@ -426,12 +467,15 @@ async function leaveOk() {
 async function open(name, force) {
   if (!force && current && current.name !== name && !(await leaveOk())) return;
   const data = await api('/api/profiles/' + encodeURIComponent(name));
-  current = { name, entries: data.entries };
+  current = { name, id: data.id, entries: data.entries };
   renderList(); renderEditor();
 }
 
-const provider = () => { const s = document.querySelector('#form [data-key="LLM_PROVIDER"]'); return (s && s.value) || 'anthropic'; };
-const formValue = (key) => { const i = document.querySelector('#form [data-key="' + key + '"]'); return i ? i.value.trim() : ''; };
+const provider = (root = '#mform') => { const s = document.querySelector(root + ' [data-key="LLM_PROVIDER"]'); return (s && s.value) || 'anthropic'; };
+const formValue = (key, root = '#form') => { const i = document.querySelector(root + ' [data-key="' + key + '"]'); return i ? i.value.trim() : ''; };
+const modelFields = () => state.catalog.filter((f) => f.group === 'AI model');
+const profileFields = () => state.catalog.filter((f) => f.group !== 'AI model');
+const modelName = (id) => { const m = state.models.find((x) => x.id === id); return m ? m.name : ''; };
 function checkField(input) {
   const v = input.value.trim(), type = input.dataset.type;
   let msg = '';
@@ -497,7 +541,8 @@ function welcome() {
 function renderEditor() {
   const ed = $('editor'); ed.replaceChildren();
   if (!current) { ed.append(state.profiles.length ? el('p', { class: 'empty' }, 'Pick a profile on the left, or create a new one.') : welcome()); snapshot = ''; return; }
-  const known = new Set(state.catalog.map((f) => f.key));
+  // The AI model settings now live in the AI models list; an old profile that still holds some shows them as other variables.
+  const known = new Set([...profileFields().map((f) => f.key), 'AI_MODEL']);
   const values = new Map(current.entries.map((e) => [e.key, e.value]));
   const isActive = state.active === current.name;
   ed.append(el('div', { class: 'actions', style: 'margin-bottom:1rem' },
@@ -507,10 +552,20 @@ function renderEditor() {
     el('button', { class: 'btn', type: 'button', onclick: () => openNew(current.name) }, 'Duplicate'),
     el('button', { class: 'btn', type: 'button', onclick: () => openRename() }, 'Rename'),
     el('button', { class: 'btn danger', type: 'button', onclick: () => remove().catch(fail) }, 'Delete')));
+  ed.append(el('p', { class: 'muted small', style: 'margin:-.4rem 0 .8rem' }, 'Profile ID ', el('code', {}, current.id || ''), ' stays the same if you rename it. Reports are saved in reports/' + (current.id || '') + '.'));
   ed.append(el('ul', { class: 'checklist', id: 'checklist', 'aria-label': 'Ready to run?' }), el('div', { id: 'checkOut' }));
 
   const form = el('form', { id: 'form', novalidate: true });
   for (const g of [...new Set(state.catalog.map((f) => f.group))]) {
+    if (g === 'AI model') {
+      const pick = el('select', { id: 'f_AI_MODEL', 'data-key': 'AI_MODEL' }, el('option', { value: '' }, 'Choose an AI model…'), state.models.map((m) => el('option', { value: m.id }, m.name)));
+      pick.value = values.get('AI_MODEL') || '';
+      form.append(el('fieldset', { class: 'group' }, el('legend', {}, 'AI model for runs'), el('p', { class: 'gdesc' }, 'The model that reads each test case and drives the browser.'),
+        el('div', { class: 'field' }, el('label', { for: 'f_AI_MODEL' }, 'AI model', el('span', { class: 'req', title: 'Needed before a run', 'aria-label': 'required' }, '*')), pick,
+          el('div', { class: 'help' }, 'Keys and addresses are set up once under AI models and shared by all profiles.'), el('div', { class: 'ferr', role: 'alert', hidden: true })),
+        el('button', { class: 'btn', type: 'button', onclick: () => leaveOk().then((ok) => ok && showTab('models')).catch(fail) }, 'Manage AI models')));
+      continue;
+    }
     const fs = el('fieldset', { class: 'group' }, el('legend', {}, g), state.groups[g] ? el('p', { class: 'gdesc' }, state.groups[g]) : null);
     const specs = state.catalog.filter((f) => f.group === g);
     for (const spec of specs.filter((s) => !s.advanced)) fs.append(fieldInput(spec, values.get(spec.key)));
@@ -541,34 +596,33 @@ function renderEditor() {
   snapshot = JSON.stringify(collect());
   onFormChange();
 }
+function applyProviders(root) {
+  const p = provider(root);
+  for (const f of document.querySelectorAll(root + ' .field[data-providers]')) f.hidden = !f.dataset.providers.split(' ').includes(p);
+  for (const d of document.querySelectorAll(root + ' details.more')) { const any = [...d.querySelectorAll('.field')].some((f) => !f.hidden); if (d.querySelector('.field')) d.hidden = !any; }
+}
 function onFormChange() {
-  const p = provider();
-  for (const f of document.querySelectorAll('#form .field[data-providers]')) f.hidden = !f.dataset.providers.split(' ').includes(p);
-  for (const d of document.querySelectorAll('#form details.more')) { const any = [...d.querySelectorAll('.field')].some((f) => !f.hidden); if (d.querySelector('.field')) d.hidden = !any; }
   const dirty = isDirty();
   const s = $('saveState'); if (s) { s.textContent = dirty ? 'Unsaved changes' : 'All changes saved'; s.className = 'state' + (dirty ? ' dirty' : ''); }
   if ($('saveBtn')) { $('saveBtn').disabled = !dirty; $('discardBtn').disabled = !dirty; }
   renderChecklist();
 }
 function focusField(key) {
-  const i = document.querySelector('#form [data-key="' + key + '"]'); if (!i) return;
+  const i = document.querySelector('#form [data-key="' + key + '"], #tab-models [data-key="' + key + '"]'); if (!i) return;
   const d = i.closest('details'); if (d) d.open = true;
   i.scrollIntoView({ block: 'center', behavior: 'smooth' }); i.focus({ preventScroll: true });
 }
 /** What still stands between this profile and a run, from what is in the form right now. */
 function readiness() {
-  const p = provider(), has = (k) => formValue(k) !== '';
+  const has = (k) => formValue(k) !== '';
   const items = [];
   let urlOk = false;
   try { urlOk = ['http:', 'https:'].includes(new URL(formValue('D365_BASE_URL')).protocol); } catch { /* missing or invalid */ }
   items.push({ ok: urlOk, title: 'F&O address', todo: 'Enter your sandbox address.', done: formValue('D365_BASE_URL').replace(/^https?:\/\//, ''), key: 'D365_BASE_URL' });
   const pw = has('D365_USERNAME') && has('D365_PASSWORD'), sess = has('D365_STORAGE_STATE'), app = has('D365_TENANT_ID') && has('D365_CLIENT_ID') && has('D365_CLIENT_SECRET');
   items.push({ ok: pw || sess || app, title: 'Sign-in', todo: 'Add a username and password, or a saved session.', done: sess ? 'Saved session' : pw ? 'Username and password' : 'App registration', key: has('D365_USERNAME') ? 'D365_PASSWORD' : 'D365_USERNAME' });
-  const need = state.catalog.filter((f) => f.required && f.providers && f.providers.includes(p));
-  let missing = need.find((f) => !has(f.key));
-  if (p === 'anthropic' && missing && missing.key === 'ANTHROPIC_API_KEY' && has('ANTHROPIC_AUTH_TOKEN')) missing = undefined;
-  const custom = p === 'anthropic' && has('ANTHROPIC_BASE_URL');
-  items.push({ ok: !missing, title: 'AI model', todo: missing ? 'Add: ' + missing.label + '.' : '', done: (state.providers[p] || p) + (custom ? ' via your own URL' : ''), key: missing ? missing.key : 'LLM_PROVIDER' });
+  const chosen = formValue('AI_MODEL');
+  items.push({ ok: Boolean(chosen && modelName(chosen)), title: 'AI model', todo: 'Choose an AI model for runs.', done: modelName(chosen), key: 'AI_MODEL' });
   const active = state.active === current.name;
   items.push({ ok: active, title: 'In use', todo: 'Runs use ' + (state.active ? '"' + state.active + '"' : 'the .env file') + ' until you choose "Use this profile".', done: 'Runs use this profile.', action: active ? null : () => use(current.name).catch(fail) });
   return items;
@@ -580,9 +634,9 @@ function renderChecklist() {
     el('div', {}, el('b', {}, it.title), el('span', { class: 'd' }, it.ok ? it.done : it.todo), ' ',
       it.ok ? null : el('button', { class: 'link small', type: 'button', onclick: it.action || (() => focusField(it.key)) }, it.action ? 'Use it' : 'Fix')))));
 }
-function collect() {
+function collect(root = '#form') {
   const entries = [];
-  for (const i of document.querySelectorAll('#form [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value.trim() === MASK ? MASK : i.value });
+  for (const i of document.querySelectorAll(root + ' [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value.trim() === MASK ? MASK : i.value });
   for (const row of document.querySelectorAll('#customs .custom')) {
     const key = row.querySelector('[data-ck]').value.trim(); const value = row.querySelector('[data-cv]').value;
     if (key) entries.push({ key, value });
@@ -599,7 +653,8 @@ async function save(quiet) {
   await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries: collect() });
   if (!quiet) toast('Saved');
   await open(current.name, true);
-  if (state.active === current.name) await refreshUsing();
+  state = await api('/api/state'); renderList();
+  await refreshUsing();
   return true;
 }
 async function use(name) {
@@ -645,12 +700,14 @@ async function checkSetup() {
       el('button', { class: 'btn', type: 'button', onclick: () => $('checkOut').replaceChildren() }, 'Close'))));
   box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
-let renaming = false;
-function setNewMode(rename) {
-  renaming = rename;
-  $('newTitle').textContent = rename ? 'Rename profile' : 'New profile';
-  $('newHint').textContent = rename ? 'Only the name changes. The profile keeps its settings and its report folder.' : 'A profile holds the settings for one environment.';
+let renaming = false, dlgKind = 'profile';
+function setNewMode(rename, kind = 'profile') {
+  renaming = rename; dlgKind = kind;
+  const what = kind === 'model' ? 'AI model' : 'profile';
+  $('newTitle').textContent = (rename ? 'Rename ' : 'New ') + what;
+  $('newHint').textContent = rename ? (kind === 'model' ? 'Only the name changes. Profiles and Chat keep using it.' : 'Only the name changes. The profile keeps its settings and its report folder.') : kind === 'model' ? 'One connection to a model: provider, key and model name.' : 'A profile holds the settings for one environment.';
   $('newOk').textContent = rename ? 'Rename' : 'Create';
+  $('newName').placeholder = kind === 'model' ? 'e.g. Claude via company gateway' : 'e.g. Sandbox UAT';
   $('newFrom').hidden = $('newFromLabel').hidden = rename;
 }
 function openRename() {
@@ -672,6 +729,13 @@ $('newForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const name = $('newName').value.trim(), copyFrom = $('newFrom').value;
   try {
+    if (dlgKind === 'model') {
+      let id = curModel && curModel.id;
+      if (renaming) await api('/api/models/' + encodeURIComponent(id), 'PATCH', { name });
+      else id = (await api('/api/models', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] })).id;
+      $('newDlg').close(); curModel = null; toast(renaming ? 'Renamed to "' + name + '"' : 'Created "' + name + '"');
+      await refresh(); return await openModel(id, true);
+    }
     if (renaming) {
       await api('/api/profiles/' + encodeURIComponent(current.name), 'PATCH', { name });
       $('newDlg').close(); current = null; toast('Renamed to "' + name + '"'); return await refresh(name);
@@ -684,6 +748,99 @@ $('newForm').addEventListener('submit', async (ev) => {
 });
 $('using').addEventListener('click', () => showTab('profiles'));
 window.addEventListener('beforeunload', (ev) => { if (isDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
+
+// ── AI models ──
+let curModel = null, mSnapshot = '';
+const isModelDirty = () => Boolean(curModel) && Boolean($('mform')) && JSON.stringify(collect('#mform')) !== mSnapshot;
+async function leaveModelOk() {
+  return !isModelDirty() || ask('Discard unsaved changes?', 'You changed "' + curModel.name + '" and have not saved it.', 'Discard changes', true);
+}
+function usedByText(u) {
+  const parts = [...u.profiles.map((p) => 'profile ' + p), ...(u.chat ? ['Chat'] : [])];
+  return parts;
+}
+function renderModelList() {
+  const list = $('modelList'); list.replaceChildren();
+  if (!state.models.length) list.append(el('p', { class: 'empty' }, 'No AI model yet.'));
+  for (const m of state.models) {
+    const c = m.check;
+    list.append(el('button', { class: 'item', type: 'button', 'aria-current': curModel && curModel.id === m.id ? 'true' : 'false', onclick: () => openModel(m.id).catch(fail) },
+      el('span', {}, m.name, el('small', {}, m.providerLabel + (m.model ? ' · ' + m.model : ''))),
+      c ? el('span', { class: 'pill right ' + (c.ok ? '' : 'bad') }, c.ok ? 'Works' : 'Check failed') : null));
+  }
+}
+async function openModel(id, force) {
+  if (!force && curModel && curModel.id !== id && !(await leaveModelOk())) return;
+  const d = await api('/api/models/' + encodeURIComponent(id));
+  curModel = { id, name: d.name, entries: d.entries, usedBy: d.usedBy };
+  renderModelList(); renderModelEditor();
+}
+function renderModelEditor() {
+  const ed = $('modelEditor'); ed.replaceChildren();
+  if (!curModel) {
+    ed.append(state.models.length ? el('p', { class: 'empty' }, 'Pick an AI model on the left, or create a new one.')
+      : el('div', { class: 'welcome' }, el('h3', {}, 'Set up your first AI model'), el('p', { class: 'muted' }, 'The AI model reads each test case and drives the browser. Add it once; every profile and the chat can use it.'),
+        el('button', { class: 'btn primary', type: 'button', onclick: () => openNewModel() }, '+ New AI model')));
+    mSnapshot = ''; return;
+  }
+  const values = new Map(curModel.entries.map((e) => [e.key, e.value]));
+  const used = usedByText(curModel.usedBy);
+  const meta = state.models.find((m) => m.id === curModel.id) || {};
+  ed.append(el('div', { class: 'actions', style: 'margin-bottom:.6rem' }, el('h3', {}, curModel.name), el('span', { class: 'spacer' }),
+    el('button', { class: 'btn primary', type: 'button', id: 'mTestBtn', onclick: () => testModel().catch(fail) }, 'Test connection'),
+    el('button', { class: 'btn', type: 'button', onclick: () => openNewModel(curModel.id) }, 'Duplicate'),
+    el('button', { class: 'btn', type: 'button', onclick: () => { setNewMode(true, 'model'); $('newName').value = curModel.name; $('newErr').textContent = ''; $('newDlg').showModal(); $('newName').select(); } }, 'Rename'),
+    el('button', { class: 'btn danger', type: 'button', disabled: used.length > 0, title: used.length ? 'In use by ' + used.join(' and ') + '. Pick another AI model there first.' : '', onclick: () => removeModel().catch(fail) }, 'Delete')));
+  ed.append(el('p', { class: 'muted small', style: 'margin:0 0 .8rem' }, 'Used by: ', ...(used.length ? used.flatMap((u, i) => [i ? ', ' : '', el('b', {}, u)]) : ['nothing yet'])));
+  ed.append(el('div', { id: 'mCheck' }, meta.check ? el('div', { class: 'banner ' + (meta.check.ok ? 'good' : 'bad'), style: 'margin-bottom:.8rem' }, (meta.check.ok ? '✓ ' : '✕ ') + meta.check.detail) : null));
+  const form = el('form', { id: 'mform', novalidate: true });
+  const specs = modelFields();
+  const fs = el('fieldset', { class: 'group' }, el('legend', {}, 'Connection'));
+  for (const spec of specs.filter((x) => !x.advanced)) fs.append(fieldInput(spec, values.get(spec.key)));
+  const adv = specs.filter((x) => x.advanced);
+  if (adv.length) { const d = el('details', { class: 'more', open: adv.some((x) => values.get(x.key)) }, el('summary', {}, 'More settings')); for (const spec of adv) d.append(fieldInput(spec, values.get(spec.key))); fs.append(d); }
+  form.append(fs, el('div', { class: 'savebar' }, el('span', { class: 'state', id: 'mSaveState' }, 'All changes saved'), el('span', { class: 'spacer' }),
+    el('button', { class: 'btn', type: 'button', id: 'mDiscard', disabled: true, onclick: () => openModel(curModel.id, true).catch(fail) }, 'Discard changes'),
+    el('button', { class: 'btn primary', type: 'submit', id: 'mSave', disabled: true }, 'Save changes')));
+  form.addEventListener('submit', (ev) => { ev.preventDefault(); saveModel().catch(fail); });
+  form.addEventListener('input', onModelChange); form.addEventListener('change', onModelChange);
+  ed.append(form);
+  mSnapshot = JSON.stringify(collect('#mform'));
+  onModelChange();
+}
+function onModelChange() {
+  applyProviders('#mform');
+  const dirty = isModelDirty();
+  const s = $('mSaveState'); if (s) { s.textContent = dirty ? 'Unsaved changes' : 'All changes saved'; s.className = 'state' + (dirty ? ' dirty' : ''); }
+  if ($('mSave')) { $('mSave').disabled = !dirty; $('mDiscard').disabled = !dirty; }
+}
+async function saveModel(quiet) {
+  const bad = [...document.querySelectorAll('#mform input[data-type]')].filter((i) => !checkField(i));
+  if (bad.length) { toast('Fix the highlighted field before saving.', true); return false; }
+  await api('/api/models/' + encodeURIComponent(curModel.id), 'PUT', { name: curModel.name, entries: collect('#mform') });
+  if (!quiet) toast('Saved');
+  await refresh(); await openModel(curModel.id, true);
+  return true;
+}
+async function testModel() {
+  if (isModelDirty() && !(await saveModel(true))) return;
+  const btn = $('mTestBtn'); btn.disabled = true;
+  $('mCheck').replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'Asking the model…'));
+  try { await api('/api/models/' + encodeURIComponent(curModel.id) + '/check', 'POST'); }
+  finally { await refresh(); if (curModel) await openModel(curModel.id, true); }
+}
+async function removeModel() {
+  if (!(await ask('Delete "' + curModel.name + '"?', 'Its saved key is removed from this computer. This cannot be undone.', 'Delete AI model', true))) return;
+  await api('/api/models/' + encodeURIComponent(curModel.id), 'DELETE'); toast('Deleted'); curModel = null; await refresh();
+}
+function openNewModel(from) {
+  setNewMode(false, 'model'); $('newName').value = ''; $('newErr').textContent = '';
+  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'A blank AI model'));
+  for (const m of state.models) sel.append(el('option', { value: m.id }, 'A copy of ' + m.name));
+  sel.value = from || '';
+  $('newDlg').showModal(); $('newName').focus();
+}
+$('modelNew').addEventListener('click', async () => { if (await leaveModelOk()) openNewModel(); });
 
 // ── Tabs ──
 const tabs = [...document.querySelectorAll('nav.tabs button')];
@@ -700,6 +857,7 @@ function showTab(tab) {
   if (tab === 'results') loadResults().catch(fail);
   if (tab === 'history') loadHistory().catch(fail);
   if (tab === 'chat') { renderChat(); $('chatInput').focus(); }
+  if (tab === 'models') { if (!curModel && state.models[0]) openModel(state.models[0].id, true).catch(fail); else renderModelEditor(); }
   if (tab === 'cases' && !casesLoaded) loadCases().catch(fail);
   if (tab === 'run') { renderRunBanner(); if (!runCasesLoaded) loadRunCases(); }
   window.scrollTo({ top: 0 });
@@ -707,46 +865,77 @@ function showTab(tab) {
 
 // ── Run ──
 const source = () => document.querySelector('input[name=source]:checked').value;
-let runCasesLoaded = false, runCaseCount = 0, running = false;
+let runCasesLoaded = false, runTotal = 0, running = false;
 function renderRunBanner() {
   const box = $('runBanner'); if (!box) return;
   if (!state.active) {
     box.replaceChildren(el('div', { class: 'banner warn' }, el('span', {}, state.profiles.length ? 'No profile is in use, so the run reads the .env file in the project folder.' : 'Nothing is set up yet.'),
       el('button', { class: 'btn', type: 'button', onclick: () => showTab('profiles') }, state.profiles.length ? 'Choose a profile' : 'Set up a profile')));
   } else {
-    box.replaceChildren(el('div', { class: 'banner info' }, el('span', {}, 'This run uses ', el('b', {}, state.active), activeUrl ? [' against ', el('b', {}, activeUrl.replace(/^https?:\/\//, ''))] : ' (no F&O address set yet)', '.'),
-      el('button', { class: 'link', type: 'button', onclick: () => showTab('profiles') }, 'Change')));
+    const m = state.activeModel;
+    box.replaceChildren(el('div', { class: 'banner info' }, el('span', {}, 'This run belongs to the profile ', el('b', {}, state.active), m ? [' and uses its AI model, ', el('b', {}, m.name), '.'] : [' and has no AI model yet.'],
+      activeUrl ? [' Environment: ', el('b', {}, activeUrl.replace(/^https?:\/\//, ''))] : null),
+      el('button', { class: 'link', type: 'button', onclick: () => showTab('profiles') }, 'Switch profile')));
+  }
+  const rm = $('runModel');
+  if (rm) {
+    const keep = rm.value;
+    rm.replaceChildren(el('option', { value: '' }, "The profile's model" + (state.activeModel ? ' (' + state.activeModel.name + ')' : '')), ...state.models.map((x) => el('option', { value: x.id }, x.name)));
+    rm.value = state.models.some((x) => x.id === keep) ? keep : '';
   }
 }
 function syncSource() {
   const s = source();
   for (const f of document.querySelectorAll('#tab-run [data-src]')) f.hidden = f.dataset.src !== s;
   if (s === 'local' && !runCasesLoaded) loadRunCases();
+  updateSel();
 }
 document.querySelectorAll('input[name=source]').forEach((r) => r.addEventListener('change', syncSource));
-async function loadRunCases(keep) {
+let runCases = [];
+const runSel = new Set();
+function renderCaseChecks() {
+  const box = $('caseChecks'); box.replaceChildren();
+  for (const c of runCases) {
+    const cb = el('input', { type: 'checkbox', 'data-id': c.id }); cb.checked = runSel.has(c.id);
+    cb.addEventListener('change', () => { if (cb.checked) runSel.add(c.id); else runSel.delete(c.id); updateSel(); });
+    box.append(el('label', { class: 'check' }, cb, c.title, el('small', {}, c.id + (c.module ? ' · ' + c.module : '') + (c.priority ? ' · P' + c.priority : ''))));
+  }
+  updateSel();
+}
+function updateSel() {
+  const n = runCases.filter((c) => runSel.has(c.id)).length;
+  $('selCount').textContent = n + ' of ' + runCases.length + ' selected';
+  if (!running) { $('start').disabled = source() === 'local' && n === 0; $('start').textContent = source() === 'local' ? '▶ Run ' + n + ' case' + (n === 1 ? '' : 's') : '▶ Run'; }
+}
+$('selAll').addEventListener('click', () => { runCases.forEach((c) => runSel.add(c.id)); renderCaseChecks(); });
+$('selNone').addEventListener('click', () => { runSel.clear(); renderCaseChecks(); });
+async function loadRunCases(only) {
   runCasesLoaded = true;
-  const sel = $('caseId'), help = $('caseHelp');
-  sel.replaceChildren(el('option', { value: '' }, 'Loading…'));
+  const help = $('caseHelp');
   try {
     const cases = await api('/api/cases?local=' + encodeURIComponent($('local').value));
-    runCaseCount = cases.length;
-    sel.replaceChildren(el('option', { value: '' }, 'All ' + cases.length + ' case(s) in the folder'));
-    for (const c of cases) sel.append(el('option', { value: c.id }, c.title + '  [' + c.id + ', ' + c.steps + ' step(s)]'));
-    if (keep && cases.some((c) => c.id === keep)) sel.value = keep;
+    const had = new Set(runCases.map((c) => c.id));
+    runCases = cases;
+    // Everything is ticked by default; a case that is new since the last look is ticked too.
+    if (only) { runSel.clear(); runSel.add(only); } else for (const c of cases) if (!had.has(c.id)) runSel.add(c.id);
+    for (const id of [...runSel]) if (!cases.some((c) => c.id === id)) runSel.delete(id);
     help.textContent = cases.length ? '' : 'No test cases in this folder yet. Create one on the Test cases tab.';
   } catch (e) {
-    runCaseCount = 0;
-    sel.replaceChildren(el('option', { value: '' }, 'All cases'));
+    runCases = []; runSel.clear();
     help.textContent = 'Could not read that folder: ' + (e.message || e);
   }
+  renderCaseChecks();
 }
 let localTimer;
 $('local').addEventListener('input', () => { clearTimeout(localTimer); localTimer = setTimeout(() => loadRunCases(), 500); });
 $('start').addEventListener('click', async () => {
   const s = source();
-  const body = { source: s, local: $('local').value, plan: $('plan').value, suite: $('suite').value, caseId: s === 'local' ? $('caseId').value : $('caseIdText').value.trim(),
-    dryRun: $('dryRun').checked, upload: $('upload').checked, retries: $('retries').value, tags: $('tags').value, modules: $('modules').value, sortByPriority: $('sortPrio').checked };
+  const picked = runCases.filter((c) => runSel.has(c.id)).map((c) => c.id);
+  const body = { source: s, local: $('local').value, plan: $('plan').value, suite: $('suite').value, caseId: s === 'local' ? '' : $('caseIdText').value.trim(),
+    // All cases ticked means no filter, so cases added later are not left out of a saved habit.
+    cases: s === 'local' && picked.length < runCases.length ? picked : [],
+    dryRun: $('dryRun').checked, upload: $('upload').checked, retries: $('retries').value, tags: $('tags').value, modules: $('modules').value, sortByPriority: $('sortPrio').checked, maxPriority: $('maxPrio').value, model: $('runModel').value };
+  runTotal = s === 'local' ? picked.length : 0;
   if (!body.dryRun && !(await ask('Start a real run?', 'The agent will click and type in ' + (activeUrl ? activeUrl.replace(/^https?:\/\//, '') : 'the configured environment') + ' and may create or change data. Use a dry run to try it safely first.', 'Start run'))) return;
   try {
     $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; $('toResults').hidden = true;
@@ -767,11 +956,12 @@ function showProgress() {
   const p = progress, box = $('progress');
   if (!p.started) { box.textContent = running ? 'Starting… the first run also downloads the test browser, which can take a few minutes.' : ''; return; }
   const tally = ['passed', 'failed', 'blocked', 'skipped'].filter((k) => p.counts[k]).map((k) => p.counts[k] + ' ' + k).join(', ');
-  box.textContent = (running ? 'Case ' + p.started + ': ' + p.current : p.done + ' case(s) finished') + (tally ? ' · so far: ' + tally : '');
+  box.textContent = (running ? 'Case ' + p.started + (runTotal ? ' of ' + runTotal : '') + ': ' + p.current : p.done + ' case(s) finished') + (tally ? ' · so far: ' + tally : '') + (running ? ' · Profile switching is locked until the run ends.' : '');
 }
 function showStatus(r) {
   running = Boolean(r) && r.status === 'running';
   $('start').disabled = running; $('stop').disabled = !running;
+  if (!running && typeof updateSel === 'function') updateSel();
   const s = $('runStatus'); s.className = r ? r.status : '';
   s.replaceChildren(...(!r ? [] : running ? [el('span', { class: 'spin', 'aria-hidden': 'true' }), ' Running'] : [r.status === 'passed' ? '✓ Finished' : r.status === 'stopped' ? 'Stopped' : r.kind === 'upload' ? 'Upload failed' : 'Finished, with problems']));
   showProgress();
@@ -800,12 +990,34 @@ async function initRun() {
 }
 
 // ── Results ──
-let viewRun = null, lastResults = [];
+let viewRun = null, lastResults = [], runsCache = [];
+const modeText = (r) => r.mode === 'dry-run' ? 'Dry run' : r.mode === 'live' ? 'Live run' : '';
+const runSummary = (r) => r.totals ? r.totals.passed + ' of ' + r.totals.total + ' passed' : r.status === 'stopped' ? 'Stopped, no results' : 'No results';
+const isMine = (r) => !state.active || r.profile === state.active || (state.activeId && r.profileId === state.activeId);
+const shownRuns = (box) => runsCache.filter((r) => !$(box).checked || isMine(r));
+async function loadRuns() {
+  runsCache = await api('/api/history');
+  for (const t of ['resMineText', 'histMineText']) $(t).textContent = state.active ? 'Only "' + state.active + '"' : 'Only the profile in use';
+  for (const c of ['resMine', 'histMine']) $(c).disabled = !state.active;
+}
 async function loadResults() {
+  await loadRuns();
+  const list = shownRuns('resMine');
+  if (viewRun && !runsCache.some((r) => r.id === viewRun)) viewRun = null;
+  const id = viewRun || (list[0] && list[0].id) || null;
+  const rl = $('resultRuns'); rl.replaceChildren();
+  if (!list.length) rl.append(el('p', { class: 'empty' }, state.active && $('resMine').checked ? 'No runs of this profile yet.' : 'No runs yet.'));
+  for (const r of list) rl.append(el('button', { class: 'item', type: 'button', 'aria-current': r.id === id ? 'true' : 'false', onclick: () => { viewRun = r.id; loadResults().catch(fail); } },
+    el('span', {}, new Date(r.startedAt).toLocaleString(), el('small', {}, [r.profile || '.env file', modeText(r), runSummary(r)].filter(Boolean).join(' · ')))));
   const box = $('results');
-  const q = viewRun ? '?run=' + encodeURIComponent(viewRun) : '';
-  $('resultsTitle').textContent = viewRun ? 'Run ' + viewRun : 'Latest run';
+  const meta = runsCache.find((r) => r.id === id);
+  $('resultsTitle').textContent = meta ? 'Run of ' + new Date(meta.startedAt).toLocaleString() : 'No run selected';
+  $('resultMeta').textContent = meta ? ['Profile ' + (meta.profile || '.env file'), modeText(meta), meta.model ? 'AI model ' + meta.model : '', meta.origin === 'cli' ? 'started in the terminal' : ''].filter(Boolean).join(' · ') : '';
+  const q = id ? '?run=' + encodeURIComponent(id) : '';
   $('reportLink').href = '/report' + q; $('jsonLink').href = '/download/results.json' + q; $('junitLink').href = '/download/results.junit.xml' + q;
+  const up = $('resultUpload'); up.replaceChildren();
+  if (meta && meta.totals) up.append(meta.upload && meta.upload.url ? el('a', { class: 'btn', href: meta.upload.url, target: '_blank', rel: 'noopener' }, 'Uploaded: run #' + meta.upload.runId + ' ↗') : el('button', { class: 'btn primary', type: 'button', onclick: () => uploadRun(meta.id).catch(fail) }, meta.upload ? 'Upload again' : 'Upload to Azure DevOps'));
+  if (!id) { lastResults = []; return renderResults(); }
   try { lastResults = (await api('/api/results' + q)) || []; } catch (e) { lastResults = []; box.replaceChildren(el('p', { class: 'empty' }, String(e.message || e))); return; }
   renderResults();
 }
@@ -834,15 +1046,16 @@ function renderResults() {
   }
   box.replaceChildren(tiles, shown.length ? el('div', { class: 'tablewrap' }, table) : el('p', { class: 'empty' }, 'Every case passed.'));
 }
-$('refreshResults').addEventListener('click', () => loadResults().catch(fail));
 $('onlyBad').addEventListener('change', renderResults);
+$('resMine').addEventListener('change', () => loadResults().catch(fail));
 
 // ── History ──
 async function loadHistory() {
+  await loadRuns();
   const box = $('history');
-  const runs = await api('/api/history');
-  if (!runs.length) { box.replaceChildren(el('p', { class: 'empty' }, 'No runs yet. Every run started here is kept with its reports.')); return; }
-  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Started', 'Profile', 'What ran', 'Outcome', 'Azure DevOps', 'Actions'].map((h) => el('th', { scope: 'col' }, h)))));
+  const runs = shownRuns('histMine');
+  if (!runs.length) { box.replaceChildren(el('p', { class: 'empty' }, runsCache.length ? 'No runs of this profile yet. Untick the filter to see all runs.' : 'No runs yet. Every run, from the app or the terminal, is kept with its reports.')); return; }
+  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Started', 'Profile', 'Cases', 'Result', 'Mode', 'Azure DevOps', 'Actions'].map((h) => el('th', { scope: 'col' }, h)))));
   const tb = el('tbody'); table.append(tb);
   for (const r of runs) {
     const t = r.totals;
@@ -853,8 +1066,9 @@ async function loadHistory() {
     tb.append(el('tr', {},
       el('td', { style: 'white-space:nowrap' }, new Date(r.startedAt).toLocaleString()),
       el('td', {}, r.profile || '.env file'),
-      el('td', {}, el('code', {}, r.args.slice(1).join(' ') || 'all')),
-      el('td', {}, outcome), el('td', {}, devops),
+      el('td', {}, t ? String(t.total) : '–'),
+      el('td', {}, outcome),
+      el('td', {}, modeText(r) || '–'), el('td', {}, devops),
       el('td', {}, el('div', { class: 'row' },
         t ? el('button', { class: 'btn', type: 'button', onclick: () => { viewRun = r.id; showTab('results'); } }, 'View') : null,
         t ? el('a', { class: 'btn', href: '/report' + q, target: '_blank', rel: 'noopener' }, 'Report ↗') : null,
@@ -864,7 +1078,8 @@ async function loadHistory() {
   box.replaceChildren(el('div', { class: 'tablewrap' }, table));
 }
 async function uploadRun(id) {
-  if (!(await ask('Upload to Azure DevOps?', 'Run ' + id + ' is published as a new test run, using the profile in use now. Cases that were interrupted are left out.', 'Upload'))) return;
+  const r = runsCache.find((x) => x.id === id);
+  if (!(await ask('Upload to Azure DevOps?', 'This run is published as a new test run, using the profile it belongs to (' + ((r && r.profile) || 'the profile in use') + '), not the profile in use now. Cases that were interrupted are left out.', 'Upload'))) return;
   const res = await api('/api/history/' + encodeURIComponent(id) + '/upload', 'POST', { plan: $('uploadPlan').value });
   if (res.error) return toast(res.error, true);
   $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; showStatus(res.run); showTab('run');
@@ -874,6 +1089,7 @@ async function deleteRun(id) {
   await api('/api/history/' + encodeURIComponent(id), 'DELETE'); toast('Deleted'); await loadHistory();
 }
 $('refreshHistory').addEventListener('click', () => loadHistory().catch(fail));
+$('histMine').addEventListener('change', () => loadHistory().catch(fail));
 
 // ── Test cases ──
 let casesLoaded = false, cases = [], editing = null; // editing: { file|null, tc }

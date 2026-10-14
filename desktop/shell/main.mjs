@@ -20,11 +20,15 @@ let win;
 let rail;
 let chatView;
 let settingsView;
+/** The strip above Open WebUI that picks the chat model. */
+let barView;
+let webuiUrl;
+const BAR_HEIGHT = 44;
 /** Which page is showing: chat, or a tab of the settings app. */
 let current = 'chat';
 /** Open WebUI is up, so Chat shows it; otherwise Chat is the settings app's own chat tab. */
 let chatReady = false;
-let profileInfo = { active: null, profiles: [], busy: false };
+let profileInfo = { active: null, profiles: [], models: [], chatModel: null, busy: false };
 let ui;
 let webui;
 let quitting = false;
@@ -66,18 +70,24 @@ function layout() {
   if (!win || win.isDestroyed()) return;
   const { width, height } = win.getContentBounds();
   rail.setBounds({ x: 0, y: 0, width: RAIL_WIDTH, height });
-  for (const v of [chatView, settingsView]) v?.setBounds({ x: RAIL_WIDTH, y: 0, width: Math.max(width - RAIL_WIDTH, 0), height });
+  const w = Math.max(width - RAIL_WIDTH, 0);
+  barView?.setBounds({ x: RAIL_WIDTH, y: 0, width: w, height: BAR_HEIGHT });
+  const top = barView?.getVisible() ? BAR_HEIGHT : 0;
+  chatView?.setBounds({ x: RAIL_WIDTH, y: top, width: w, height: Math.max(height - top, 0) });
+  settingsView?.setBounds({ x: RAIL_WIDTH, y: 0, width: w, height });
 }
 
 const run = (view, code) => view.webContents.executeJavaScript(code).catch(() => undefined);
 
-/** Chat, or one tab of the settings app: 'chat' | 'profiles' | 'cases' | 'run' | 'results' | 'history'. */
+/** Chat, or one tab of the settings app: 'chat' | 'profiles' | 'models' | 'cases' | 'run' | 'results' | 'history'. */
 async function go(id) {
   if (!win || win.isDestroyed()) return;
   const chatPage = id === 'chat' && chatReady;
   if (!chatPage && !settingsView) return; // the settings app is still starting
   current = id;
   chatView.setVisible(chatPage);
+  barView?.setVisible(chatPage);
+  layout();
   settingsView?.setVisible(!chatPage);
   if (!chatPage) await run(settingsView, `${id === 'results' ? 'viewRun = null; ' : ''}showTab(${JSON.stringify(id)})`);
   (chatPage ? chatView : settingsView).webContents.focus();
@@ -93,11 +103,12 @@ async function pollProfiles() {
   if (!settingsView || settingsView.webContents.isDestroyed()) return;
   const info = await run(
     settingsView,
-    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
+    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), models: state.models.map((m) => ({ id: m.id, name: m.name })), chatModel: state.chatModel, busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
   );
   if (!info) return;
   profileInfo = info;
   pushState();
+  if (barView && !barView.webContents.isDestroyed()) barView.webContents.send('bar:state', { models: info.models ?? [], chatModel: info.chatModel ?? null, profile: info.active });
 }
 
 function profileMenu() {
@@ -129,6 +140,7 @@ function buildMenu() {
         ...[
           ['Chat', 'chat'],
           ['Profiles and setup', 'profiles'],
+          ['AI models', 'models'],
           ['Test cases', 'cases'],
           ['Run', 'run'],
           ['Results', 'results'],
@@ -161,24 +173,28 @@ async function waitFor(url, ms, stopped = () => undefined) {
   return false;
 }
 
+/** Open WebUI's connection for the chat AI model, which is one setting for every profile. */
+async function chatConn(home, owui) {
+  try {
+    const { ModelStore } = await lib('profiles/models.js');
+    const { parseConfig } = await lib('config/index.js');
+    const models = new ModelStore(home);
+    const id = await models.getChat();
+    if (!id) return undefined;
+    return owui.chatConnection(parseConfig(Object.fromEntries((await models.read(id, true)).map((e) => [e.key, e.value]))));
+  } catch {
+    return undefined; // add a model on the AI models page instead
+  }
+}
+
 async function startOpenWebUi(home) {
   const owui = await lib('desktop/openwebui.js');
-  const { ProfileStore } = await lib('profiles/store.js');
-  const { parseConfig } = await lib('config/index.js');
   const paths = { uv: uvPath(), dataRoot: app.getPath('userData') };
   if (!(await owui.isInstalled(paths))) {
     status('Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.');
     await owui.install(paths, (line) => status(undefined, line));
   }
-  // The chat model Open WebUI starts with, from the profile in use (used on Open WebUI's first start).
-  let chat;
-  try {
-    const store = new ProfileStore(home);
-    const active = await store.getActive();
-    if (active) chat = owui.chatConnection(parseConfig(Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value]))));
-  } catch {
-    /* add a model in Open WebUI instead */
-  }
+  const chat = await chatConn(home, owui);
   const port = await owui.freePort();
   const env = owui.serveEnv({ dataDir: owui.layout(paths).data, toolUrl: `${ui.url}tools`, toolKey: ui.toolToken, chat });
   status('Starting the chat…');
@@ -199,8 +215,31 @@ async function startOpenWebUi(home) {
   } catch (e) {
     status(undefined, `Could not refresh the tool server in the chat: ${e.message}`);
   }
+  try {
+    await owui.syncChatModel(url, chat);
+  } catch (e) {
+    status(undefined, `Could not refresh the chat model: ${e.message}`);
+  }
   ready = true;
+  webuiUrl = url;
   return url;
+}
+
+/** The Chat page's model picker: saved for every profile, and written to Open WebUI's connection. */
+async function setChatModel(id) {
+  if (!id || !settingsView) return;
+  await run(settingsView, `api('/api/chat-model', 'POST', { id: ${JSON.stringify(id)} }).then(() => refresh()).catch(fail)`);
+  try {
+    const owui = await lib('desktop/openwebui.js');
+    const { agentHome } = await lib('profiles/paths.js');
+    if (webuiUrl) {
+      await owui.syncChatModel(webuiUrl, await chatConn(agentHome(), owui));
+      await chatView.webContents.reload();
+    }
+  } catch (e) {
+    await dialog.showMessageBox(win, { type: 'warning', message: 'The chat model could not be changed', detail: e.message });
+  }
+  void pollProfiles();
 }
 
 function stopOpenWebUi() {
@@ -215,7 +254,10 @@ async function main() {
   win = new BaseWindow({ width: 1320, height: 860, minWidth: 900, minHeight: 600, title: 'D365FO Agent' });
   rail = new WebContentsView({ webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true } });
   chatView = new WebContentsView();
+  barView = new WebContentsView({ webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true } });
   win.contentView.addChildView(chatView);
+  win.contentView.addChildView(barView);
+  barView.setVisible(false);
   win.contentView.addChildView(rail);
   win.on('resize', layout);
   win.on('close', () => {
@@ -224,8 +266,10 @@ async function main() {
   guardLinks(chatView.webContents);
   ipcMain.on('rail:go', (_e, id) => void go(id));
   ipcMain.on('rail:profile-menu', profileMenu);
+  ipcMain.on('bar:new-chat', () => webuiUrl && void chatView.webContents.loadURL(webuiUrl));
+  ipcMain.on('bar:set-model', (_e, id) => void setChatModel(id));
   layout();
-  await Promise.all([rail.webContents.loadFile(join(here, 'rail.html')), chatView.webContents.loadFile(join(here, 'splash.html'))]);
+  await Promise.all([rail.webContents.loadFile(join(here, 'rail.html')), barView.webContents.loadFile(join(here, 'chatbar.html')), chatView.webContents.loadFile(join(here, 'splash.html'))]);
   pushState();
 
   const root = workspace();

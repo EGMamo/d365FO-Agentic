@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parseConfig } from '../config/index.js';
-import { chatConnection, DISABLED_FEATURES, EXCLUDED_PACKAGES, INSTALL_VARIANT, install, isInstalled, layout, OPENWEBUI_VERSION, overridesFile, serveEnv, syncToolServer, toolConnection } from './openwebui.js';
+import { chatConnection, DISABLED_FEATURES, EXCLUDED_PACKAGES, INSTALL_VARIANT, install, isInstalled, layout, OPENWEBUI_VERSION, overridesFile, serveEnv, syncChatModel, syncToolServer, toolConnection } from './openwebui.js';
 
 describe('desktop Open WebUI', () => {
   it('installs a pinned Open WebUI with uv into the app folder, and remembers the version', async () => {
@@ -103,5 +103,34 @@ describe('tool server sync', () => {
 
   it('reports a refusal', async () => {
     await assert.rejects(syncToolServer('http://127.0.0.1:9', conn, (async () => new Response('no', { status: 403 })) as unknown as typeof fetch), /403/);
+  });
+
+  describe('chat model connection', () => {
+    const chat = { url: 'https://api.openai.com/v1', key: 'sk-new' };
+    function fakeChat(cfg: Record<string, unknown>) {
+      const calls: Array<{ path: string; body?: any }> = [];
+      const impl = (async (url: string, init: RequestInit) => {
+        const path = new URL(url).pathname;
+        calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify(path.endsWith('/signin') ? { token: 't' } : cfg), { status: 200 });
+      }) as unknown as typeof fetch;
+      return { impl, calls };
+    }
+
+    it('replaces the first connection and keeps the others', async () => {
+      const { impl, calls } = fakeChat({ ENABLE_OPENAI_API: true, OPENAI_API_BASE_URLS: ['https://old', 'http://mine'], OPENAI_API_KEYS: ['k0', 'k1'], OPENAI_API_CONFIGS: { '1': { enable: true } } });
+      await syncChatModel('http://127.0.0.1:9', chat, impl);
+      const w = calls.find((c) => c.path === '/openai/config/update')!;
+      assert.deepEqual(w.body.OPENAI_API_BASE_URLS, ['https://api.openai.com/v1', 'http://mine']);
+      assert.deepEqual(w.body.OPENAI_API_KEYS, ['sk-new', 'k1']);
+      assert.deepEqual(w.body.OPENAI_API_CONFIGS['0'], { enable: true });
+    });
+
+    it('writes nothing when current, or when no connection is given', async () => {
+      const { impl, calls } = fakeChat({ ENABLE_OPENAI_API: true, OPENAI_API_BASE_URLS: [chat.url], OPENAI_API_KEYS: [chat.key], OPENAI_API_CONFIGS: {} });
+      await syncChatModel('http://127.0.0.1:9', chat, impl);
+      await syncChatModel('http://127.0.0.1:9', undefined, impl);
+      assert.equal(calls.filter((c) => c.path.endsWith('/update')).length, 0);
+    });
   });
 });

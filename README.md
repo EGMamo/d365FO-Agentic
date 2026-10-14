@@ -76,7 +76,7 @@ Double-click the icon: it starts a small local web app and opens it in your brow
 
 In the app you create **named profiles**, one per environment (for example "Sandbox UAT" and "Dev"), and choose the one in use. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). Secrets are masked in the browser. The server listens on `127.0.0.1` only and requires a per-machine token.
 
-The app has six tabs:
+The app has seven tabs:
 
 - **Setup**: profiles and their settings.
   - A first-run welcome walks through the three steps to a first run.
@@ -84,15 +84,16 @@ The app has six tabs:
   - Only the chosen AI provider's fields are shown. For Claude that includes **Claude API URL**, for sending requests through your own gateway or proxy (see [Providers](docs/providers.md#custom-claude-api-url)).
   - Rarely changed settings sit under "More settings". Addresses and numbers are checked as you type, and unsaved changes are flagged before you leave.
   - **Check setup** runs `doctor` against the profile and shows each check with a pass, warning or problem mark, and the list of things to fix.
-- **Chat**: ask in plain words; the profile's AI model checks the setup, writes test cases, starts runs and reads results with the app's own tools. It is told to ask before a real run or an upload.
+- **AI models**: one list of AI connections, set up once and shared (name, provider, API key, optional API address, model name, **Test connection**). A profile picks one for its runs; Chat picks one for every profile. "Used by" shows who uses a setup, and it cannot be deleted while in use. Keys are masked. Profiles from earlier versions are migrated on first start: each profile's model fields become a setup (identical ones are merged).
+- **Chat**: ask in plain words; the AI model chosen at the top of the page (the same for every profile) checks the setup, writes test cases, starts runs and reads results with the app's own tools. It is told to ask before a real run or an upload.
 - **Test cases**: open a folder inside the project (default `examples/testcases`), then create, edit, duplicate and delete local test cases with a step editor (action and expected result per step, reorderable). "Run this case" takes you to the Run tab with it selected.
-- **Run**: shows which profile and environment the run will use. Run a local folder or an Azure DevOps plan/suite, one case or all, with dry run, upload, and (under "More options") tag and module filters, retries and priority order. A real run asks for confirmation first. The log streams live with a running tally, and **Stop** lets the run save its report before it ends.
-- **Results**: the latest run (or one picked from History) with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
-- **History**: every run started from the app is kept with its reports under `<REPORT_DIR>/history/` (last 200). Each profile has its own report folder, `reports/<profile id>/`, unless it sets `REPORT_DIR`. The id is generated when the profile is created and never changes, so a profile can be renamed (Rename on the Setup tab) without losing its reports. Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, with the profile in use and an optional plan id. The DevOps run link is shown once it is uploaded.
+- **Run**: shows which profile and environment the run will use. Run a local folder or an Azure DevOps plan/suite, a checklist of cases (all ticked; Select all / Clear), with dry run, upload, and (under "More options") tag and module filters, most urgent priority, retries, priority order and **AI model for this run** (the profile is not changed). A real run asks for confirmation first. The log streams live with a running tally, and **Stop** lets the run save its report before it ends.
+- **Results**: a list of runs on the left (filter "Only <profile in use>"); the picked run shows its profile, mode and AI model, with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
+- **History**: every run, started from the app or the terminal, is kept with its reports under `<REPORT_DIR>/history/` (last 200). Each profile has its own report folder, `reports/<profile id>/`, unless it sets `REPORT_DIR`. The id is generated when the profile is created and never changes, so a profile can be renamed (Rename on the Setup tab) without losing its reports. Reopen any of them, download its reports, or upload it to Azure DevOps as a test run later, always with the profile the run belongs to (not the one in use now) and an optional plan id. The DevOps run link is shown once it is uploaded.
 
 Checks and runs started from the app read the profile in use, not the `.env` file in the project folder. A variable set in the computer's real environment still wins over both, and **Check setup** warns when that happens.
 
-The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`).
+The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` (the permanent profile id works too, so renaming does not break scripts) or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`). The profile's AI model comes from the shared AI models; `--model <name or id>` uses another for one command. `run` records itself in the run history with its profile and model, so terminal runs show in Results and History, and `upload --input results.json` uses the profile the run belongs to unless `--profile` is given.
 
 ## Command line
 

@@ -86,6 +86,8 @@ export function openApiSpec(serverUrl: string): Record<string, unknown> {
                 plan: { ...str, description: 'Azure DevOps test plan id for source "devops".' },
                 suite: { ...str, description: 'Azure DevOps test suite id (optional).' },
                 caseId: { ...str, description: 'Run only this test case id (optional).' },
+                cases: { type: 'array', items: { type: 'string' }, description: 'Run only these test case ids (optional).' },
+                model: { ...str, description: 'AI model setup (name or id) for this run only; the profile keeps its own (optional).' },
                 dryRun: { ...bool, description: 'Plan the steps without changing anything in F&O.' },
                 upload: { ...bool, description: 'Upload the results to Azure DevOps when the run ends.' },
                 retries: { ...int, minimum: 0, maximum: 10, description: 'Re-run failed cases up to this many times.' },
