@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import dotenv from 'dotenv';
 import { agentHome, modelsDir, profilesDir, stateFile } from '../profiles/paths.js';
 
@@ -12,7 +12,7 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,59}$/;
 
 export interface ProfileSelection {
   name?: string;
-  source: 'env' | 'argv' | 'ui' | 'none';
+  source: 'env' | 'argv' | 'ui' | 'run' | 'none';
   /** A profile was asked for but its file does not exist, so `.env` is used. */
   missing?: string;
 }
@@ -54,6 +54,19 @@ export function selectProfile(env: NodeJS.ProcessEnv = process.env, argv: string
     return byId ? { name: byId, source: src } : { source: 'none', missing: name };
   };
   if (asked !== undefined) return asked.trim() === '' || asked.trim().toLowerCase() === 'none' ? { source: 'none' } : pick(asked.trim(), source);
+  // Uploading a saved run uses the profile that run belongs to, not the one picked in the app now.
+  const input = argv.includes('upload') ? argvValue(argv, '--input') : undefined;
+  if (input) {
+    try {
+      const meta = JSON.parse(readFileSync(join(dirname(resolve(input)), 'meta.json'), 'utf8')) as { profile?: unknown; profileId?: unknown };
+      for (const ref of [meta.profileId, meta.profile]) {
+        const sel = typeof ref === 'string' && ref ? pick(ref, 'run') : undefined;
+        if (sel?.name) return sel;
+      }
+    } catch {
+      /* not a run from the history */
+    }
+  }
   try {
     const { active } = JSON.parse(readFileSync(stateFile(home), 'utf8')) as { active?: unknown };
     if (typeof active === 'string') {

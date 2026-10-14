@@ -118,14 +118,15 @@ describe('chat endpoint', () => {
   });
   after(() => ui.close());
 
-  it('asks for a profile first', async () => {
+  it('asks for an AI model first', async () => {
     const r = await post('/api/chat', { messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(r.status, 400);
-    assert.match(r.body.error, /profile/);
+    assert.match(r.body.error, /AI model/);
   });
 
-  it('answers with the profile model and real tool results', async () => {
-    assert.equal((await post('/api/profiles', { name: 'Sandbox', entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] })).status, 201);
+  it('answers with the chat AI model and real tool results', async () => {
+    assert.equal((await post('/api/profiles', { name: 'Sandbox', entries: [] })).status, 201);
+    assert.equal((await post('/api/models', { name: 'Claude', entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] })).status, 201);
     await post('/api/active', { name: 'Sandbox' });
     model.seen.length = 0;
     const replies: LlmCompleteResponse[] = [

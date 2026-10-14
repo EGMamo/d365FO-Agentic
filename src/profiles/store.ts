@@ -113,6 +113,17 @@ export class ProfileStore {
     return (await this.names()).find((n) => n.toLowerCase() === lower);
   }
 
+  /** A profile's stored name, given its name or its permanent id. */
+  async resolve(ref: string): Promise<string | undefined> {
+    const byName = NAME.test(ref) ? await this.find(ref) : undefined;
+    if (byName) return byName;
+    if (!ID.test(ref)) return undefined;
+    for (const name of await this.names()) {
+      if ((await this.read(name, true).catch(() => [])).some((e) => e.key === ID_KEY && e.value === ref)) return name;
+    }
+    return undefined;
+  }
+
   async exists(name: string): Promise<boolean> {
     return (await this.find(validateName(name))) !== undefined;
   }

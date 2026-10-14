@@ -23,7 +23,8 @@ import { generateTestCases } from '../testing/generate.js';
 import { TestCaseFiles } from '../testing/store.js';
 import { D365ODataClient, hasAppRegistration } from '../d365fo/entra.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
-import { environmentForChild, overriddenKeys, profileSelection } from '../config/load-env.js';
+import { environmentForChild, modelSelection, overriddenKeys, profileSelection } from '../config/load-env.js';
+import { RunHistory } from '../ui/history.js';
 import { agentHome, toolTokenFile } from '../profiles/paths.js';
 import { DEFAULT_PORT, findRunningUi, isLoopback, loadOrCreateToken, loadOrCreateToolToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
@@ -228,6 +229,7 @@ program
     reloopCooldownMs?: number;
   }) => {
     const cfg = loadConfig();
+    const runStartedAt = new Date().toISOString();
     const warnings: string[] = [];
     if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
     if (opts.reloopMaxRetries !== undefined && !Number.isNaN(opts.reloopMaxRetries)) {
@@ -257,7 +259,7 @@ program
       for (const i of issues) console.error(`config: ${i}`);
       process.exit(1);
     }
-    console.log(`LLM: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
+    console.log(`LLM: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})${modelSelection.name ? ` from AI model "${modelSelection.name}"` : ''}`);
     const modelHint = ignoredModelHint(cfg);
     if (modelHint) console.warn(`warning: ${modelHint}`);
 
@@ -329,6 +331,28 @@ program
       }
     }
     if (execution.upload) console.log(`Uploaded to Azure DevOps run #${execution.upload.runId}: ${execution.upload.url}`);
+    // Keep the run in the history the app shows (Results and History), whether it was started here or in the app.
+    try {
+      const exit = Number(process.exitCode ?? 0);
+      const meta = await new RunHistory(async () => resolve(cfg.REPORT_DIR)).record(
+        {
+          status: execution.interrupted ? 'stopped' : exit === 0 ? 'passed' : 'failed',
+          args: process.argv.slice(2),
+          profile: profileSelection.name ?? null,
+          profileId: cfg.PROFILE_ID ?? null,
+          model: modelSelection.name ?? null,
+          modelId: modelSelection.id ?? null,
+          mode: cfg.AGENT_DRY_RUN ? 'dry-run' : 'live',
+          origin: process.env.D365FO_ORIGIN === 'app' ? 'app' : 'cli',
+          startedAt: runStartedAt,
+          finishedAt: new Date().toISOString(),
+        },
+        process.pid % 1_000_000,
+      );
+      console.log(`Saved to run history as ${meta.id}.`);
+    } catch (e) {
+      console.warn(`warning: could not save the run to the history: ${(e as Error).message}`);
+    }
   });
 
 program

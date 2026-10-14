@@ -11,13 +11,15 @@ import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.
 import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
 import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
+import { migrateProfileModels, ModelStore, PROFILE_MODEL_KEY } from '../profiles/models.js';
 import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
-import { REPORT_FILES, RunHistory, type ReportFile } from './history.js';
+import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
 import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
 import { callTool, chatTools, chatTurn, parseHistory } from './chat.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
+import { checkModel as checkModelEndpoint } from '../llm/check.js';
 import type { LlmProvider } from '../llm/types.js';
 import { PageMap } from '../knowledge/page-map.js';
 import type { TestResult } from '../testing/types.js';
@@ -41,6 +43,8 @@ interface RunState {
   kind: 'run' | 'upload';
   status: 'running' | 'passed' | 'failed' | 'stopped';
   args: string[];
+  /** The profile the run belongs to. */
+  profile?: string;
   startedAt: string;
   finishedAt?: string;
   exitCode?: number | null;
@@ -175,6 +179,14 @@ async function runDoctor(store: ProfileStore, name: string, cliPath: string, bas
 
 export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const store = new ProfileStore(opts.home);
+  const models = new ModelStore(opts.home);
+  try {
+    // Older profiles hold their own AI model settings; move them into the shared list once.
+    const moved = await migrateProfileModels(store, models);
+    if (moved) console.log(`[ui] moved the AI model settings of ${moved} profile(s) into the shared AI models list`);
+  } catch (e) {
+    console.error(`[ui] could not move profile AI models: ${(e as Error).message}`);
+  }
   const token = await loadOrCreateToken(opts.home);
   const toolToken = await loadOrCreateToolToken(opts.home);
   const host = opts.host ?? '127.0.0.1';
@@ -191,11 +203,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of listeners) res.write(msg);
   };
-  const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.status, args: r.args, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+  const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.status, args: r.args, profile: r.profile ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
 
   /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
   function runCli(args: string[], active?: string): ChildProcess {
-    const env: NodeJS.ProcessEnv = { ...childEnv(), FORCE_COLOR: '0', NO_COLOR: '1' };
+    const env: NodeJS.ProcessEnv = { ...childEnv(), FORCE_COLOR: '0', NO_COLOR: '1', D365FO_ORIGIN: 'app' };
     if (active) {
       env.D365FO_PROFILE = active;
       env.D365FO_AGENT_HOME = store.home;
@@ -223,10 +235,14 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (plan) args.push('--plan', plan);
       if (suite) args.push('--suite', suite);
     }
-    const caseId = str('caseId');
-    if (caseId) {
-      if (!ID.test(caseId)) return { error: 'Invalid case id' };
-      args.push('--case', caseId);
+    const caseIds = [str('caseId'), ...(Array.isArray(body.cases) ? (body.cases as unknown[]).map((c) => (typeof c === 'string' ? c.trim() : '')) : [])].filter(Boolean);
+    if (caseIds.some((c) => !ID.test(c))) return { error: 'Invalid case id' };
+    if (caseIds.length) args.push('--case', caseIds.join(','));
+    const model = str('model');
+    if (model) {
+      const found = await models.find(model);
+      if (!found) return { error: `No AI model "${model}".` };
+      args.push('--model', found.id);
     }
     for (const [flag, key] of [['--tag', 'tags'], ['--module', 'modules']] as const) {
       const v = str(key);
@@ -250,13 +266,20 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
     const input = await history.file(id, 'results.json');
     if (!input) return { error: 'That run has no results to upload.' };
+    // Always the profile the run belongs to, whichever profile is in use now.
+    const meta = await history.meta(id);
+    let owner: string | undefined;
+    if (meta?.profileId || meta?.profile) {
+      owner = await store.resolve(meta.profileId || '').then((n) => n ?? store.resolve(meta.profile || ''));
+      if (!owner) return { error: `The profile this run belongs to (${meta.profile ?? meta.profileId}) no longer exists, so its Azure DevOps settings are gone. Create it again, or upload from the terminal with --profile.` };
+    }
     const args = ['upload', '--input', input];
     const plan = typeof body.plan === 'string' ? body.plan.trim() : '';
     if (plan) {
       if (!ID.test(plan)) return { error: 'Invalid plan id' };
       args.push('--plan', plan);
     }
-    return startCli('upload', args, async (state) => {
+    return startCli('upload', args, owner, async (state) => {
       const line = state.lines.find((l) => /^Uploaded run #\d+/.test(l));
       const m = line && /^Uploaded run #(\d+): (\S+)/.exec(line);
       if (state.status === 'passed') await history.update(id, { upload: { runId: m ? Number(m[1]) : undefined, url: m ? m[2] : undefined, at: new Date().toISOString() } });
@@ -266,12 +289,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   async function startCli(
     kind: RunState['kind'],
     args: string[],
+    profile?: string,
     onDone?: (state: RunState) => Promise<void>,
   ): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
-    const active = await store.getActive();
+    const active = profile ?? (await store.getActive());
     if (active) await store.idOf(active); // older profiles get their id (and report folder) before the run reads the file
     const secrets = active ? await profileSecrets(store, active) : [];
-    const state: RunState = { id: ++runSeq, kind, status: 'running', args, startedAt: new Date().toISOString(), lines: [] };
+    const state: RunState = { id: ++runSeq, kind, status: 'running', args, profile: active, startedAt: new Date().toISOString(), lines: [] };
     run = state;
     const push = (line: string): void => {
       let clean = line;
@@ -302,8 +326,12 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       state.child = undefined;
       const finish = async (): Promise<void> => {
         try {
-          if (kind === 'run') {
-            const meta = await history.record({ status: state.status, args, profile: active ?? null, startedAt: state.startedAt, finishedAt: state.finishedAt }, state.id);
+          // The run saves itself to the history; only a run that failed before it could is recorded here.
+          if (kind === 'run' && !state.lines.some((l) => /^Saved to run history as \d{8}-\d{6}-\d+\./.test(l))) {
+            const meta = await new RunHistory(reportDir).record(
+              { status: state.status, args, profile: active ?? null, profileId: active ? await store.idOf(active) : null, origin: 'app', startedAt: state.startedAt, finishedAt: state.finishedAt },
+              state.id,
+            );
             push(`Saved to run history as ${meta.id}.`);
           }
           await onDone?.(state);
@@ -351,14 +379,44 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
     return resolve(repoRoot, dir);
   }
-  /** The report folder the CLI writes to, honouring REPORT_DIR from the active profile. */
-  const reportDir = async (): Promise<string> => {
+  /** A profile's own report folder: its REPORT_DIR, else reports/<profile id>. */
+  async function reportDirOf(name: string): Promise<string> {
+    const explicit = (await store.read(name, true)).find((e) => e.key === 'REPORT_DIR')?.value;
+    return resolve(repoRoot, explicit || join('reports', await store.idOf(name)));
+  }
+  /** The report folder the CLI writes to for the profile in use. */
+  async function reportDir(): Promise<string> {
     const active = await store.getActive();
-    const explicit = active ? (await store.read(active, true)).find((e) => e.key === 'REPORT_DIR')?.value : undefined;
-    if (explicit) return resolve(repoRoot, explicit);
-    return resolve(repoRoot, active ? join('reports', await store.idOf(active)) : 'reports');
-  };
-  const history = new RunHistory(reportDir);
+    return active ? reportDirOf(active) : resolve(repoRoot, 'reports');
+  }
+  /** Every folder that can hold runs: one per profile, and the plain reports folder of runs without a profile. */
+  async function allReportDirs(): Promise<string[]> {
+    const dirs = [resolve(repoRoot, 'reports')];
+    for (const p of await store.list()) dirs.push(await reportDirOf(p.name).catch(() => resolve(repoRoot, 'reports')));
+    return dirs;
+  }
+  const history = new HistoryIndex(allReportDirs);
+
+  /** The AI model setup the profile in use points to. */
+  async function activeModelOf(): Promise<{ id: string; name: string } | null> {
+    const active = await store.getActive();
+    if (!active) return null;
+    const ref = (await store.read(active, true)).find((e) => e.key === PROFILE_MODEL_KEY)?.value;
+    const found = ref ? await models.find(ref) : undefined;
+    return found ? { id: found.id, name: found.name } : null;
+  }
+
+  /** Setups with where each is used, for the AI models page and the pickers. */
+  async function modelList(): Promise<Array<Awaited<ReturnType<ModelStore['list']>>[number] & { usedBy: { profiles: string[]; chat: boolean }; check?: unknown }>> {
+    const checks = await models.getChecks();
+    return Promise.all((await models.list()).map(async (m) => ({ ...m, usedBy: await models.usedBy(m.id, store), ...(checks[m.id] ? { check: checks[m.id] } : {}) })));
+  }
+
+  /** The agent's settings for a setup, as a run would read them. */
+  async function modelConfig(id: string): Promise<AppConfig> {
+    const entries = await models.read(id, true);
+    return parseConfig({ ...Object.fromEntries(entries.map((e) => [e.key, e.value])), ...childEnv() });
+  }
 
   /** Reads a report written by the CLI: the latest run's, or a run from the history. */
   async function reportFile(name: ReportFile, runId?: string | null): Promise<string | undefined> {
@@ -485,7 +543,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return void res.end(await readFile(join(WEB_DIR, 'icon.svg')));
       }
       if (method === 'GET' && url.pathname === '/api/state') {
-        return send(res, 200, { profiles: await store.list(), active: (await store.getActive()) ?? null, home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
+        return send(res, 200, { profiles: await store.list(), models: await modelList(), chatModel: (await models.getChat()) ?? null, active: (await store.getActive()) ?? null, activeModel: await activeModelOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
@@ -519,25 +577,66 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
           return send(res, 200, { deleted: name });
         }
       }
+      if (url.pathname === '/api/models' || url.pathname.startsWith('/api/models/')) {
+        if (method === 'GET' && url.pathname === '/api/models') return send(res, 200, await modelList());
+        if (method === 'POST' && url.pathname === '/api/models') {
+          const body = await readJson(req);
+          const id =
+            typeof body.copyFrom === 'string' && body.copyFrom
+              ? await models.duplicate(body.copyFrom, body.name)
+              : await models.write(undefined, body.name, body.entries ?? []);
+          return send(res, 201, { id });
+        }
+        const mm = /^\/api\/models\/([a-z0-9]+)(\/check)?$/.exec(url.pathname);
+        if (mm) {
+          const id = mm[1];
+          if (mm[2] && method === 'POST') {
+            const result = await checkModelEndpoint(await modelConfig(id), (await models.read(id, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value), opts.chatProvider);
+            await models.setCheck(id, result);
+            return send(res, 200, result);
+          }
+          if (!mm[2] && method === 'GET') {
+            const entries = await models.read(id);
+            return send(res, 200, { id, name: entries.find((e) => e.key === 'MODEL_NAME')?.value ?? id, entries: entries.filter((e) => e.key !== 'MODEL_NAME'), usedBy: await models.usedBy(id, store) });
+          }
+          if (!mm[2] && method === 'PUT') {
+            const body = await readJson(req);
+            await models.write(id, body.name ?? (await models.name(id)), body.entries ?? []);
+            await models.setCheck(id, undefined);
+            return send(res, 200, { id });
+          }
+          if (!mm[2] && method === 'PATCH') {
+            await models.rename(id, (await readJson(req)).name);
+            return send(res, 200, { id });
+          }
+          if (!mm[2] && method === 'DELETE') {
+            await models.delete(id, store);
+            return send(res, 200, { deleted: id });
+          }
+        }
+      }
+      if (method === 'POST' && url.pathname === '/api/chat-model') {
+        const body = await readJson(req);
+        await models.setChat(typeof body.id === 'string' && body.id ? body.id : undefined);
+        return send(res, 200, { chatModel: (await models.getChat()) ?? null });
+      }
       if (method === 'POST' && url.pathname === '/api/chat') {
         const history = parseHistory((await readJson(req)).messages);
         if (!history) return send(res, 400, { error: 'Type a message first.' });
-        const active = await store.getActive();
-        if (!active) return send(res, 400, { error: 'Choose a profile on the Setup tab first: the chat uses its AI model.' });
+        const chatId = await models.getChat();
+        if (!chatId) return send(res, 400, { error: 'Add an AI model on the AI models tab first: the chat uses it.' });
         let provider: LlmProvider;
         try {
-          // Same order as a run: the computer's real environment wins over the profile.
-          const env = Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value]));
-          provider = (opts.chatProvider ?? createLlmProvider)(parseConfig({ ...env, ...childEnv() }));
+          provider = (opts.chatProvider ?? createLlmProvider)(await modelConfig(chatId));
         } catch (e) {
-          return send(res, 400, { error: `The AI model of "${active}" is not set up: ${(e as Error).message.split('\n')[0]}` });
+          return send(res, 400, { error: `The AI model "${await models.name(chatId)}" is not set up: ${(e as Error).message.split('\n')[0]}` });
         }
         const base = `http://127.0.0.1:${port}${TOOLS_PREFIX}`;
         const set = chatTools(openApiSpec(base));
         try {
           return send(res, 200, await chatTurn(provider, history, set.tools, (name, args) => callTool(set, base, toolToken, name, args)));
         } catch (e) {
-          const secrets = await profileSecrets(store, active);
+          const secrets = (await models.read(chatId, true)).filter((x) => isSecretKey(x.key) && x.value.length >= 4).map((x) => x.value);
           let msg = (e as Error).message;
           for (const s of secrets) msg = msg.split(s).join('***');
           return send(res, 502, { error: `The AI model did not answer: ${msg}` });

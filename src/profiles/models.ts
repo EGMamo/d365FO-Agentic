@@ -155,6 +155,18 @@ export class ModelStore {
     }
   }
 
+  /** Result of the last "Test connection" of each setup. */
+  async getChecks(): Promise<Record<string, { ok: boolean; detail: string; at: string }>> {
+    const checks = (await this.state()).modelChecks;
+    return checks && typeof checks === 'object' ? (checks as Record<string, { ok: boolean; detail: string; at: string }>) : {};
+  }
+
+  async setCheck(id: string, result: { ok: boolean; detail: string; at: string } | undefined): Promise<void> {
+    const { [id]: _old, ...rest } = await this.getChecks();
+    await mkdir(this.home, { recursive: true, mode: 0o700 });
+    await writeFile(stateFile(this.home), JSON.stringify({ ...(await this.state()), modelChecks: result ? { ...rest, [id]: result } : rest }), { mode: 0o600 });
+  }
+
   /** The setup the chat uses (the same for every profile); the first one when none was chosen. */
   async getChat(): Promise<string | undefined> {
     const chosen = (await this.state()).chatModel;

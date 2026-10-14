@@ -36,3 +36,25 @@ test('a profile can be named by its permanent id, and an AI model by id or name'
   assert.equal(selectModel({ ...env, D365FO_MODEL: 'Claude gateway' }, [], mid).source, 'env');
   assert.equal(selectModel(env, ['--model', 'ghost'], mid).missing, 'ghost');
 });
+
+test('upload picks the profile the saved run belongs to, unless --profile is given', async () => {
+  const { mkdir, mkdtemp, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { ProfileStore } = await import('../profiles/store.js');
+  const { selectProfile } = await import('./load-env.js');
+  const home = await mkdtemp(join(tmpdir(), 'up-'));
+  const profiles = new ProfileStore(home);
+  await profiles.write('A', [], 'create');
+  await profiles.write('B', [], 'create');
+  await profiles.setActive('B');
+  const dir = join(home, 'reports', 'x', 'history', '20260101-000000-1');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'results.json'), '[]');
+  await writeFile(join(dir, 'meta.json'), JSON.stringify({ profile: 'Old name', profileId: await profiles.idOf('A') }));
+  const env = { D365FO_AGENT_HOME: home } as NodeJS.ProcessEnv;
+  const argv = ['upload', '--input', join(dir, 'results.json')];
+  assert.deepEqual(selectProfile(env, argv), { name: 'A', source: 'run' });
+  assert.equal(selectProfile(env, [...argv, '--profile', 'B']).name, 'B');
+  assert.equal(selectProfile(env, ['run']).name, 'B', 'other commands keep using the profile picked in the app');
+});
