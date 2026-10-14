@@ -11,8 +11,8 @@ export const MASK = '••••••••';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,59}$/;
 /** Stored in the profile file; never shown or edited in the UI. It does not change when the profile is renamed. */
 export const ID_KEY = 'PROFILE_ID';
-const ID = /^[a-z0-9]{8,32}$/;
-const newId = (): string => randomBytes(5).toString('hex');
+export const ID = /^[a-z0-9]{8,32}$/;
+export const newId = (): string => randomBytes(5).toString('hex');
 const KEY = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 const MAX_ENTRIES = 200;
 const MAX_VALUE = 4096;
@@ -62,7 +62,7 @@ export function serialize(entries: ProfileEntry[]): string {
   return `${lines.join('\n')}\n`;
 }
 
-function checkEntries(entries: unknown): ProfileEntry[] {
+export function checkEntries(entries: unknown): ProfileEntry[] {
   if (!Array.isArray(entries)) throw new ProfileError('`entries` must be a list of { key, value }.');
   if (entries.length > MAX_ENTRIES) throw new ProfileError(`At most ${MAX_ENTRIES} variables per profile.`);
   const seen = new Set<string>();
@@ -225,6 +225,12 @@ export class ProfileStore {
       if (!stored) throw new ProfileError(`No profile named "${name}".`, 404);
     }
     await mkdir(this.home, { recursive: true, mode: 0o700 });
-    await writeFile(stateFile(this.home), JSON.stringify({ active: stored ?? null }), { mode: 0o600 });
+    let state: Record<string, unknown> = {};
+    try {
+      state = JSON.parse(await readFile(stateFile(this.home), 'utf8')) as Record<string, unknown>;
+    } catch {
+      /* no state yet */
+    }
+    await writeFile(stateFile(this.home), JSON.stringify({ ...state, active: stored ?? null }), { mode: 0o600 });
   }
 }

@@ -35,7 +35,8 @@ program
   .name('d365fo-agent')
   .description('Portable AI agent for D365 F&O regression and unit testing')
   .version('0.1.0')
-  .option('--profile <name>', 'Use a saved settings profile (created in the web UI) instead of the .env file');
+  .option('--profile <name>', 'Use a saved settings profile (its name or its permanent id) instead of the .env file')
+  .option('--model <name>', "Use this AI model setup (its name or id, from the app's AI models list) for this run instead of the profile's");
 
 program
   .command('doctor')
