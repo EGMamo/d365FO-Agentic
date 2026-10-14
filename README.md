@@ -21,12 +21,13 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Azure DevOps ingestion of test cases + publishing of test runs, results, and attachments (PAT via `.env`).
 - Deterministic, structured reports: HTML, JSON, JUnit XML. In JUnit a failed case is a `<failure>`, a blocked case an `<error>` (it could not be judged, so CI should not read it as a harmless skip), and a skipped or interrupted case `<skipped>`.
 - Controlled reloop/retry of failed or blocked test cases with attempt audit history.
-- Self-learning: per-form control map (`knowledge/pages.json`) learned live during runs, plus a knowledge base (`knowledge/kb.json`) with BM25 retrieval, F&O synonyms, outcome feedback, stale-path detection and pruning.
+- Self-learning per-form control map (`knowledge/pages.json`), learned live during runs.
+- Self-learning knowledge base (`knowledge/kb.json`): BM25 retrieval with F&O synonyms, outcome feedback, stale-path detection and pruning.
 - Reflexion on retries (the agent is told what went wrong last time) and failure triage in every report: each case that did not pass gets a category (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure` or `blocked`) and a hint for what to do.
 - `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that plans without mutating the target environment.
 - Built-in chat in the settings app: ask in plain words, no Open WebUI or Docker needed.
-- CLI: `ui`, `studio`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
+- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Get started: the desktop app
@@ -94,6 +95,10 @@ The app has seven tabs:
 Checks and runs started from the app read the profile in use, not the `.env` file in the project folder. A variable set in the computer's real environment still wins over both, and **Check setup** warns when that happens.
 
 The profile in use replaces `.env` for every command. Pick another per command with `--profile "Name"` (the permanent profile id works too, so renaming does not break scripts) or `D365FO_PROFILE=Name` (`D365FO_PROFILE=none` forces `.env`). The profile's AI model comes from the shared AI models; `--model <name or id>` uses another for one command. `run` records itself in the run history with its profile and model, so terminal runs show in Results and History, and `upload --input results.json` uses the profile the run belongs to unless `--profile` is given.
+
+### Open WebUI
+
+Prefer a chat? The app also serves an OpenAPI tool server for [Open WebUI](https://openwebui.com): `npm run openwebui:up` starts Open WebUI in Docker, `npm run openwebui` prints the address and key to add under External Tools, and a chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
 
 ## Command line
 
