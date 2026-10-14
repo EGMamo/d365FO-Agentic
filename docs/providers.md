@@ -25,10 +25,10 @@ LLM_MODEL=claude-opus-4-5-20251101   # the model name your endpoint expects
 - Give the base address. The agent calls `<base>/v1/messages`, so a pasted `/v1` or `/v1/messages` ending is removed.
 - Set `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or both, depending on what the endpoint checks.
 - The endpoint must speak the Anthropic Messages API with tool use. For an OpenAI-style endpoint use `LLM_PROVIDER=openai-compatible` instead.
-- `doctor` (or **Check setup** in the settings app) asks the endpoint for its model list and reports whether it is reachable, whether the credentials were accepted, and whether `LLM_MODEL` is in the list. A gateway without a model list still passes.
+- `doctor` (or **Check setup** in the settings app) asks the endpoint for its model list (`<base>/v1/models`) and reports whether it is reachable, whether the credentials were accepted, and whether `LLM_MODEL` is in the list. A gateway without a model list still passes. A plain `http` address that is not on this computer gets a warning.
 - Everything the agent sends to the model, including page content from F&O, goes to this address. Use `https` and an endpoint you trust.
 
-In the settings app the field is **Claude API URL** under **AI model**.
+In the settings app the field is **Claude API URL** on an Anthropic setup in the **AI models** tab.
 
 Uses the official `@anthropic-ai/sdk` and its native tool-use format. Prompt caching is on by default (`LLM_PROMPT_CACHE=false` disables it): the system prompt with the tool schemas, and the conversation so far, are cached between turns. With `AGENT_VERBOSE=true` each turn logs `cached=<tokens>` when the cache hits; prompts below the model's minimum cacheable size are simply not cached.
 
@@ -107,7 +107,7 @@ LLM_MAX_TOKENS=8192
 - **Thinking models** spend output tokens on reasoning before they call a tool. Use `LLM_MAX_TOKENS=8192` or more, or the reply can be cut off before the tool call.
 - **Small windows:** set `AGENT_CONTEXT_KEEP_RECENT=1` so only the latest page snapshot stays in the prompt.
 - **Model size.** Multi-step browsing is hard for small models; expect to want roughly 14B+ parameters. A 27B (IQ3) model on an M4 Pro (24 GB) completed a login smoke test at about 20 s per turn with a 32k window.
-- **Timeouts.** For a server on this machine the request timeout is at least 5 minutes (`LLM_HTTP_TIMEOUT_MS` can only raise it), since a cold model load plus a long prompt can be slow.
+- **Timeouts.** For a server on this machine (`localhost`, `127.0.0.1`, `[::1]` or `0.0.0.0`) the request timeout is at least 5 minutes (`LLM_HTTP_TIMEOUT_MS` can only raise it), since a cold model load plus a long prompt can be slow.
 
 The guardrails (tool allowlist, navigation limits, production block) apply to every model. Weaker models are easier to steer with injected page text, so they matter more here, not less.
 

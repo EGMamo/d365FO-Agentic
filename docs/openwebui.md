@@ -12,8 +12,8 @@ profile values.
 | --- | --- |
 | `list_profiles`, `use_profile` | See the saved environments and choose the one runs use |
 | `list_test_cases`, `read_test_case`, `save_test_case` | Browse, read, create and edit local test cases in a project folder |
-| `start_run` | Run a local folder or an Azure DevOps plan/suite, one case or all, dry run, retries, optional upload |
-| `get_run`, `stop_run` | Follow the current run (it can wait up to 120 s for it to finish) and see the end of its log, or stop it |
+| `start_run` | Run a local folder or an Azure DevOps plan/suite, all cases or only some, dry run, retries, another AI model for this run only, optional upload |
+| `get_run`, `stop_run` | Follow the current run or upload (it can wait up to 120 s for it to finish) and see the end of its log, or stop it |
 | `get_results` | Totals and each case's outcome and failure reason, for the latest run or one from the history |
 | `list_runs`, `upload_run` | Earlier runs with their DevOps links, and upload any of them to Azure DevOps later |
 | `check_setup` | Run the setup check (`doctor`) on the profile in use and explain what is missing |
@@ -35,15 +35,20 @@ npm run studio
 
 It does everything below in one go:
 
-1. Starts the settings app (on Linux it listens on all addresses so the container can reach it; only the
-   key-protected `/tools` routes answer there).
+1. Starts the settings app, or reuses one that is already running (on Linux it listens on all addresses so the
+   container can reach it; only the key-protected `/tools` routes answer there. A settings app that was already
+   running is reachable from the container only if it was started with `--host 0.0.0.0`).
 2. Writes `openwebui/.env` with the tool-server address and key (owner-only, gitignored).
 3. Starts Open WebUI with `openwebui/docker-compose.yml`. The compose file registers the tool server through Open
    WebUI's `TOOL_SERVER_CONNECTIONS` setting, names the UI "D365FO Test Studio", adds starter prompts and binds to
    `127.0.0.1:3000` only.
-4. Waits for Open WebUI to answer and opens it.
+4. Waits up to 3 minutes for Open WebUI to answer and opens it.
 
-Keep the window open while you use the chat; Ctrl+C stops the settings app. `npm run openwebui:down` stops Open WebUI.
+If Docker is not available or `docker compose` fails, `studio` prints the tool-server address and key to add by hand
+(see below) and opens the settings app instead.
+
+Keep the window open while you use the chat; Ctrl+C stops the settings app it started (Open WebUI keeps running).
+`npm run openwebui:down` stops Open WebUI. `npm run openwebui:up` is the same as `npm run studio`.
 Options: `--webui-port 3001`, `--port 4366` (settings app), `--no-open`.
 
 Then create the Open WebUI account (local to this computer), choose a chat model with tool calling (the compose file
@@ -63,6 +68,9 @@ the new values: update them under **Admin Panel > Settings > External Tools**.
    ```bash
    npm run openwebui
    ```
+
+   If port 4365 is taken, the settings app uses the next free port (up to 20 higher); this command shows the port of
+   the running app.
 
 3. In Open WebUI, add the tool server in one of two places:
    - **Admin Panel > Settings > External Tools** (for everyone on that Open WebUI; Open WebUI's server makes the calls):
@@ -87,8 +95,9 @@ macOS does not need this.
 - The key lives in `openwebui-token` in the agent home folder (owner-only). It is separate from the browser token, so
   the key pasted into Open WebUI never signs anyone in to the settings app. Delete the file and restart the app to
   issue a new key.
-- The tool routes allow cross-origin calls (`Access-Control-Allow-Origin: *`) because they carry no cookies: a page
-  that does not know the key gets `401`.
+- The tool routes allow cross-origin calls (`Access-Control-Allow-Origin: *`) because they carry no cookies. Only
+  `/tools/openapi.json` (the tool descriptions) answers without the key; every other route returns `401` to a caller
+  that does not send it.
 - Run logs returned to the chat have the active profile's secrets replaced with `***`, as in the app.
 
 ## Notes
