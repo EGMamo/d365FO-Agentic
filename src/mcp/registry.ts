@@ -14,6 +14,20 @@ export function fnoLaunchArgs(cfg: Pick<AppConfig, 'PW_ACTION_TIMEOUT_MS'>): str
 }
 
 /**
+ * Playwright MCP takes one comma-separated `--caps` list. The testing tools (`browser_verify_*`) are always on: the
+ * checks the agent makes with them are recorded and replayed in later runs. Tracing adds devtools.
+ */
+export function capsArgs(args: string[], base: string[] = ['testing']): string[] {
+  const caps = [...base];
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--caps' && i + 1 < args.length) caps.push(...args[++i].split(',').filter(Boolean));
+    else rest.push(args[i]);
+  }
+  return ['--caps', Array.from(new Set(caps)).join(','), ...rest];
+}
+
+/**
  * Builds the default MCP server registry for the agent. Playwright and Learn
  * are always registered; Release Planner and Azure DevOps MCP are registered only if opted in.
  */
@@ -28,7 +42,7 @@ export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpMa
       '--browser',
       cfg.PW_BROWSER,
       ...fnoLaunchArgs(cfg),
-      ...traceLaunchArgs(cfg),
+      ...capsArgs(traceLaunchArgs(cfg)),
       // A saved sign-in is loaded into an isolated (in-memory) context; the file itself is never modified.
       ...(sessionFile ? ['--isolated', '--storage-state', sessionFile] : []),
     ]),

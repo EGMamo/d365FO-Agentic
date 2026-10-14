@@ -185,6 +185,7 @@ export function summarizeResults(results: TestResult[]): Record<string, unknown>
         outcome: r.outcome,
         durationMs: r.durationMs,
         ...(r.attemptCount && r.attemptCount > 1 ? { attempts: r.attemptCount } : {}),
+        ...(r.replay ? { replay: r.replay.outcome === 'passed' ? 'replayed without the AI' : `replay failed at step ${r.replay.step}; the AI ran it` } : {}),
         ...(r.errorMessage || failed ? { reason: r.errorMessage ?? failed?.errorMessage ?? failed?.observed, failedStep: failed?.index } : {}),
         ...(r.data && Object.keys(r.data).length ? { data: r.data } : {}),
       };

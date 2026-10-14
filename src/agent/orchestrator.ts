@@ -18,6 +18,8 @@ import { compactHistory } from './context.js';
 import { Guardrails } from './guardrails.js';
 import { toUnavailable } from '../llm/errors.js';
 import { AttemptGuard, destructiveClick, detectAuthProblem, detectUnreachable, type RunStop } from './run-guard.js';
+import { parseCodeLine, ReplayRecorder, stepFunction, type RecordedStep } from '../replay/code.js';
+import { replayBlocker, ReplayStore } from '../replay/store.js';
 
 const DEFAULT_MAX_REPEATED_CALLS = 3;
 const DEFAULT_CONTEXT_KEEP_RECENT = 3;
@@ -189,6 +191,7 @@ export class AgentOrchestrator {
   private pageMap?: PageMap;
   /** MCP tool lists do not change during a run; listing them once saves a round trip per attempt. */
   private toolCache = new Map<string, McpToolDescriptor[]>();
+  private replays: ReplayStore;
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -197,6 +200,7 @@ export class AgentOrchestrator {
     this.kb = opts.kb;
     this.mcpServers = opts.mcpServers;
     this.guardrails = new Guardrails(opts.cfg, opts.mcpServers);
+    this.replays = new ReplayStore(opts.cfg.KB_DIR ?? './knowledge');
     if (hasAppRegistration(opts.cfg) && opts.cfg.D365_BASE_URL) this.odata = new D365ODataClient(opts.cfg);
   }
 
@@ -205,8 +209,15 @@ export class AgentOrchestrator {
     const attempts: AttemptResult[] = [];
     const maxAttempts = Math.max(1, this.cfg.AGENT_RELOOP_MAX_RETRIES + 1);
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.runAttempt(tc, attempts.at(-1), signal);
+    // A case with a recorded passing run is first replayed without the AI; only when that fails does the AI run it.
+    const replay = await this.replay(tc, signal);
+    if (replay?.attempt) attempts.push(replay.attempt);
+    const replayNote = replay?.info.outcome === 'failed'
+      ? `A replay of the last passing run (its recorded Playwright code, without the AI) failed at step ${replay.info.step}: ${replay.info.error}. The page or data may have changed since: work the steps out again rather than repeating the recorded path blindly.`
+      : undefined;
+
+    for (let attempt = 1; attempt <= maxAttempts && !replay?.attempt; attempt++) {
+      const result = await this.runAttempt(tc, attempts.at(-1), signal, attempt === 1 ? replayNote : undefined);
       attempts.push(result);
 
       if (result.interrupted || result.nonRetryable || !shouldRetry(result.outcome, this.cfg.AGENT_RELOOP_RETRY_ON, attempt, maxAttempts)) break;
@@ -259,6 +270,7 @@ export class AgentOrchestrator {
       ...(timeouts.length ? { timeouts } : {}),
       ...(Object.keys(final.data).length ? { data: final.data } : {}),
       ...(final.interrupted ? { interrupted: true } : {}),
+      ...(replay ? { replay: replay.info } : {}),
       attemptCount: attempts.length,
       firstOutcome: first.outcome,
       previousOutcome: previous?.outcome,
@@ -275,7 +287,7 @@ export class AgentOrchestrator {
     };
   }
 
-  private async runAttempt(tc: TestCase, previous?: AttemptResult, signal?: AbortSignal): Promise<AttemptResult> {
+  private async runAttempt(tc: TestCase, previous?: AttemptResult, signal?: AbortSignal, replayNote?: string): Promise<AttemptResult> {
     const startedAt = new Date();
     const artifactsDir = join(this.cfg.REPORT_DIR, 'artifacts', tc.id);
     await mkdir(artifactsDir, { recursive: true });
@@ -338,7 +350,7 @@ export class AgentOrchestrator {
 
     const knownPath = this.kb.recipeFor(tc.id);
     const messages: LlmMessage[] = [
-      { role: 'user', content: testCaseUserPrompt(tc, retrieved, knownPath, previous ? reflectOn(previous, knownPath) : undefined) },
+      { role: 'user', content: testCaseUserPrompt(tc, retrieved, knownPath, previous ? reflectOn(previous, knownPath) : replayNote) },
     ];
     const steps: StepResult[] = [];
     const learnings: string[] = [];
@@ -347,6 +359,7 @@ export class AgentOrchestrator {
     const timeouts: string[] = [];
     const data: Record<string, string> = {};
     const path: string[] = [];
+    const recorder = new ReplayRecorder();
     const page = { key: undefined as string | undefined, hinted: new Set<string>() };
     let outcome: StepStatus = 'blocked';
     let overallError: string | undefined;
@@ -409,6 +422,7 @@ export class AgentOrchestrator {
             timeouts,
             data,
             path,
+            recorder,
             guard,
             flags,
             page,
@@ -473,6 +487,7 @@ export class AgentOrchestrator {
     if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN && path.some((l) => !l.startsWith('-- '))) {
       await this.saveKnownPath(tc, path);
     }
+    if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN && !interrupted) await this.saveReplay(tc, recorder);
     if (!this.cfg.AGENT_DRY_RUN && !interrupted) {
       const category = classifyFailure({ outcome, errorMessage: overallError, steps, policyBlocks, timeouts });
       await this.learnFromOutcome(tc, outcome, category, steps, retrieved, knownPath);
@@ -523,6 +538,8 @@ export class AgentOrchestrator {
       data: Record<string, string>;
       /** Successful UI actions of this attempt, saved as the case's known-good path if it passes. */
       path: string[];
+      /** The Playwright code of those actions, saved for replay without the AI if the attempt passes. */
+      recorder: ReplayRecorder;
       guard: AttemptGuard;
       flags: { nonRetryable: boolean };
       /** The F&O form the browser is on, and the forms whose learned hints were already shown this attempt. */
@@ -560,6 +577,7 @@ export class AgentOrchestrator {
       if (existing >= 0) ctx.steps[existing] = step;
       else ctx.steps.push(step);
       ctx.path.push(`-- step ${index} ${step.status}`);
+      ctx.recorder.step(index);
       if (args.status === 'failed' || args.status === 'blocked') {
         if (args.cause === 'not_found' || args.cause === 'no_access') {
           ctx.flags.nonRetryable = true;
@@ -748,6 +766,8 @@ export class AgentOrchestrator {
       if (fno && !res.isError) {
         const line = pathLine(toolName, args);
         if (line) ctx.path.push(this.clean(line, 200));
+        if (redactSecrets(this.cfg, text) !== text) ctx.recorder.reject('a secret appeared in a tool result');
+        else ctx.recorder.add(toolName, text);
         this.learnFromResult(toolName, args, text, ctx);
         const hint = opts.noHint ? undefined : this.takeHint(ctx);
         if (hint) content += `\n\n${redactSecrets(this.cfg, hint)}`;
@@ -912,6 +932,129 @@ export class AgentOrchestrator {
     } catch (e) {
       console.warn(`[agent] could not save the recovery lesson for ${tc.id}: ${(e as Error).message}`);
     }
+  }
+
+  /** Keeps the Playwright code of a passing attempt so the case can be replayed (and exported) without the AI. */
+  private async saveReplay(tc: TestCase, recorder: ReplayRecorder): Promise<void> {
+    const { steps, problem } = recorder.result();
+    if (!steps.some((s) => s.actions.length || s.assertions.length)) return;
+    try {
+      const script = await this.replays.record(tc, steps, problem);
+      const blocker = replayBlocker(script, tc);
+      this.log(blocker ? `recorded the run of ${tc.id}, but it will not be replayed: ${blocker}` : `recorded the run of ${tc.id}; the next run replays it without the AI`);
+    } catch (e) {
+      console.warn(`[agent] could not save the replay script: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Replays the recorded Playwright code of the case's last passing run, step by step, through Playwright MCP's
+   * run-code tool (never offered to the model). Only runs when the recording covers every step and has a recorded
+   * check for every expected result, so a replayed pass checked the same things the AI did. Returns undefined when
+   * there is nothing to replay; a failed replay leaves the case to the AI.
+   */
+  private async replay(tc: TestCase, signal?: AbortSignal): Promise<{ attempt?: AttemptResult; info: NonNullable<TestResult['replay']> } | undefined> {
+    if (this.cfg.AGENT_REPLAY === false || this.cfg.AGENT_DRY_RUN || !this.mcpServers.includes('playwright') || signal?.aborted) return undefined;
+    let script;
+    try {
+      script = await this.replays.get(tc.id);
+    } catch {
+      return undefined;
+    }
+    const blocker = replayBlocker(script, tc);
+    if (!script || blocker) {
+      if (script && this.cfg.AGENT_VERBOSE) this.log(`not replaying ${tc.id}: ${blocker}`);
+      return undefined;
+    }
+    // The file is on disk and could have been edited: check every line again, and every address against the guardrails.
+    const recorded = new Map(script.steps.map((s) => [s.index, s]));
+    for (const st of script.steps) {
+      for (const code of [...st.actions, ...st.assertions]) {
+        const line = parseCodeLine(code);
+        const denied = !line ? 'it contains code replay does not run' : line.kind === 'goto' ? this.guardrails.checkCall('playwright', 'browser_navigate', { url: line.url }, tc.legalEntity) : undefined;
+        if (denied) {
+          this.log(`not replaying ${tc.id}: ${denied}`);
+          return undefined;
+        }
+      }
+    }
+    const tool = await this.runCodeTool();
+    if (!tool) return undefined;
+
+    this.log(`replaying the recorded run of ${tc.id} without the AI`);
+    const startedAt = new Date();
+    const steps: StepResult[] = [];
+    const navMs = this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000;
+    const expectMs = this.cfg.PW_ACTION_TIMEOUT_MS ?? 15000;
+    let failure: { step: number; error: string } | undefined;
+    for (const tcStep of tc.steps) {
+      if (signal?.aborted) {
+        failure = { step: tcStep.index, error: INTERRUPTED_MESSAGE };
+        break;
+      }
+      const rec: RecordedStep = recorded.get(tcStep.index)!;
+      const began = Date.now();
+      const timeout = (rec.actions.length + 1) * navMs + rec.assertions.length * expectMs;
+      let error: string | undefined;
+      if (rec.actions.length || rec.assertions.length) {
+        try {
+          const res = await this.mcp.callTool('playwright', tool, { code: stepFunction(rec, { settleMs: navMs, expectMs }) }, timeout);
+          if (res.isError) error = mcpErrorText(res.content);
+        } catch (e) {
+          error = (e as Error).message;
+        }
+      }
+      if (error) {
+        failure = { step: tcStep.index, error: this.clean(error.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim(), 500) };
+        steps.push({ index: tcStep.index, status: 'failed', errorMessage: failure.error, observed: 'Replay of the recorded run stopped here.', durationMs: Date.now() - began });
+        break;
+      }
+      const checks = rec.assertions.length ? `; checked: ${rec.assertions.map((a) => a.replace(/^await /, '').replace(/;$/, '')).join('; ')}` : '';
+      steps.push({
+        index: tcStep.index,
+        status: 'passed',
+        ...(tcStep.expected ? { verified: true } : {}),
+        observed: this.clean(`Replayed without the AI: ${rec.actions.length} recorded action(s)${checks}`, LIMITS.observed),
+        durationMs: Date.now() - began,
+      });
+    }
+    if (failure?.error !== INTERRUPTED_MESSAGE) await this.replays.recordOutcome(tc.id, !failure).catch(() => undefined);
+
+    const finishedAt = new Date();
+    if (failure) {
+      this.log(`replay of ${tc.id} failed at step ${failure.step}; running it with the AI`);
+      return { info: { outcome: 'failed', step: failure.step, error: failure.error } };
+    }
+    return {
+      info: { outcome: 'passed' },
+      attempt: {
+        outcome: 'passed',
+        runState: 'completed',
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: finishedAt.getTime() - startedAt.getTime(),
+        steps,
+        artifacts: [],
+        learnings: [],
+        policyBlocks: [],
+        timeouts: [],
+        data: {},
+      },
+    };
+  }
+
+  /** Playwright MCP's run-code tool (named browser_run_code in older versions), if the server has it. */
+  private async runCodeTool(): Promise<string | undefined> {
+    let tools = this.toolCache.get('playwright');
+    if (!tools) {
+      try {
+        tools = await this.mcp.listTools('playwright');
+        this.toolCache.set('playwright', tools);
+      } catch {
+        return undefined;
+      }
+    }
+    return ['browser_run_code_unsafe', 'browser_run_code'].find((n) => tools!.some((t) => t.name === n));
   }
 
   /** Saves the UI actions of a passing attempt as the test case's known-good path, replacing the previous one. */

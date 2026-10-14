@@ -27,7 +27,9 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that plans without mutating the target environment.
 - Built-in chat in the settings app: ask in plain words, no Open WebUI or Docker needed.
-- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`.
+- **Replay without the AI.** A case that passed is recorded as Playwright code with the checks the agent made; the next run replays it in seconds with no model calls and only asks the AI when the replay fails. `export-tests` writes the recordings as Playwright tests you can run with `npx playwright test`.
+- **A skill for coding agents.** [`skills/d365fo-playwright-cli`](skills/README.md) teaches Claude Code, GitHub Copilot and other coding agents to test F&O with [playwright-cli](https://github.com/microsoft/playwright-cli), using what this app has learned.
+- CLI: `studio`, `ui`, `doctor`, `copilot-login`, `discover`, `run`, `report`, `upload`, `learn`, `generate`, `export-tests`.
 - GitHub Actions workflow for scheduled or on-demand runs.
 
 ## Get started: the desktop app
@@ -166,6 +168,7 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
 | `PW_ACTION_TIMEOUT_MS` | How long an action waits for its element (default 15 s; F&O renders slowly) |
 | `AGENT_LEARN_PAGES` / `AGENT_FNO_AUTO_WAIT` / `AGENT_SLIM_SNAPSHOTS` | F&O learning and speed-ups (all on by default): learn controls per form, wait for the busy overlay after actions, smaller snapshots |
+| `AGENT_REPLAY` | Replay a case from its last passing run without the AI before asking the model (default `true`); see [Replay without the AI](docs/self-learning.md#replay-without-the-ai) |
 | `PW_BROWSER` / `PW_AUTO_INSTALL` | Playwright browser (`chromium` default) and whether to download it automatically when missing (default `true`) |
 | `AGENT_ALLOW_PRODUCTION` / `AGENT_ALLOWED_HOSTS` / `AGENT_ALLOWED_TOOLS_EXTRA` | Guardrail overrides (production runs, extra navigable hosts, extra MCP tools) |
 | `AGENT_CONTEXT_KEEP_RECENT` / `LLM_PROMPT_CACHE` | Prompt size and cost: how many recent page snapshots stay verbatim, and Anthropic prompt caching |
@@ -203,7 +206,8 @@ Redaction cannot recognise arbitrary business data (customer names, amounts) tha
 - [Providers](docs/providers.md)
 - [Azure DevOps setup](docs/azure-devops.md)
 - [D365 F&O notes](docs/d365fo.md)
-- [Self-learning](docs/self-learning.md)
+- [Self-learning](docs/self-learning.md) (including [replay without the AI](docs/self-learning.md#replay-without-the-ai))
+- [Skills for coding agents](skills/README.md)
 - [Roadmap](docs/roadmap.md)
 - [Sandbox verification checklist](docs/sandbox-checklist.md)
 - [RSAT and Test Plans note](docs/rsat-and-test-plans.md)

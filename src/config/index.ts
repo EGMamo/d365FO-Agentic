@@ -156,6 +156,12 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
+  // Replay a case from the recorded Playwright code of its last passing run before asking the AI (<KB_DIR>/replays.json).
+  // Only cases whose every expected result was checked with a recorded assertion are replayed; a failed replay falls back to the AI.
+  AGENT_REPLAY: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
   // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.

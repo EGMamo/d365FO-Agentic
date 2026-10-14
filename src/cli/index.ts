@@ -15,7 +15,10 @@ import {
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
-import { checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
+import { activeSessionFile, checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
+import { REPLAY_FILE, ReplayStore } from '../replay/store.js';
+import { exportSpecs } from '../replay/export.js';
+import { loadLocalTestCases } from '../testing/loader.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, checkModelEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
 import { createLlmProvider, isLoopbackUrl } from '../llm/index.js';
@@ -505,6 +508,28 @@ function parseOutcomes(csv: string | undefined): TestResult['outcome'][] | undef
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
   return discoverTestCases(cfg, opts);
 }
+
+program
+  .command('export-tests')
+  .description('Write the recorded passing runs as Playwright tests, to run with `npx playwright test` (no AI needed)')
+  .option('--out <dir>', 'Folder to write the tests to', 'playwright-tests')
+  .option('--case <ids>', 'Only these test-case ids (comma-separated)')
+  .option('--local <dir>', 'Local test cases, to name each step in the test report', 'examples/testcases')
+  .action(async (opts: { out: string; case?: string; local: string }) => {
+    const cfg = loadConfig();
+    const only = opts.case?.split(',').map((s) => s.trim()).filter(Boolean);
+    const scripts = (await new ReplayStore(cfg.KB_DIR).all()).filter((s) => !only?.length || only.includes(s.testCaseId));
+    if (!scripts.length) {
+      console.log(`No recorded runs in ${join(cfg.KB_DIR, REPLAY_FILE)}${only?.length ? ' for those cases' : ''}. A case is recorded when a real (not dry) run of it passes.`);
+      return;
+    }
+    const cases = new Map((await loadLocalTestCases(opts.local).catch(() => [] as TestCase[])).map((tc) => [tc.id, tc]));
+    const out = resolve(opts.out);
+    const res = await exportSpecs(scripts, out, { storageState: activeSessionFile(cfg), actionTimeoutMs: cfg.PW_ACTION_TIMEOUT_MS ?? 15000, cases });
+    console.log(`Wrote ${res.written.length} test${res.written.length === 1 ? '' : 's'} to ${out}`);
+    for (const s of res.skipped) console.log(`  skipped ${s.testCaseId}: ${s.reason}`);
+    if (res.written.length) console.log(`Run them: cd ${JSON.stringify(out)} && npm install && npx playwright test`);
+  });
 
 program
   .command('ui')

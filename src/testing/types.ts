@@ -61,6 +61,11 @@ export interface TestResult {
   timeouts?: string[];
   /** Values the agent saved with `record_value` (created ids, generated numbers). Never secrets. */
   data?: Record<string, string>;
+  /**
+   * The case was first replayed from the recorded Playwright code of its last passing run, without the AI.
+   * `passed`: that replay is the result. `failed`: the AI then ran the case (step and error say where the replay stopped).
+   */
+  replay?: { outcome: 'passed' | 'failed'; step?: number; error?: string };
   /** True when Ctrl+C stopped the run during this case: not a verdict, never learned from or uploaded. */
   interrupted?: boolean;
   attemptCount?: number;
