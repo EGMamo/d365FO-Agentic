@@ -16,7 +16,15 @@ export interface RunMeta {
   id: string;
   status: string;
   args: string[];
+  /** The profile the run belongs to (display name when it ran) and its permanent id. Uploads use this profile. */
   profile?: string | null;
+  profileId?: string | null;
+  /** The AI model setup the run used. */
+  model?: string | null;
+  modelId?: string | null;
+  mode?: 'dry-run' | 'live';
+  /** Where the run was started: the app or the terminal. */
+  origin?: 'app' | 'cli';
   startedAt: string;
   finishedAt?: string;
   totals?: { total: number; passed: number; failed: number; blocked: number; skipped: number };
@@ -119,5 +127,53 @@ export class RunHistory {
   private async prune(): Promise<void> {
     const all = await this.list();
     for (const old of all.slice(MAX_KEPT)) await this.delete(old.id);
+  }
+}
+
+/**
+ * Runs of every profile together. Each profile keeps its own report folder (`reports/<profile id>`), so the app, which
+ * shows the runs of all profiles, reads them all; a run is found by its id in whichever folder holds it.
+ */
+export class HistoryIndex {
+  constructor(private readonly reportDirs: () => Promise<string[]>) {}
+
+  private async each(): Promise<RunHistory[]> {
+    return [...new Set(await this.reportDirs())].map((d) => new RunHistory(async () => d));
+  }
+
+  async list(): Promise<RunMeta[]> {
+    const seen = new Set<string>();
+    const out: RunMeta[] = [];
+    for (const h of await this.each()) {
+      for (const m of await h.list()) {
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
+        out.push(m);
+      }
+    }
+    return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  private async holder(id: string): Promise<RunHistory | undefined> {
+    if (!isRunId(id)) return undefined;
+    for (const h of await this.each()) if (await h.meta(id)) return h;
+    return undefined;
+  }
+
+  async meta(id: string): Promise<RunMeta | undefined> {
+    return (await this.holder(id))?.meta(id);
+  }
+
+  async file(id: string, name: ReportFile): Promise<string | undefined> {
+    return (await this.holder(id))?.file(id, name);
+  }
+
+  async update(id: string, patch: Partial<RunMeta>): Promise<void> {
+    await (await this.holder(id))?.update(id, patch);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const h = await this.holder(id);
+    return h ? h.delete(id) : false;
   }
 }

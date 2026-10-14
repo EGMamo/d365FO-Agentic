@@ -1,0 +1,64 @@
+name: desktop
+
+# Builds the desktop installers (macOS .dmg, Windows .exe) and keeps them as workflow artifacts.
+# Unsigned until signing secrets are added; see desktop/README.md.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['desktop/**', 'src/desktop/**', 'src/runtime/**', '.github/workflows/desktop.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            files: desktop/release/*.dmg
+          - os: windows-latest
+            files: desktop/release/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Install the desktop toolchain
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: desktop
+        env:
+          # No signing identity yet: build unsigned instead of failing.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist
+
+      - name: Check the bundled Playwright starts under the app's Electron
+        shell: bash
+        working-directory: desktop
+        run: ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron app/node_modules/@playwright/mcp/cli.js --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error

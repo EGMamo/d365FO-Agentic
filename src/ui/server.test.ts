@@ -145,10 +145,24 @@ describe('run management', () => {
     assert.match(r.lines.join('\n'), /PROFILE none/);
   });
 
+  it('passes a ticked list of cases, an AI model for this run and the priority limit to the run', async () => {
+    const made = (await (await rcall('/api/models', { method: 'POST', body: JSON.stringify({ name: 'Run model', entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] }) })).json()) as any;
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC-1', 'TC-2'], model: 'Run model', maxPriority: 2, sortByPriority: true, dryRun: true }) });
+    assert.equal(started.status, 200);
+    const r = await pollStatus('passed');
+    assert.match(r.lines.join('\n'), new RegExp(`ARGS run --local cases --case TC-1,TC-2 --model ${made.id} --max-priority 2 --sort-by-priority --dry-run`));
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', model: 'Nope' }) })).status, 400);
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC 1; x'] }) })).status, 400);
+    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', maxPriority: 9 }) })).status, 400);
+  });
+
   it('refuses a second run while busy and can stop the first', async () => {
     const first = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '8', suite: '9', caseId: 'slow' }) });
     assert.equal(first.status, 200);
     assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'x' }) })).status, 409);
+    const switched = await rcall('/api/active', { method: 'POST', body: JSON.stringify({}) });
+    assert.equal(switched.status, 409, 'the profile cannot change while a run is in progress');
+    assert.match(((await switched.json()) as any).error, /run is in progress/);
     const stopped = await rcall('/api/run/stop', { method: 'POST', body: '{}' });
     assert.equal(stopped.status, 200);
     const r = await pollStatus('stopped');
@@ -159,15 +173,18 @@ describe('run management', () => {
 describe('test-case editor, run history and upload', () => {
   // Fake CLI: `run` writes a results.json like the real one, `upload` prints the line the real one prints.
   const FAKE_CLI = [
-    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
     "const args = process.argv.slice(2);",
+    "let dir = 'reports';",
+    "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
-    "  mkdirSync('reports', { recursive: true });",
-    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 5 }]));",
-    "  writeFileSync('reports/report.html', '<html>report</html>');",
+    "  mkdirSync(dir, { recursive: true });",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 5 }]));",
+    "  writeFileSync(dir + '/report.html', '<html>report</html>');",
     "  process.exitCode = 1;",
     "} else if (args[0] === 'upload') {",
     "  console.log('INPUT ' + args[2] + ' PLAN ' + (args[4] ?? '-'));",
+    "  console.log('UPLOAD_PROFILE ' + process.env.D365FO_PROFILE);",
     "  console.log('Uploaded run #42: https://dev.azure.com/org/p/_testManagement/runs?runId=42');",
     "}",
   ].join('\n');
@@ -246,15 +263,36 @@ describe('test-case editor, run history and upload', () => {
     assert.equal((await hcall(`/api/history/${id}`, { method: 'DELETE' })).status, 200);
     assert.deepEqual(await (await hcall('/api/history')).json(), []);
   });
+
+  it('uploads a run with the profile it belongs to, not the one in use now, and keeps each profile\'s runs apart', async () => {
+    for (const name of ['Alpha', 'Beta']) assert.equal((await hcall('/api/profiles', { method: 'POST', body: JSON.stringify({ name, entries: [] }) })).status, 201);
+    assert.equal((await hcall('/api/active', { method: 'POST', body: JSON.stringify({ name: 'Alpha' }) })).status, 200);
+    assert.equal((await hcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases' }) })).status, 200);
+    await waitFor((r) => r.status === 'failed' && r.lines.some((l: string) => l.startsWith('Saved to run history')));
+    const [run] = (await (await hcall('/api/history')).json()) as any[];
+    assert.equal(run.profile, 'Alpha');
+    assert.ok(run.profileId);
+    assert.equal((await hcall('/api/active', { method: 'POST', body: JSON.stringify({ name: 'Beta' }) })).status, 200);
+    assert.equal((await hcall(`/api/history/${run.id}/upload`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
+    const up = await waitFor((r) => r.kind === 'upload' && r.status === 'passed');
+    assert.match(up.lines.join('\n'), /UPLOAD_PROFILE Alpha/);
+    // Renamed profile: the run still finds it by id.
+    assert.equal((await hcall('/api/profiles/Alpha', { method: 'PATCH', body: JSON.stringify({ name: 'Alpha 2' }) })).status, 200);
+    assert.equal((await hcall(`/api/history/${run.id}/upload`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
+    const again = await waitFor((r) => r.kind === 'upload' && r.status === 'passed' && r.lines.some((l: string) => l.includes('Alpha 2')));
+    assert.match(again.lines.join('\n'), /UPLOAD_PROFILE Alpha 2/);
+  });
 });
 
 describe('Open WebUI tool server', () => {
   const FAKE_CLI = [
-    "import { mkdirSync, writeFileSync } from 'node:fs';",
+    "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
     "const args = process.argv.slice(2);",
+    "let dir = 'reports';",
+    "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
-    "  mkdirSync('reports', { recursive: true });",
-    "  writeFileSync('reports/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
+    "  mkdirSync(dir, { recursive: true });",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
     "  console.log('ran ' + args.join(' '));",
     "} else if (args[0] === 'upload') {",
     "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",

@@ -18,3 +18,4 @@ export const stateFile = (home: string): string => join(home, 'state.json');
 export const tokenFile = (home: string): string => join(home, 'ui-token');
 export const serverFile = (home: string): string => join(home, 'ui-server.json');
 export const toolTokenFile = (home: string): string => join(home, 'openwebui-token');
+export const modelsDir = (home: string): string => join(home, 'models');

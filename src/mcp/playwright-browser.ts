@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AppConfig } from '../config/index.js';
+import { packageCommand } from '../runtime/bundled.js';
 
 /**
  * Playwright MCP drives a Playwright-managed browser that is downloaded
@@ -31,6 +32,9 @@ export interface ExecResult {
 }
 
 export type Exec = (command: string, args: string[], onLine: (line: string) => void) => Promise<ExecResult>;
+
+/** Starts Playwright MCP: the copy bundled with the desktop app when there is one, else the latest through npx. */
+export const playwrightMcpCommand = (args: string[]): { command: string; args: string[] } => packageCommand('@playwright/mcp', PLAYWRIGHT_MCP_PACKAGE, 'playwright-mcp', args);
 
 export function playwrightInstallArgs(browser: AppConfig['PW_BROWSER']): string[] {
   // `--no-remove`: never garbage-collect browsers other projects may rely on.
@@ -101,11 +105,12 @@ export async function ensurePlaywrightBrowser(
 
   const args = playwrightInstallArgs(cfg.PW_BROWSER);
   const manual = `npx ${args.join(' ')}`;
+  const launch = playwrightMcpCommand(args.slice(2));
   const hint = `Run it manually (${manual}), or set PW_AUTO_INSTALL=false to skip this step.`;
 
   let result: ExecResult;
   try {
-    result = await exec('npx', args, (line) => {
+    result = await exec(launch.command, launch.args, (line) => {
       // Only surface real downloads; the installer's warning banner is noise.
       if (/^Downloading /.test(line) || / downloaded to /.test(line)) console.log(`[agent] ${line}`);
     });

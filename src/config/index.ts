@@ -184,6 +184,8 @@ const envSchema = z.object({
   AZDO_HTTP_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
   KB_DIR: z.string().default('./knowledge'),
   REPORT_DIR: z.string().default('./reports'),
+  /** Set by the profile store. Without an explicit REPORT_DIR, reports go to reports/<id>. */
+  PROFILE_ID: z.string().regex(/^[a-z0-9]{8,32}$/).optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
@@ -199,7 +201,9 @@ export function parseConfig(env: Record<string, string | undefined>): AppConfig 
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
-  return parsed.data;
+  const data = parsed.data;
+  if (data.PROFILE_ID && !env.REPORT_DIR?.trim()) data.REPORT_DIR = `./reports/${data.PROFILE_ID}`;
+  return data;
 }
 
 export function loadConfig(): AppConfig {
