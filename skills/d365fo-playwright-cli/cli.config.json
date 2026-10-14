@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true
+  },
+  "testIdAttribute": "data-dyn-controlname",
+  "timeouts": {
+    "action": 15000,
+    "navigation": 90000
+  }
+}

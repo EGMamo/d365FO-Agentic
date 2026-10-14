@@ -27,7 +27,8 @@ describe('trace launch args', () => {
   it('is wired into the Playwright server arguments, and never uses a --save-trace flag (it does not exist)', () => {
     const cfg = { PW_TRACE: 'on-failure', REPORT_DIR: 'r', PW_HEADLESS: true, PW_BROWSER: 'chromium', LEARN_MCP_URL: 'u' } as AppConfig;
     const args = (buildDefaultManager(cfg) as unknown as { specs: Map<string, { args: string[] }> }).specs.get('playwright')!.args;
-    assert.ok(args.includes('devtools') && args.includes('--output-dir'));
+    assert.ok(args[args.indexOf('--caps') + 1].split(',').includes('devtools') && args.includes('--output-dir'));
+    assert.equal(args.filter((a) => a === '--caps').length, 1, 'Playwright MCP reads one --caps list');
     assert.ok(!args.includes('--save-trace'));
   });
 });

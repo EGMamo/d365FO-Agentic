@@ -46,6 +46,42 @@ Each entry has a `summary`, `details`, `tags`, an optional `module`, and running
 
 Besides the learnings the model proposes, the orchestrator records the browser actions of every passing case and stores them as a `recipe` entry named "Known-good path for test case <id>". It is given to the next run of that case as its starting route and is not mixed into retrieval for other cases. See [Fast navigation and known-good paths](d365fo.md#fast-navigation-and-known-good-paths).
 
+## Replay without the AI
+
+A passing case is also recorded as the Playwright code its browser actions ran (Playwright MCP reports it with every
+action), filed under the step it belonged to, together with the checks the agent made with the `browser_verify_*`
+tools. Recordings are kept in `<KB_DIR>/replays.json`, one per case.
+
+On the next run of the case, the recording is replayed step by step before the AI is asked, with a wait for F&O's
+"Please wait" overlay after every action. A replay that gets through every step and check is the result: no model
+calls, and the report says it was replayed. When a replay fails, the AI runs the case as usual and is told where the
+replay stopped; if it passes, its run replaces the recording.
+
+A case is only replayed when its recording can stand in for the AI:
+
+- every step was reported in the recorded run, and every step with an expected result has a recorded check (an
+  expected result the agent verified by reading a snapshot cannot be replayed, so such a case always runs with the AI);
+- the test case has not changed since it was recorded;
+- the recording contains only plain locator actions, navigation and checks. Native dialogs, other tabs and drag and
+  drop are not replayed, and a recording where a secret appeared is not kept for replay;
+- every address in it passes the same navigation guardrails as a model request (another environment or legal entity
+  is refused), and it has not failed twice in a row.
+
+Replays run through Playwright MCP's run-code tool, which the model is never offered, and only code that matches a
+strict pattern of locator calls with literal values is run, so an edited `replays.json` cannot run anything else.
+Dry runs never replay. Turn replay off with `AGENT_REPLAY=false`.
+
+Values are replayed as they were typed: a case that creates a record with a fixed id may fail on replay because the
+record exists, and then runs with the AI.
+
+### Export as Playwright tests
+
+`d365fo-agent export-tests --out playwright-tests` writes each recording as a `<case id>.spec.ts` with a
+`playwright.config.ts` that uses F&O's control names (`data-dyn-controlname`) as test ids and the saved sign-in
+(override with `D365_STORAGE_STATE`). Run them with `npm install && npx playwright test` in that folder, for example
+in CI, without an AI model. `--case` limits the export to some cases; `--local` names the folder of local test cases
+so each `test.step` shows the step's action.
+
 ## Retrieval
 
 Before executing a test case the orchestrator queries the KB with the test's title, module, area, tags and step text. Top-K hits are inlined into the user prompt as "Relevant prior learnings" so the model can build on them.

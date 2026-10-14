@@ -46,7 +46,7 @@ function toJUnit(results: TestResult[]): string {
   const cases = results
     .map((r) => {
       const t = (r.durationMs / 1000).toFixed(3);
-      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.failureCategory ? `; category=${r.failureCategory}` : ''}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}${r.timeouts?.length ? `; timeouts=${r.timeouts.length}` : ''}`;
+      const retryMeta = `attemptCount=${r.attemptCount ?? 1}; firstOutcome=${r.firstOutcome ?? r.outcome}; previousOutcome=${r.previousOutcome ?? 'n/a'}; finalOutcome=${r.outcome}${r.failureCategory ? `; category=${r.failureCategory}` : ''}${r.policyBlocks?.length ? `; guardrailBlocks=${r.policyBlocks.length}` : ''}${r.timeouts?.length ? `; timeouts=${r.timeouts.length}` : ''}${r.replay ? `; replay=${r.replay.outcome}${r.replay.step ? ` at step ${r.replay.step}` : ''}` : ''}`;
       let body = '';
       if (r.outcome === 'failed') {
         body = `<failure message="${xmlEscape(r.errorMessage ?? 'failed')}"${r.failureCategory ? ` type="${xmlEscape(r.failureCategory)}"` : ''}>${xmlEscape(r.errorMessage ?? '')}</failure><system-out>${xmlEscape(
@@ -81,7 +81,9 @@ function toHtml(results: TestResult[]): string {
   <td>${xmlEscape(`${r.firstOutcome ?? r.outcome} → ${r.outcome}`)}</td>
   <td>${(r.durationMs / 1000).toFixed(2)}s</td>
   <td>${r.steps.length}</td>
-  <td>${r.errorMessage ? xmlEscape(r.errorMessage) : ''}${
+  <td>${r.replay?.outcome === 'passed' ? '<div class="data">Replayed from the last passing run, without the AI.</div>' : ''}${
+    r.replay?.outcome === 'failed' ? `<div class="data">Replay of the last passing run failed at step ${r.replay.step}, so the AI ran it: ${xmlEscape(r.replay.error ?? '')}</div>` : ''
+  }${r.errorMessage ? xmlEscape(r.errorMessage) : ''}${
     r.policyBlocks?.length ? `<div class="guard">Guardrails refused ${r.policyBlocks.length} call(s):<br>${r.policyBlocks.map(xmlEscape).join('<br>')}</div>` : ''
   }${r.timeouts?.length ? `<div class="guard">Timed out ${r.timeouts.length} time(s):<br>${r.timeouts.map(xmlEscape).join('<br>')}</div>` : ''}${
     r.steps.some((st) => st.verified === false) ? `<div class="guard">Unverified step(s): ${r.steps.filter((st) => st.verified === false).map((st) => st.index).join(', ')}</div>` : ''

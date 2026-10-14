@@ -35,3 +35,14 @@ test('JUnit reports a blocked case as an error and an interrupted one as skipped
   assert.match(junit, /name="blocked case"[^>]*><error message="blocked: Sign-in asked for MFA" type="sign_in">/);
   assert.match(junit, /name="stopped case"[^>]*><skipped /);
 });
+
+test('reports say when a case was replayed without the AI, and where a failed replay stopped', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rep-'));
+  const replayed: TestResult = { ...base, testCaseId: '4', outcome: 'passed', runState: 'completed', errorMessage: undefined, replay: { outcome: 'passed' } };
+  const fellBack: TestResult = { ...base, testCaseId: '5', replay: { outcome: 'failed', step: 2, error: 'locator.click: <Timeout>' } };
+  const paths = await writeReports(dir, [replayed, fellBack]);
+  const html = await readFile(paths.html, 'utf8');
+  assert.match(html, /Replayed from the last passing run, without the AI\./);
+  assert.match(html, /failed at step 2, so the AI ran it: locator\.click: &lt;Timeout&gt;/);
+  assert.match(await readFile(paths.junit, 'utf8'), /replay=failed at step 2/);
+});
