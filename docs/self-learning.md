@@ -8,8 +8,8 @@ The most useful learning happens during a run, not at the end of it. `<KB_DIR>/p
 `./knowledge/pages.json`) is a map of the F&O forms the agent has worked on:
 
 - **Which form.** Each browser result carries the page URL and title. A form is keyed by its display menu item
-  (`mi=` in the URL), else by its caption. Every form visited, however it was reached (search box, a button, a
-  link), is added to the pages `d365_open_menu_item` can open by caption.
+  (`mi=` in the URL), else by its caption. Every form visited with a menu item in its URL, however it was reached
+  (search box, a button, a link), is added to the pages `d365_open_menu_item` can open by caption.
 - **Which controls.** After each successful click, entry, selection or hover, Playwright reports the locator the
   action resolved to. With F&O's `data-dyn-controlname` set as the test-id attribute that is usually
   `getByTestId('<AOT control name>')`, otherwise a role and name such as `getByRole('textbox', { name: 'Vendor
@@ -40,7 +40,7 @@ Location: `${KB_DIR}/kb.json` (the form map above is `${KB_DIR}/pages.json`) (de
 | `remediation` | An error signature paired with a fix (retry, alt navigation, refresh). |
 | `doc` | A relevant snippet retrieved from Microsoft Learn, with citation. |
 
-Each entry has a `summary`, `details`, `tags`, an optional `module`, and running counters of successes / failures. When the agent proposes a "learning" that matches an existing summary (case-insensitively), the entry is merged instead of duplicated.
+Each entry has a `summary`, `details`, `tags`, an optional `module`, and running counters of successes / failures. The model proposes learnings in the `learnings` of `finish_test`. One that matches an existing entry of the same kind and summary (case-insensitively) is merged into it instead of duplicated.
 
 ## Known-good paths
 
@@ -86,12 +86,12 @@ so each `test.step` shows the step's action.
 
 Before executing a test case the orchestrator queries the KB with the test's title, module, area, tags and step text. Top-K hits are inlined into the user prompt as "Relevant prior learnings" so the model can build on them.
 
-Retrieval is BM25 over summary, details, tags and module. Summaries and tags carry more weight than details. Queries are expanded with F&O synonyms and abbreviations (vendor/supplier, PO/purchase order, LE/legal entity…), and words are stemmed. Entries with a matching tag or in the test's module rank higher, but only when their text matches the query: sharing a module or tag is not relevance on its own. Entries are also biased by their track record. Known-good paths are excluded, because they are handed only to their own test case. Swapping in an embedding store means re-implementing `search` in [`src/knowledge/kb.ts`](../src/knowledge/kb.ts).
+Retrieval is BM25 over summary, details and tags; the summary counts twice. Queries are expanded with F&O synonyms and abbreviations (vendor/supplier, PO/purchase order, LE/legal entity…), and words are stemmed. Entries with a matching tag or in the test's module rank higher, but only when their text matches the query: sharing a module or tag is not relevance on its own. Entries are also biased by their track record. Known-good paths are excluded, because they are handed only to their own test case. During a run the model can also query the KB itself with the `kb_search` tool. The ranking is implemented in `search` in [`src/knowledge/kb.ts`](../src/knowledge/kb.ts).
 
 ## Learning from outcomes
 
 - **Feedback.** After each case, the entries that were retrieved for it are credited when the case passed. They are debited only when the case did not pass for a reason the hints could have caused: a page or record that could not be found (`not_found`, unless every step that stopped the case reported a missing permission), a `timeout`, the agent getting stuck (`agent`), or an expected result that was not checked (`unverified`). A likely product defect (`assertion`), sign-in, budget, guardrail and tooling problems, and missing data do not count against them. Entries that keep misleading the agent sink in the ranking, and `learn --prune` removes them.
-- **Stale paths.** A known-good path is judged by the same rule as the hints. When the case does not pass twice in a row for a reason the route could have caused (for example a page or button that is no longer found after a UI change, a timeout, or the agent getting stuck), the path is no longer offered. The case then explores again and records a fresh path when it passes. A likely product defect (`assertion`) does not count against the path.
+- **Stale paths.** A known-good path is judged by the same rule as the hints, except that any step reported as not found counts against it. When the case does not pass twice in a row for a reason the route could have caused (for example a page or button that is no longer found after a UI change, a timeout, or the agent getting stuck), the path is no longer offered. The case then explores again and records a fresh path when it passes. A likely product defect (`assertion`) does not count against the path.
 - **Reflexion on retries.** When a case is retried, the prompt says what happened last time: the outcome and reason, which steps passed (their data may already exist), which failed or were blocked and why, which calls the guardrails refused, and which calls timed out. It also tells the agent to take a fresh snapshot and try a different approach instead of repeating the failed one.
 - **Self-healing.** When a case fails and then passes on a retry, the agent saves a `remediation` entry tagged `self-healed`: the step that broke, why, and the actions that worked. It is retrieved the next time a similar case runs. Nothing is saved from cases that passed first time.
 - **Failure triage.** Each result that did not pass is classified (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure`, `blocked`) from the step causes, guardrail blocks, timeouts and limits. The category and a hint for what to do appear in the run log, the HTML report, `results.json` and as the `type` of the JUnit `<failure>` (failed) or `<error>` (blocked).
@@ -116,8 +116,8 @@ The file is saved atomically. Before each save, what another process wrote in th
 
 ## Resetting
 
-Delete `knowledge/kb.json`. The agent will start with an empty KB on the next run.
+Delete `knowledge/kb.json` (`<KB_DIR>/kb.json`). The agent will start with an empty KB on the next run. The form map (`pages.json`) and the replay recordings (`replays.json`) in the same folder are separate files; delete them to reset those too.
 
 ## Privacy
 
-No customer data should be written into learnings by the agent — the system prompt instructs it to keep entries generic. Review `kb.json` before committing it if you plan to share the KB.
+The prompt asks for concise, reusable facts about F&O selectors and workflows, and `d365_page_note` for generic facts without data values, names or secrets. The configured username, password, API keys and tokens, and token-like strings (JWTs, bearer tokens), are replaced with `***` before a learning is stored. Nothing else filters customer data out, so review `kb.json` before committing it if you plan to share the KB.
