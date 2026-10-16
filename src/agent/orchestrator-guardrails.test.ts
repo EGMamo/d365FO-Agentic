@@ -24,7 +24,6 @@ const finish = (args: Record<string, unknown> = { outcome: 'passed' }) => call('
 
 interface Harness {
   reached: Array<[string, string, Record<string, unknown>]>;
-  upserts: Array<Record<string, unknown>>;
   requests: LlmCompleteRequest[];
   run: (t?: TestCase) => ReturnType<AgentOrchestrator['runTestCase']>;
 }
@@ -35,10 +34,9 @@ function harness(
   discovered: Array<{ server: string; name: string }> = [],
   page = 'page',
 ): Harness {
-  const h: Harness = { reached: [], upserts: [], requests: [], run: async () => { throw new Error('unset'); } };
+  const h: Harness = { reached: [], requests: [], run: async () => { throw new Error('unset'); } };
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40,
-    AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0,
     D365_BASE_URL: BASE, D365_COMPANY: 'USMF', D365_PASSWORD: PASS, ANTHROPIC_API_KEY: API_KEY,
     ...over,
   } as AppConfig;
@@ -53,11 +51,10 @@ function harness(
     async listTools() { return discovered.map((d) => ({ ...d, description: '', inputSchema: { type: 'object' } })); },
     async callTool(server: string, tool: string, args: Record<string, unknown>) { h.reached.push([server, tool, args]); return { content: page, isError: false }; },
   };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert(e: Record<string, unknown>) { h.upserts.push(e); }, async save() {}, recordOutcome() { return 0; } };
   const dir = mkdtemp(join(tmpdir(), 'orch-'));
   h.run = async (t = tc) => {
     cfg.REPORT_DIR = await dir;
-    return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never).runTestCase(t);
+    return new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright', 'learn'] } as never).runTestCase(t);
   };
   return h;
 }
@@ -165,27 +162,18 @@ describe('model-written text is scrubbed and bounded before it is stored', () =>
       }),
     ]);
     const res = await h.run();
-    const stored = JSON.stringify({ res, upserts: h.upserts });
+    const stored = JSON.stringify(res);
     for (const secret of [PASS, API_KEY, jwt, 'a'.repeat(30)]) assert.ok(!stored.includes(secret), `leaked ${secret}`);
     assert.match(res.steps[0].observed ?? '', /password \*\*\* and \*\*\*/);
   });
 
-  it('truncates oversized text and caps learnings', async () => {
-    const learnings = Array.from({ length: 25 }, (_, i) => ({ kind: 'recipe', summary: `s${i}`, details: 'd'.repeat(5000) }));
-    const h = harness([call('report_step', { index: 1, status: 'passed', observed: 'o'.repeat(10_000) }), finish({ outcome: 'passed', learnings })]);
+  it('truncates oversized step observations', async () => {
+    const h = harness([call('report_step', { index: 1, status: 'passed', observed: 'o'.repeat(10_000) }), finish({ outcome: 'passed' })]);
     const res = await h.run();
     assert.ok((res.steps[0].observed ?? '').length < 2100);
-    assert.equal(h.upserts.length, 10);
-    assert.ok(String(h.upserts[0].details).length < 2100);
   });
 
-  it('drops learnings with an unknown kind or missing fields', async () => {
-    const h = harness([finish({ outcome: 'passed', learnings: [
-      { kind: 'exploit', summary: 'x', details: 'y' }, { kind: 'doc', summary: 'ok', details: 'fine' }, { kind: 'doc', summary: '   ', details: 'y' }, null, { kind: 'doc' },
-    ] })]);
-    await h.run();
-    assert.deepEqual(h.upserts.map((u) => u.summary), ['ok']);
-  });
+
 });
 
 describe('tool argument validation', () => {

@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import dotenv from 'dotenv';
-import { agentHome, modelsDir, profilesDir, stateFile } from '../profiles/paths.js';
+import { AI_KEYS } from '../profiles/ai.js';
+import { agentHome, profilesDir, stateFile } from '../profiles/paths.js';
 
 /**
  * Loads settings before the config is read. When a profile is selected (D365FO_PROFILE, `--profile <name>`, or the one
@@ -90,65 +91,15 @@ if (profileSelection.name) {
   loaded = dotenv.config().parsed;
 }
 
-export interface ModelSelection {
-  id?: string;
-  name?: string;
-  /** Where the choice came from: `--model`, D365FO_MODEL, or the AI model the profile points to. */
-  source: 'argv' | 'env' | 'profile' | 'none';
-  /** An AI model was asked for but no setup matches it. */
-  missing?: string;
-}
-
-/** Finds an AI model setup by id or, failing that, by name (any letter case). */
-export function findModel(home: string, ref: string): { id: string; name: string } | undefined {
-  const dir = modelsDir(home);
-  const read = (id: string): { id: string; name: string } | undefined => {
-    try {
-      const parsed = dotenv.parse(readFileSync(join(dir, `${id}.env`), 'utf8'));
-      return { id, name: parsed.MODEL_NAME || id };
-    } catch {
-      return undefined;
-    }
-  };
-  const wanted = ref.trim();
-  if (ID.test(wanted) && existsSync(join(dir, `${wanted}.env`))) return read(wanted);
-  try {
-    for (const f of readdirSync(dir)) {
-      const m = f.endsWith('.env') && ID.test(f.slice(0, -4)) ? read(f.slice(0, -4)) : undefined;
-      if (m && m.name.toLowerCase() === wanted.toLowerCase()) return m;
-    }
-  } catch {
-    /* no setups yet */
-  }
-  return undefined;
-}
-
-export function selectModel(env: NodeJS.ProcessEnv, argv: string[], profileModel: string | undefined): ModelSelection {
-  const asked = argvValue(argv, '--model');
-  const [ref, source] = asked !== undefined ? [asked, 'argv' as const] : env.D365FO_MODEL?.trim() ? [env.D365FO_MODEL, 'env' as const] : profileModel?.trim() ? [profileModel, 'profile' as const] : [undefined, 'none' as const];
-  if (ref === undefined) return { source: 'none' };
-  const found = findModel(agentHome(env), ref);
-  return found ? { ...found, source } : { source, missing: ref.trim() };
-}
-
-/**
- * The AI model setup the profile points to (`AI_MODEL`), or the one asked for with `--model` / D365FO_MODEL, which wins
- * for this run only. Its settings are read as if they were in the profile. A setting in the real environment still wins.
- */
-export const modelSelection = selectModel(process.env, process.argv, loaded?.AI_MODEL);
-if (modelSelection.missing) console.warn(`[config] AI model "${modelSelection.missing}" was not found; using the model settings of the profile or .env`);
-if (modelSelection.id) {
-  const fromModel = dotenv.parse(readFileSync(join(modelsDir(agentHome()), `${modelSelection.id}.env`), 'utf8'));
-  delete fromModel.MODEL_NAME;
-  loaded = { ...(loaded ?? {}) };
-  for (const [k, v] of Object.entries(fromModel)) {
-    // `--model` replaces what the profile says; the profile's own model, when it has one, otherwise wins as before.
-    if (presetKeys.has(k)) continue;
-    if (modelSelection.source !== 'profile' || process.env[k] === undefined) {
-      process.env[k] = v;
-      loaded[k] = v;
-    }
-  }
+// The shared connection overrides legacy per-profile model fields; genuine process variables still win.
+export const modelSelection = { name: 'Shared Claude connection', id: 'shared' };
+const sharedFile = join(agentHome(), 'ai.env');
+if (existsSync(sharedFile)) {
+  const shared = dotenv.parse(readFileSync(sharedFile, 'utf8'));
+  loaded = Object.fromEntries(Object.entries(loaded ?? {}).filter(([key]) => !(AI_KEYS as readonly string[]).includes(key)));
+  for (const key of AI_KEYS) if (!presetKeys.has(key)) delete process.env[key];
+  loaded = { ...loaded, ...shared };
+  for (const [key, value] of Object.entries(shared)) if (!presetKeys.has(key)) process.env[key] = value;
 }
 
 /** Variables this process took from its settings file (a profile or `.env`), as opposed to its real environment. */

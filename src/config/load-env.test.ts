@@ -1,6 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { environmentForChild } from './load-env.js';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { AiSettings, DEFAULT_MODEL } from '../profiles/ai.js';
+import { ProfileStore } from '../profiles/store.js';
+
+test('all profiles use the shared connection and blank model names get the default', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'shared-config-'));
+  await new ProfileStore(home).write('UAT', [{ key: 'ANTHROPIC_API_KEY', value: 'legacy-key' }, { key: 'LLM_MODEL', value: 'legacy-model' }], 'create');
+  await new AiSettings(home).write([{ key: 'ANTHROPIC_API_KEY', value: 'shared-key' }, { key: 'LLM_MODEL', value: '' }]);
+  const source = `import {loadConfig} from ${JSON.stringify(new URL('./index.js', import.meta.url).href)}; const c=loadConfig();console.log(JSON.stringify({model:c.LLM_MODEL,shared:c.ANTHROPIC_API_KEY==='shared-key'}));`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8', env: { ...environmentForChild(), D365FO_AGENT_HOME: home, D365FO_PROFILE: 'UAT', ANTHROPIC_API_KEY: undefined, LLM_MODEL: undefined },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').at(-1)!), { model: DEFAULT_MODEL, shared: true });
+});
 
 test('environmentForChild drops what was read from a settings file and keeps the real environment', () => {
   const env = { PATH: '/bin', D365_BASE_URL: 'https://from-file.example', LLM_PROVIDER: 'openai', HOME: '/home/u' };
@@ -13,15 +31,12 @@ test('a profile can be named by its permanent id, and an AI model by id or name'
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const { ModelStore } = await import('../profiles/models.js');
   const { ProfileStore } = await import('../profiles/store.js');
-  const { selectModel, selectProfile } = await import('./load-env.js');
+  const { selectProfile } = await import('./load-env.js');
   const home = await mkdtemp(join(tmpdir(), 'ids-'));
   const profiles = new ProfileStore(home);
-  const models = new ModelStore(home);
   await profiles.write('Sandbox UAT', [], 'create');
   const pid = await profiles.idOf('Sandbox UAT');
-  const mid = await models.write(undefined, 'Claude gateway', [{ key: 'LLM_PROVIDER', value: 'anthropic' }]);
   const env = { D365FO_AGENT_HOME: home } as NodeJS.ProcessEnv;
   assert.deepEqual(selectProfile(env, ['--profile', pid]), { name: 'Sandbox UAT', source: 'argv' });
   assert.deepEqual(selectProfile({ ...env, D365FO_PROFILE: pid }, []), { name: 'Sandbox UAT', source: 'env' });
@@ -29,12 +44,6 @@ test('a profile can be named by its permanent id, and an AI model by id or name'
   await profiles.rename('Sandbox UAT', 'Renamed');
   assert.equal(selectProfile(env, ['--profile', pid]).name, 'Renamed', 'the id still finds it after a rename');
 
-  assert.deepEqual(selectModel(env, [], undefined), { source: 'none' });
-  assert.deepEqual(selectModel(env, [], mid), { id: mid, name: 'Claude gateway', source: 'profile' });
-  assert.equal(selectModel(env, ['--model', 'CLAUDE gateway'], 'other')?.source, 'argv');
-  assert.equal(selectModel(env, ['--model=' + mid], undefined).id, mid);
-  assert.equal(selectModel({ ...env, D365FO_MODEL: 'Claude gateway' }, [], mid).source, 'env');
-  assert.equal(selectModel(env, ['--model', 'ghost'], mid).missing, 'ghost');
 });
 
 test('upload picks the profile the saved run belongs to, unless --profile is given', async () => {
