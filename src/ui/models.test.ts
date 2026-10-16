@@ -40,7 +40,7 @@ describe('AI models in the app', () => {
         return r;
       },
     });
-    ui = await startUiServer({ home, port: 0, chatProvider: provider as never, childEnv: () => ({}) });
+    ui = await startUiServer({ home, port: 0, modelProvider: provider as never, childEnv: () => ({}) });
     cookie = await new Promise((resolve) => {
       request({ host: '127.0.0.1', port: ui.port, path: `/?token=${ui.token}`, headers: { host: `127.0.0.1:${ui.port}` } }, (res) => {
         res.resume();

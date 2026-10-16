@@ -1,7 +1,7 @@
 # Open WebUI front end
 
 [Open WebUI](https://openwebui.com) can drive the test runner from a chat. The settings app (`npm run ui` or the
-desktop icon) also serves an **OpenAPI tool server** at `http://localhost:4365/tools`. Add it to Open WebUI once and
+desktop app) also serves an **OpenAPI tool server** at `http://localhost:4365/tools`. Add it to Open WebUI once and
 any chat model with tool calling can list profiles, write test cases, start and stop runs, read results and upload
 them to Azure DevOps. The settings app stays the place to edit profiles and secrets; the tool server never returns
 profile values.
@@ -27,42 +27,14 @@ the app's Run tab, and the other way round.
 
 ## Setup
 
-### One command
+### Desktop app
 
-```bash
-npm run studio
-```
-
-It does everything below in one go:
-
-1. Starts the settings app, or reuses one that is already running (on Linux it listens on all addresses so the
-   container can reach it; only the key-protected `/tools` routes answer there. A settings app that was already
-   running is reachable from the container only if it was started with `--host 0.0.0.0`).
-2. Writes `openwebui/.env` with the tool-server address and key (owner-only, gitignored).
-3. Starts Open WebUI with `openwebui/docker-compose.yml`. The compose file registers the tool server through Open
-   WebUI's `TOOL_SERVER_CONNECTIONS` setting, names the UI "D365FO Test Studio", adds starter prompts and binds to
-   `127.0.0.1:3000` only.
-4. Waits up to 3 minutes for Open WebUI to answer and opens it.
-
-If Docker is not available or `docker compose` fails, `studio` prints the tool-server address and key to add by hand
-(see below) and opens the settings app instead.
-
-Keep the window open while you use the chat; Ctrl+C stops the settings app it started (Open WebUI keeps running).
-`npm run openwebui:down` stops Open WebUI. `npm run openwebui:up` is the same as `npm run studio`.
-Options: `--webui-port 3001`, `--port 4366` (settings app), `--no-open`.
-
-Then create the Open WebUI account (local to this computer), choose a chat model with tool calling (the compose file
-passes `OPENAI_API_BASE_URL` / `OPENAI_API_KEY` and an Ollama address on the host through, or add a connection under
-Admin Panel > Settings > Connections), turn on the **D365FO test runner** tools with the **+** button and set the
-model's function calling to **Native** (Advanced Params).
-
-Open WebUI only reads `TOOL_SERVER_CONNECTIONS` on its first start and keeps the value in its own settings after
-that. If the key or the settings app port changes later (for example you deleted `openwebui-token`), `studio` prints
-the new values: update them under **Admin Panel > Settings > External Tools**.
+The desktop app installs Open WebUI on first start, connects it to the tool server and keeps the address and key up
+to date on every start. Nothing needs to be set up by hand. See [desktop/README.md](../desktop/README.md).
 
 ### By hand, or with an Open WebUI you already have
 
-1. Start the settings app: `npm run ui` (or double-click the desktop icon).
+1. Start the settings app: `npm run ui`.
 2. Get the address and key:
 
    ```bash
@@ -102,7 +74,7 @@ macOS does not need this.
 
 ## Notes
 
-- The chat model is whatever Open WebUI is set up with (`OPENAI_API_BASE_URL` / `OPENAI_API_KEY` or Ollama in the
-  compose file). The test runs themselves still use the LLM configured in the active D365FO profile.
+- The chat model is whatever Open WebUI is set up with (in the desktop app, the chat AI model picked above the chat).
+  The test runs themselves still use the LLM configured in the active D365FO profile.
 - The `appUrl` returned by `get_run` opens the settings app (Results tab for the HTML report), which needs the browser to have been signed in once
-  from the launcher.
+  from the address `npm run ui` opens.

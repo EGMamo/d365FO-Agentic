@@ -23,7 +23,7 @@ The most useful learning happens during a run, not at the end of it. `<KB_DIR>/p
   after Save); it is shown with the form's controls from then on.
 
 The map is updated in memory as the run goes (later cases in the same run benefit straight away) and written at the
-end of each attempt and after each note. Turn it off with `AGENT_LEARN_PAGES=false`. The settings app's chat tools
+end of each attempt and after each note. Turn it off with `AGENT_LEARN_PAGES=false`. The Open WebUI chat tools
 show it with `list_learned_pages`. Delete the file to start over; edit it to correct a control. It holds no data
 values, but captions and control labels come from your environment, so treat it like the rest of `knowledge/`.
 

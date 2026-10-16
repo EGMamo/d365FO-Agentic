@@ -147,15 +147,6 @@
   dialog h3 { margin-bottom:.4rem; }
   dialog .row { justify-content:flex-end; margin-top:1.1rem; }
 
-  #chatLog { display:flex; flex-direction:column; gap:.6rem; min-height:16rem; max-height:60vh; overflow-y:auto; padding:.2rem 0 .8rem; }
-  .msg { max-width:85%; padding:.55rem .8rem; border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .msg.user { align-self:flex-end; background:var(--accent); color:var(--accent-text); }
-  .msg.assistant { align-self:flex-start; background:var(--sunk); border:1px solid var(--line); }
-  .msg.error { align-self:flex-start; background:var(--danger-soft); color:var(--danger); }
-  .msg .used { display:block; margin-top:.35rem; font-size:.78rem; color:var(--muted); }
-  .chatbar { display:flex; gap:.5rem; align-items:flex-end; }
-  .chatbar textarea { flex:1; min-height:2.8rem; max-height:10rem; }
-  .suggest { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.7rem; }
   .checks { display:flex; flex-direction:column; gap:.15rem; max-height:16rem; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:.3rem .5rem; background:var(--sunk); }
   .checks label.check { display:flex; align-items:baseline; gap:.5rem; padding:.2rem 0; } .checks small { color:var(--muted); margin-left:.3rem; }
   /* Inside the desktop app the side strip does the navigation. */
@@ -170,7 +161,6 @@
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button role="tab" data-tab="profiles" aria-selected="true" type="button">Setup</button>
     <button role="tab" data-tab="models" aria-selected="false" type="button">AI models</button>
-    <button role="tab" data-tab="chat" aria-selected="false" type="button">Chat</button>
     <button role="tab" data-tab="cases" aria-selected="false" type="button">Test cases</button>
     <button role="tab" data-tab="run" aria-selected="false" type="button">Run</button>
     <button role="tab" data-tab="results" aria-selected="false" type="button">Results</button>
@@ -271,24 +261,6 @@
     <div class="panel">
       <div class="actions" style="margin-bottom:.5rem"><h2 style="margin:0">Live log</h2><span class="spacer"></span><button class="btn" id="copyLog" type="button">Copy</button></div>
       <pre id="log" tabindex="0">Nothing has run yet. Choose what to run and press Run.</pre>
-    </div>
-  </section>
-
-  <section class="view" id="tab-chat" role="tabpanel">
-    <div class="panel">
-      <div class="actions" style="margin-bottom:.4rem">
-        <h3>Chat</h3>
-        <span class="spacer"></span>
-        <button class="btn" id="chatClear" type="button">New chat</button>
-      </div>
-      <div class="row" style="margin-bottom:.5rem"><label for="chatModelSel" class="small"><b>Chat model</b></label><select id="chatModelSel" style="max-width:20rem"></select><span class="muted small">Same for every profile · tools run on <b id="chatTools"></b></span></div>
-      <p class="muted small">Ask in plain words. The chat can check the setup, write test cases, start runs and read results. It is told to ask before a real run or an upload.</p>
-      <div id="chatLog" aria-live="polite"></div>
-      <div class="suggest" id="chatSuggest"></div>
-      <form class="chatbar" id="chatForm">
-        <textarea id="chatInput" rows="2" placeholder="For example: dry-run examples/testcases and tell me what failed" aria-label="Message"></textarea>
-        <button class="btn primary" id="chatSend" type="submit">Send</button>
-      </form>
     </div>
   </section>
 
@@ -395,46 +367,6 @@ function ask(title, body, okLabel, danger) {
   });
 }
 
-// ── Chat ──
-let chat = [];
-const CHAT_IDEAS = ['Check my setup', 'Dry-run examples/testcases and tell me what failed', 'Write a test case that creates a vendor', 'Summarise the last run'];
-function renderChatModel() {
-  const sel = $('chatModelSel'); if (!sel) return;
-  sel.replaceChildren(...(state.models.length ? state.models.map((m) => el('option', { value: m.id }, m.name)) : [el('option', { value: '' }, 'No AI model yet')]));
-  sel.value = state.chatModel || '';
-  $('chatTools').textContent = state.active || 'the .env file';
-}
-$('chatModelSel').addEventListener('change', () => api('/api/chat-model', 'POST', { id: $('chatModelSel').value }).then(() => refresh()).catch(fail));
-function renderChat() {
-  const log = $('chatLog');
-  log.replaceChildren(...(chat.length ? chat.map((m) => el('div', { class: 'msg ' + m.role }, m.content, m.used && m.used.length ? el('span', { class: 'used' }, 'Used: ' + m.used.join(', ')) : null))
-    : [el('p', { class: 'empty' }, state.chatModel ? 'Using the AI model "' + modelName(state.chatModel) + '".' : 'Add an AI model on the AI models tab first: the chat uses it.')]));
-  $('chatSuggest').replaceChildren(...(chat.length ? [] : CHAT_IDEAS.map((t) => el('button', { class: 'btn small', type: 'button', onclick: () => { $('chatInput').value = t; sendChat(); } }, t))));
-  log.scrollTop = log.scrollHeight;
-}
-async function sendChat() {
-  const input = $('chatInput'), text = input.value.trim();
-  if (!text || $('chatSend').disabled) return;
-  chat.push({ role: 'user', content: text }); input.value = '';
-  $('chatSend').disabled = true;
-  renderChat();
-  const wait = el('div', { class: 'msg assistant' }, el('span', { class: 'spin' }), ' Working…');
-  $('chatLog').append(wait); $('chatLog').scrollTop = $('chatLog').scrollHeight;
-  try {
-    const history = chat.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content }));
-    const r = await api('/api/chat', 'POST', { messages: history });
-    chat.push({ role: 'assistant', content: r.reply, used: r.used });
-  } catch (e) {
-    chat.push({ role: 'error', content: e.message || String(e) });
-  } finally {
-    $('chatSend').disabled = false;
-    renderChat(); input.focus();
-  }
-}
-$('chatForm').addEventListener('submit', (e) => { e.preventDefault(); sendChat(); });
-$('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-$('chatClear').addEventListener('click', () => { chat = []; renderChat(); });
-
 // ── Setup: profiles ──
 async function refresh(select) {
   state = await api('/api/state');
@@ -442,7 +374,7 @@ async function refresh(select) {
   $('activeInfo').textContent = state.active ? 'Runs use "' + state.active + '".' : 'No profile is in use: runs read the .env file in the project folder.';
   $('noneBtn').hidden = !state.active;
   await refreshUsing();
-  renderList(); renderModelList(); renderChatModel();
+  renderList(); renderModelList();
   if (curModel && !state.models.some((m) => m.id === curModel.id)) curModel = null;
   if (!curModel) renderModelEditor();
   if (select === null) { current = null; return renderEditor(); }
@@ -883,7 +815,6 @@ function showTab(tab) {
   document.querySelectorAll('.view').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + tab));
   if (tab === 'results') loadResults().catch(fail);
   if (tab === 'history') loadHistory().catch(fail);
-  if (tab === 'chat') { renderChat(); $('chatInput').focus(); }
   if (tab === 'models') { if (!curModel && state.models[0]) openModel(state.models[0].id, true).catch(fail); else renderModelEditor(); }
   if (tab === 'cases' && !casesLoaded) loadCases().catch(fail);
   if (tab === 'run') { renderRunBanner(); if (!runCasesLoaded) loadRunCases(); }

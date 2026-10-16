@@ -16,11 +16,6 @@
     "agent": "node dist/cli/index.js",
     "ui": "npm run build && node dist/cli/index.js ui",
     "openwebui": "npm run build && node dist/cli/index.js openwebui",
-    "studio": "npm run build && node dist/cli/index.js studio",
-    "openwebui:up": "npm run studio",
-    "openwebui:down": "docker compose -f openwebui/docker-compose.yml down",
-    "launcher:install": "npm run build && node dist/cli/index.js install-launcher",
-    "launcher:remove": "node dist/cli/index.js uninstall-launcher",
     "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "npm run build && node scripts/run-tests.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"

@@ -24,33 +24,30 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Reflexion on retries (the agent is told what went wrong last time) and failure triage in every report: each case that did not pass gets a category (`assertion`, `sign_in`, `not_found`, `guardrail`, `timeout`, `budget`, `unverified`, `agent`, `infrastructure` or `blocked`) and a hint for what to do.
 - `generate`: draft local test cases from a plain-language description, validated and grounded in the knowledge base.
 - Dry-run mode that skips state-changing browser actions (clicks, typing, form fills); navigation and page snapshots still run.
-- Built-in chat in the settings app: ask in plain words, no Open WebUI or Docker needed.
+- Chat with the test runner in [Open WebUI](https://openwebui.com), bundled in the desktop app and already connected to the runner's tools.
 - **Replay without the AI.** A case that passed is recorded as Playwright code with the checks the agent made; the next run replays it in seconds with no model calls and only asks the AI when the replay fails. `export-tests` writes the recordings as Playwright tests you can run with `npx playwright test`.
 - **A skill for coding agents.** [`skills/d365fo-playwright-cli`](skills/README.md) teaches Claude Code, GitHub Copilot and other coding agents to test F&O with [playwright-cli](https://github.com/microsoft/playwright-cli), using what this app has learned.
-- CLI: `doctor`, `copilot-login`, `session-login`, `discover`, `run`, `report`, `upload`, `generate`, `learn`, `export-tests`, `ui`, `openwebui`, `studio`, `install-launcher`, `uninstall-launcher`.
+- CLI: `doctor`, `copilot-login`, `session-login`, `discover`, `run`, `report`, `upload`, `generate`, `learn`, `export-tests`, `ui`, `openwebui`.
 - GitHub Actions workflow (`.github/workflows/agent-run.yml`) for on-demand runs of a local test-case folder, started by hand (`workflow_dispatch`); it keeps `reports/` and `knowledge/` as a build artifact.
 
 ## Get started: the desktop app
 
 For people who should not need a terminal there is an installer for macOS (Apple Silicon) and Windows: one window with Open WebUI as the chat, already connected to the test runner, and the settings app's pages in a strip down the left side. Nothing else needs to be installed; the first start sets up Open WebUI by itself (this needs internet access). See [desktop/README.md](desktop/README.md).
 
-## Get started from the project folder: chat in the settings app
+## Get started from the project folder: the settings app
 
-The friendliest way to use the agent is the **Chat** tab of the settings app. It needs only Node.js 20 or later: no Docker, no Open WebUI.
+The settings app needs only Node.js 20 or later.
 
 ```bash
 npm install
-npm run launcher:install   # once: builds and puts a "D365FO Agent" icon on your desktop
+npm run ui   # builds, starts the settings app and opens it in your browser
 ```
 
-Double-click the icon (or run `npm run ui`). Then:
+1. On **AI models**, add the AI model connection (provider, key, model name).
+2. On **Setup**, create a **profile** for your environment: F&O URL, test account or saved session, Azure DevOps settings, and which AI model its runs use. Secrets stay in the app.
+3. Write or open test cases on **Test cases**, run them on **Run** and read the outcome on **Results**.
 
-1. On **AI models**, add the AI model connection (provider, key, model name). On **Setup**, create a **profile** for your environment: F&O URL, test account or saved session, Azure DevOps settings, and which AI model its runs use. Secrets stay in the app and never reach the chat.
-2. Open **Chat**, pick the chat's AI model at the top (one choice for every profile), and ask in plain words, for example *"Check my setup"*, *"Dry-run examples/testcases and tell me what failed"*, *"Write a test case that creates a vendor"* or *"Upload the last run to Azure DevOps"*. The chat has the same tools Open WebUI gets, and is told to ask before a real run or an upload.
-
-### Prefer Open WebUI?
-
-`npm run studio` starts the settings app, starts [Open WebUI](https://openwebui.com) in Docker with the **D365FO test runner** tools already connected, and opens `http://localhost:3000`. Pick a chat model with tool calling there and turn the tools on with the **+** button. No Docker? `studio` still starts the settings app and prints the address and key to add to any Open WebUI you already have. Details: [docs/openwebui.md](docs/openwebui.md).
+To chat with the test runner, use the desktop app above, or connect an Open WebUI you already have to the app's tool server (see [docs/openwebui.md](docs/openwebui.md)).
 
 ## Fast and learning on F&O
 
@@ -64,15 +61,13 @@ The F&O web client is heavy: deep menus, forms that load asynchronously, and ver
 
 See [Self-learning](docs/self-learning.md) and [D365 F&O notes](docs/d365fo.md#fast-navigation-and-known-good-paths).
 
-## Desktop icon and settings app
+## Settings app
 
-No terminal needed after the one-time `npm install` and `npm run launcher:install` shown above.
-
-Double-click the icon: it starts a small local web app and opens it in your browser (macOS `.command`, Windows `.lnk`, Linux `.desktop`). Close the window it opens to stop. `npm run ui` does the same from a terminal; `npm run launcher:remove` removes the icon.
+`npm run ui` starts a small local web app and opens it in your browser; Ctrl+C stops it. The desktop app shows the same pages in its side strip.
 
 In the app you create **named profiles**, one per environment (for example "Sandbox UAT" and "Dev"), and choose the one in use. Profiles are stored in your user config folder, outside the project, with owner-only permissions (macOS `~/Library/Application Support/d365fo-agent`, Windows `%APPDATA%\d365fo-agent`, Linux `~/.config/d365fo-agent`; override with `D365FO_AGENT_HOME`). Secrets are masked in the browser. The server listens on `127.0.0.1` only and requires a per-machine token.
 
-The app has seven tabs:
+The app has six tabs:
 
 - **Setup**: profiles and their settings.
   - A first-run welcome walks through the three steps to a first run.
@@ -80,8 +75,7 @@ The app has seven tabs:
   - The profile picks its AI model from the shared list on the **AI models** tab.
   - Rarely changed settings sit under "More settings". Addresses and numbers are checked as you type, and unsaved changes are flagged before you leave.
   - **Check setup** runs `doctor` against the profile and shows each check with a pass, warning or problem mark, and the list of things to fix.
-- **AI models**: one list of AI connections, set up once and shared (name, provider, API key, optional API address, model name, **Test connection**). Only the chosen provider's fields are shown. For Claude that includes **Claude API URL**, for sending requests through your own gateway or proxy (see [Providers](docs/providers.md#custom-claude-api-url)). A profile picks one for its runs; Chat picks one for every profile. "Used by" shows who uses a setup, and it cannot be deleted while in use. Keys are masked. Profiles from earlier versions are migrated on first start: each profile's model fields become a setup (identical ones are merged).
-- **Chat**: ask in plain words; the AI model chosen at the top of the page (the same for every profile) checks the setup, writes test cases, starts runs and reads results with the app's own tools. It is told to ask before a real run or an upload.
+- **AI models**: one list of AI connections, set up once and shared (name, provider, API key, optional API address, model name, **Test connection**). Only the chosen provider's fields are shown. For Claude that includes **Claude API URL**, for sending requests through your own gateway or proxy (see [Providers](docs/providers.md#custom-claude-api-url)). A profile picks one for its runs; the desktop app's chat picks one for every profile. "Used by" shows who uses a setup, and it cannot be deleted while in use. Keys are masked. Profiles from earlier versions are migrated on first start: each profile's model fields become a setup (identical ones are merged).
 - **Test cases**: open a folder inside the project (default `examples/testcases`), then create, edit, duplicate and delete local test cases with a step editor (action and expected result per step, reorderable). "Run this case" takes you to the Run tab with it selected.
 - **Run**: shows which profile and environment the run will use. Run a local folder or an Azure DevOps plan/suite, a checklist of cases (all ticked; Select all / Clear), with dry run, upload, and (under "More options") tag and module filters, most urgent priority, retries, priority order and **AI model for this run** (the profile is not changed). A real run asks for confirmation first. The log streams live with a running tally, and **Stop** lets the run save its report before it ends.
 - **Results**: a list of runs on the left (filter "Only <profile in use>"); the picked run shows its profile, mode and AI model, with pass/fail/blocked counts, and for each case that did not pass, its failure category, what to do about it, and the steps. Links to the HTML report and the JSON / JUnit XML downloads.
@@ -93,7 +87,7 @@ The profile in use replaces `.env` for every command. Pick another per command w
 
 ### Open WebUI
 
-Prefer a chat? The app also serves an OpenAPI tool server for [Open WebUI](https://openwebui.com): `npm run openwebui:up` (the same as `npm run studio`) starts the settings app and Open WebUI in Docker, `npm run openwebui:down` stops the container, `npm run openwebui` prints the address and key to add under External Tools, and a chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
+The desktop app bundles Open WebUI as its chat, already connected to the test runner. The settings app serves the same tools as an OpenAPI tool server, so an Open WebUI you already run can use them too: `npm run openwebui` prints the address and key to add under External Tools. A chat model can then pick profiles, write test cases, run them, read results and upload them to Azure DevOps. See [docs/openwebui.md](docs/openwebui.md).
 
 ## Command line
 

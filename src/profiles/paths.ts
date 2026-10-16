@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Where profiles and UI state live: a per-user config folder outside the repository, so secrets
@@ -19,3 +20,8 @@ export const tokenFile = (home: string): string => join(home, 'ui-token');
 export const serverFile = (home: string): string => join(home, 'ui-server.json');
 export const toolTokenFile = (home: string): string => join(home, 'openwebui-token');
 export const modelsDir = (home: string): string => join(home, 'models');
+
+/** The project folder (the repository root, or the staged app folder in the desktop build). */
+export function defaultRepoRoot(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}

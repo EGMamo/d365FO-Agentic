@@ -19,8 +19,8 @@ switch. Switching is off while a run is in progress. No Docker, Node.js or Pytho
    Settings > Connections. The chat AI model is one setting for every profile: pick it in the bar above the chat, and the app writes it to Open WebUI's first connection (on every start and on every change). The tool server's address and key are refreshed on every start.
 5. The first test run downloads the Playwright browser (about 300 MB), using the Playwright MCP bundled in the app.
 
-If Open WebUI cannot be installed or started, the app says so and the **Chat** button opens the settings app's own **Chat**
-tab instead, which talks to the chat AI model directly and needs no Open WebUI.
+If Open WebUI cannot be installed or started, the app says so on the **Chat** page; the other pages keep working, and
+restarting the app tries again.
 
 Data locations: test cases, reports and the knowledge base in `Documents/D365FO Agent` (or the folder in `D365FO_WORKSPACE`; the
 sample test cases are copied there when it has no `examples` folder, and **App > Open the workspace folder** opens it); profiles in the usual agent folder (see the main README); Open WebUI, its Python and its chats

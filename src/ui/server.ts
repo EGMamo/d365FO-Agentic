@@ -6,19 +6,16 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultRepoRoot } from '../launcher/install.js';
 import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.js';
 import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
-import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
+import { defaultRepoRoot, serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { migrateProfileModels, ModelStore, PROFILE_MODEL_KEY } from '../profiles/models.js';
 import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
 import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
-import { callTool, chatTools, chatTurn, parseHistory } from './chat.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
-import { createLlmProvider } from '../llm/index.js';
 import { checkModel as checkModelEndpoint } from '../llm/check.js';
 import type { LlmProvider } from '../llm/types.js';
 import { PageMap } from '../knowledge/page-map.js';
@@ -26,7 +23,7 @@ import type { TestResult } from '../testing/types.js';
 
 /**
  * Local web UI for managing profiles. It binds to the loopback interface only and is meant to be opened from the
- * launcher. Three checks keep other web pages and other local users away from the secrets it manages:
+ * desktop app or `npm run ui`. Three checks keep other web pages and other local users away from the secrets it manages:
  * the Host header must be this server (blocks DNS rebinding), writes must come from this page (Origin and a custom
  * header, blocks cross-site forms) and every request needs the per-machine token held in a cookie.
  * The Open WebUI tool routes under /tools are the exception: they take a bearer token instead (see tools.ts).
@@ -67,8 +64,8 @@ export interface UiServerOptions {
    * Defaults to this process's environment.
    */
   childEnv?: () => NodeJS.ProcessEnv;
-  /** Builds the chat model from the profile in use. Defaults to the provider the profile selects; tests pass a fake. */
-  chatProvider?: (cfg: AppConfig) => LlmProvider;
+  /** Builds the client for an AI model's "Test" button. Defaults to the provider the model selects; tests pass a fake. */
+  modelProvider?: (cfg: AppConfig) => LlmProvider;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -542,7 +539,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (url.pathname === '/api/health') return send(res, 200, { app: 'd365fo-agent-ui' });
 
     if (!same(cookieValue(req), token)) {
-      return send(res, 403, '<!doctype html><meta charset="utf-8"><title>D365FO Agent</title><body style="font:16px system-ui;margin:3rem"><h2>Open this from the launcher</h2><p>Use the D365FO Agent icon on your desktop, or run <code>npm run ui</code>.</p>');
+      return send(res, 403, '<!doctype html><meta charset="utf-8"><title>D365FO Agent</title><body style="font:16px system-ui;margin:3rem"><h2>Open this from the app</h2><p>Use the D365FO Agent desktop app, or run <code>npm run ui</code>.</p>');
     }
     if (method !== 'GET') {
       const origin = req.headers.origin;
@@ -608,7 +605,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         if (mm) {
           const id = mm[1];
           if (mm[2] && method === 'POST') {
-            const result = await checkModelEndpoint(await modelConfig(id), (await models.read(id, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value), opts.chatProvider);
+            const result = await checkModelEndpoint(await modelConfig(id), (await models.read(id, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value), opts.modelProvider);
             await models.setCheck(id, result);
             return send(res, 200, result);
           }
@@ -636,28 +633,6 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         const body = await readJson(req);
         await models.setChat(typeof body.id === 'string' && body.id ? body.id : undefined);
         return send(res, 200, { chatModel: (await models.getChat()) ?? null });
-      }
-      if (method === 'POST' && url.pathname === '/api/chat') {
-        const history = parseHistory((await readJson(req)).messages);
-        if (!history) return send(res, 400, { error: 'Type a message first.' });
-        const chatId = await models.getChat();
-        if (!chatId) return send(res, 400, { error: 'Add an AI model on the AI models tab first: the chat uses it.' });
-        let provider: LlmProvider;
-        try {
-          provider = (opts.chatProvider ?? createLlmProvider)(await modelConfig(chatId));
-        } catch (e) {
-          return send(res, 400, { error: `The AI model "${await models.name(chatId)}" is not set up: ${(e as Error).message.split('\n')[0]}` });
-        }
-        const base = `http://127.0.0.1:${port}${TOOLS_PREFIX}`;
-        const set = chatTools(openApiSpec(base));
-        try {
-          return send(res, 200, await chatTurn(provider, history, set.tools, (name, args) => callTool(set, base, toolToken, name, args)));
-        } catch (e) {
-          const secrets = (await models.read(chatId, true)).filter((x) => isSecretKey(x.key) && x.value.length >= 4).map((x) => x.value);
-          let msg = (e as Error).message;
-          for (const s of secrets) msg = msg.split(s).join('***');
-          return send(res, 502, { error: `The AI model did not answer: ${msg}` });
-        }
       }
       if (method === 'GET' && url.pathname === '/api/cases') {
         const local = url.searchParams.get('local');
@@ -784,7 +759,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   };
 }
 
-/** If a UI from an earlier launch is still running, returns its address so the launcher can reuse it. */
+/** If a UI from an earlier launch is still running, returns its address so a new start can reuse it. */
 export async function findRunningUi(home: string, token: string): Promise<string | undefined> {
   try {
     const { port } = JSON.parse(await readFile(serverFile(home), 'utf8')) as { port: number };

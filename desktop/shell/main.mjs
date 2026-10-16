@@ -1,7 +1,7 @@
 // Electron main process of the D365FO Agent desktop app.
 // It starts the settings app (with its tool server) and Open WebUI on this computer, shows Open WebUI as the main
 // window and the settings app in a second window. Open WebUI is installed by the bundled uv on first start; when it
-// cannot start, the settings app opens instead, whose Chat tab works without it.
+// cannot start, the Chat page says why and the settings app's pages keep working.
 import { app, BaseWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron';
 import { spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync } from 'node:fs';
@@ -26,7 +26,7 @@ let webuiUrl;
 const BAR_HEIGHT = 44;
 /** Which page is showing: chat, or a tab of the settings app. */
 let current = 'chat';
-/** Open WebUI is up, so Chat shows it; otherwise Chat is the settings app's own chat tab. */
+/** Open WebUI is up, so Chat shows it and the model bar; until then Chat shows the splash and its status. */
 let chatReady = false;
 let profileInfo = { active: null, profiles: [], models: [], chatModel: null, busy: false };
 let ui;
@@ -82,11 +82,11 @@ const run = (view, code) => view.webContents.executeJavaScript(code).catch(() =>
 /** Chat, or one tab of the settings app: 'chat' | 'profiles' | 'models' | 'cases' | 'run' | 'results' | 'history'. */
 async function go(id) {
   if (!win || win.isDestroyed()) return;
-  const chatPage = id === 'chat' && chatReady;
+  const chatPage = id === 'chat';
   if (!chatPage && !settingsView) return; // the settings app is still starting
   current = id;
   chatView.setVisible(chatPage);
-  barView?.setVisible(chatPage);
+  barView?.setVisible(chatPage && chatReady);
   layout();
   settingsView?.setVisible(!chatPage);
   if (!chatPage) await run(settingsView, `${id === 'results' ? 'viewRun = null; ' : ''}showTab(${JSON.stringify(id)})`);
@@ -305,9 +305,8 @@ async function main() {
     await dialog.showMessageBox(win, {
       type: 'warning',
       message: 'Open WebUI could not start',
-      detail: `${e.message}\n\nThe Chat button now opens the settings app's own chat, which works without Open WebUI.`,
+      detail: `${e.message}\n\nThe other pages still work. Restart the app to try the chat again.`,
     });
-    if (current === 'chat') await go('chat');
   }
 }
 
