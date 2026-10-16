@@ -739,7 +739,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
   };
 
-  const server = createServer((req, res) => void handler(req, res));
+  // One request per connection. Node closes an idle keep-alive socket after 5 seconds, but Safari keeps reusing it
+  // longer and does not retry a PUT or POST that hits the closed socket: the save fails with "Load failed".
+  // On the loopback address a fresh connection per request costs nothing.
+  const server = createServer((req, res) => {
+    res.setHeader('Connection', 'close');
+    void handler(req, res);
+  });
   // Try the preferred port and the few after it, so a second copy or another program on 4365 does not block the UI.
   const first = port;
   for (;;) {

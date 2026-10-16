@@ -368,7 +368,13 @@ function el(tag, props = {}, ...kids) {
   return e;
 }
 async function api(path, method = 'GET', body) {
-  const res = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-requested-with': 'd365fo-ui' }, body: body ? JSON.stringify(body) : undefined });
+  let res;
+  try {
+    res = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-requested-with': 'd365fo-ui' }, body: body ? JSON.stringify(body) : undefined });
+  } catch {
+    // The browser's own text ("Load failed", "Failed to fetch") says nothing useful.
+    throw new Error('Could not reach the settings app. Check that it is still running, then try again.');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
   return data;

@@ -54,6 +54,12 @@ describe('settings web server', () => {
     assert.match(r.body, /D365FO Agent/);
   });
 
+  it('closes each connection after the response, so Safari never reuses a socket the server already dropped', async () => {
+    for (const r of [await call('GET', '/api/health', { auth: false }), await call('PUT', '/api/profiles/none', { body: { entries: [] } })]) {
+      assert.equal(r.headers.connection, 'close');
+    }
+  });
+
   it('refuses writes from another origin or without the custom header', async () => {
     assert.equal((await call('POST', '/api/profiles', { body: { name: 'X' }, headers: { origin: 'https://evil.example' } })).status, 403);
     assert.equal((await call('POST', '/api/profiles', { body: { name: 'X' }, write: false })).status, 403);
