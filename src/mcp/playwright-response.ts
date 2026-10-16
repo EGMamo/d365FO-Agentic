@@ -35,6 +35,22 @@ export function pageInfo(text: string): PageInfo | undefined {
   return url || title ? { ...(url ? { url } : {}), ...(title ? { title } : {}) } : undefined;
 }
 
+/**
+ * True while the browser shows F&O's start-up splash ("Finance and Operations / Dynamics 365") after a page load:
+ * the URL is already on the F&O host but the client has not set a page title yet. The "Please wait" overlay
+ * does not cover this phase, so a wait for that text returns at once on a page that is not usable.
+ */
+export function isFnoLoading(text: string, baseUrl: string | undefined): boolean {
+  const info = pageInfo(text);
+  if (!info?.url || info.title || !baseUrl) return false;
+  try {
+    const base = new URL(/^[a-z][a-z0-9+.-]*:/i.test(baseUrl.trim()) ? baseUrl.trim() : `https://${baseUrl.trim()}`);
+    return new URL(info.url).host === base.host;
+  } catch {
+    return false;
+  }
+}
+
 /** The `mi=` menu item of an F&O URL, if any. */
 export function menuItemOf(url: string | undefined): string | undefined {
   if (!url) return undefined;

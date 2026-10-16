@@ -83,7 +83,7 @@ export const FIELD_CATALOG: FieldSpec[] = [
   { group: 'Safety limits', key: 'AGENT_ALLOW_DESTRUCTIVE', label: 'Allow delete/remove clicks', options: bool },
   { group: 'Safety limits', key: 'AGENT_ALLOW_PRODUCTION', label: 'Allow production runs', options: bool, help: 'Leave on false. Tests create and change data.' },
   { group: 'Safety limits', key: 'AGENT_STOP_ON_AUTH_FAILURE', label: 'Stop on MFA or refused sign-in', options: bool, advanced: true },
-  { group: 'Safety limits', key: 'AGENT_MAX_STEPS', label: 'Max model turns per test', type: 'number', placeholder: '40', advanced: true },
+  { group: 'Safety limits', key: 'AGENT_MAX_STEPS', label: 'Min model turns per test (long tests get 4 per step)', type: 'number', placeholder: '40', advanced: true },
   { group: 'Safety limits', key: 'AGENT_TEST_TIMEOUT_MS', label: 'Max time per test (ms)', type: 'number', placeholder: '900000', help: '0 turns the limit off.', advanced: true },
   { group: 'Safety limits', key: 'AGENT_MAX_TOKENS_PER_TEST', label: 'Max tokens per test', type: 'number', placeholder: '1000000', help: '0 turns the limit off.', advanced: true },
   { group: 'Safety limits', key: 'AGENT_MAX_REPEATED_CALLS', label: 'Max identical calls in a row', type: 'number', placeholder: '3', advanced: true },

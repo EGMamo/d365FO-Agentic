@@ -22,6 +22,7 @@ describe('classifyFailure', () => {
       [{ outcome: 'blocked', errorMessage: 'Agent stopped: 3 tool calls were refused by the guardrails' }, 'guardrail'],
       [{ outcome: 'blocked', errorMessage: 'Agent stopped: pages could not be found or opened' }, 'not_found'],
       [{ outcome: 'blocked', errorMessage: 'Agent stopped: token budget exceeded (AGENT_MAX_TOKENS_PER_TEST)' }, 'budget'],
+      [{ outcome: 'blocked', errorMessage: 'Agent stopped: the test used all 40 model turns (AGENT_MAX_STEPS) before it finished' }, 'budget'],
       [{ outcome: 'blocked', errorMessage: 'Agent stopped: time limit reached (AGENT_TEST_TIMEOUT_MS)' }, 'timeout'],
       [{ outcome: 'blocked', errorMessage: 'Not counted as passed: step 2 was not verified' }, 'unverified'],
       [{ outcome: 'blocked', errorMessage: 'Agent stopped: the same call was repeated with identical arguments' }, 'agent'],

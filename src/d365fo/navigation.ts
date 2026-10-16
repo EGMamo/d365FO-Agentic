@@ -63,8 +63,19 @@ export async function loadMenuItems(kbDir: string): Promise<MenuItem[]> {
   return [...byMi.values()];
 }
 
+/**
+ * Captions F&O shows in English (United Kingdom) for the US terms the menu items are listed under, so a step
+ * written against a UK client ("Purchase ledger > Suppliers > All suppliers") finds the same page.
+ */
+const UK_TERMS: ReadonlyArray<[RegExp, string]> = [
+  [/\bpurchase ledger\b/g, 'accounts payable'],
+  [/\bsales ledger\b/g, 'accounts receivable'],
+  [/\bsuppliers\b/g, 'vendors'],
+  [/\bsupplier\b/g, 'vendor'],
+];
+
 function norm(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return UK_TERMS.reduce((t, [uk, us]) => t.replace(uk, us), s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim());
 }
 
 export type MenuItemMatch = { item: MenuItem } | { candidates: MenuItem[] };

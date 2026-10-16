@@ -14,6 +14,14 @@ describe('menu item navigation', () => {
     }
   });
 
+  it('matches the UK English captions of a page (suppliers, purchase ledger)', () => {
+    for (const q of ['All suppliers', 'Purchase ledger > Suppliers > All suppliers', 'Procurement and sourcing > Suppliers > All suppliers']) {
+      const m = resolveMenuItem(BUILTIN_MENU_ITEMS, q);
+      assert.ok('item' in m, q);
+      assert.equal(m.item.mi, 'VendTableListPage');
+    }
+  });
+
   it('returns candidates instead of guessing when a name is ambiguous or unknown', () => {
     const amb = resolveMenuItem(BUILTIN_MENU_ITEMS, 'all');
     assert.ok('candidates' in amb && amb.candidates.length > 1);
