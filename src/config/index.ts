@@ -64,6 +64,14 @@ const envSchema = z.object({
   AZDO_ORG_URL: z.string().optional(),
   AZDO_PROJECT: z.string().optional(),
   AZDO_PAT: z.string().optional(),
+  // How to sign in to Azure DevOps: `pat` (AZDO_PAT) or `azure-cli` (the Microsoft account of `az login`).
+  // Unset: the token when one is set, otherwise the Azure CLI sign-in.
+  AZDO_AUTH: z
+    .enum(['', 'pat', 'azure-cli'])
+    .optional()
+    .transform((v) => v || undefined),
+  // Optional: the Entra tenant to get the Azure DevOps token for, when the account is in several.
+  AZDO_TENANT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
   AZDO_TEST_PLAN_ID: z.string().optional(),
   AZDO_TEST_SUITE_ID: z.string().optional(),
   AZDO_USE_MCP: z

@@ -26,7 +26,7 @@ export interface TestCase {
 export type StepStatus = 'passed' | 'failed' | 'skipped' | 'blocked';
 export type RunState = 'pending' | 'running' | 'retrying' | 'completed' | 'failed' | 'blocked';
 
-export type StepCause = 'not_found' | 'no_access' | 'sign_in' | 'other';
+export type StepCause = 'not_found' | 'no_access' | 'sign_in' | 'missing_data' | 'other';
 
 export interface StepResult {
   index: number;

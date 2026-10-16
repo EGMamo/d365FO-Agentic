@@ -150,10 +150,15 @@ async function profileSecrets(store: ProfileStore, name: string): Promise<string
 }
 
 /** Runs `doctor` against a profile and returns its output with that profile's secrets scrubbed. */
-async function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
+function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
+  return runProfileCommand('doctor', 90_000, store, name, cliPath, baseEnv);
+}
+
+/** Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. */
+async function runProfileCommand(command: 'doctor' | 'devops-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
   const secrets = await profileSecrets(store, name);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliPath, 'doctor'], {
+    const child = spawn(process.execPath, [cliPath, command], {
       env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -163,7 +168,7 @@ async function runDoctor(store: ProfileStore, name: string, cliPath: string, bas
     };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
-    const timer = setTimeout(() => child.kill(), 90_000);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
     const done = (exitCode: number | null): void => {
       clearTimeout(timer);
       for (const s of secrets) output = output.split(s).join('***');
@@ -568,10 +573,12 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         else await store.write(name, body.entries ?? [], 'create');
         return send(res, 201, { name });
       }
-      const m = /^\/api\/profiles\/([^/]+)(\/check)?$/.exec(url.pathname);
+      const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login)?$/.exec(url.pathname);
       if (m) {
         const name = decodeURIComponent(m[1]);
-        if (m[2] && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
+        if (m[2] === '/check' && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
+        // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
+        if (m[2] === '/devops-login' && method === 'POST') return send(res, 200, await runProfileCommand('devops-login', 300_000, store, name, cliPath, childEnv()));
         if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');

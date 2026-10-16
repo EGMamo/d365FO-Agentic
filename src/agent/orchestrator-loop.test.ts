@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { AgentOrchestrator } from './orchestrator.js';
+import { AgentOrchestrator, turnBudget } from './orchestrator.js';
 import type { AppConfig } from '../config/index.js';
 import type { LlmCompleteResponse } from '../llm/types.js';
 import type { TestCase } from '../testing/types.js';
@@ -76,5 +76,89 @@ describe('repeated tool call guard', () => {
     n = 0; called.length = 0;
     await build(dir, { AGENT_MAX_REPEATED_CALLS: 0, AGENT_MAX_STEPS: 5 }, () => nav(String(n++)), called).runTestCase(tc);
     assert.equal(called.length, 5);
+  });
+});
+
+describe('turn budget', () => {
+  it('scales with the number of steps but never goes below AGENT_MAX_STEPS', () => {
+    assert.equal(turnBudget(40, 5), 40);
+    assert.equal(turnBudget(40, 20), 80);
+  });
+
+  it('says the test ran out of model turns instead of "ended without a reason"', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const called: string[] = [];
+    let n = 0;
+    const res = await build(dir, { AGENT_MAX_REPEATED_CALLS: 0, AGENT_MAX_STEPS: 3 }, () => nav(String(n++)), called).runTestCase(tc);
+    assert.equal(res.outcome, 'blocked');
+    assert.equal(called.length, 4);
+    assert.match(res.errorMessage ?? '', /used all 4 model turns \(AGENT_MAX_STEPS\).*step 1 was not reported/);
+    assert.equal(res.failureCategory, 'budget');
+  });
+});
+
+describe('F&O loading screen', () => {
+  it('waits past the splash after a navigation and hands the model the loaded page', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const called: string[] = [];
+    const seen: string[] = [];
+    const turns: LlmCompleteResponse[] = [nav('1'), { text: '', stopReason: 'tool_use', toolCalls: [{ id: 'f', name: 'finish_test', arguments: { outcome: 'blocked' } }] }];
+    const cfg = {
+      LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20,
+      AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir,
+      D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF',
+    } as unknown as AppConfig;
+    const llm = {
+      name: 'fake',
+      async complete(req: { messages: Array<{ role: string; content: string }> }) {
+        const last = req.messages.at(-1);
+        if (last?.role === 'tool') seen.push(last.content);
+        return turns.shift()!;
+      },
+    };
+    let snapshots = 0;
+    const splash = '### Page\n- Page URL: https://x/?cmp=USMF&mi=VendTableListPage\n### Snapshot\n```yaml\n- generic: Finance and Operations\n```';
+    const loaded = '### Page\n- Page URL: https://x/?cmp=USMF&mi=VendTableListPage\n- Page Title: All suppliers -- Finance and Operations\n### Snapshot\n```yaml\n- button "New"\n```';
+    const mcp = {
+      async listTools() { return []; },
+      async callTool(_s: string, tool: string) {
+        called.push(tool);
+        if (tool === 'browser_navigate') return { content: splash, isError: false };
+        if (tool === 'browser_snapshot') return { content: ++snapshots > 1 ? loaded : splash, isError: false };
+        return { content: 'ok', isError: false };
+      },
+    };
+    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
+    await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
+    assert.deepEqual(called.slice(0, 5), ['browser_navigate', 'browser_snapshot', 'browser_snapshot', 'browser_wait_for', 'browser_snapshot']);
+    assert.match(seen[0], /finished loading:[\s\S]*All suppliers/);
+  });
+});
+
+describe('values recorded across cases', () => {
+  it('lets a later case recall what an earlier case of the run recorded, with its outcome', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const seen: string[] = [];
+    const call = (id: string, name: string, args: Record<string, unknown>): LlmCompleteResponse => ({ text: '', stopReason: 'tool_use', toolCalls: [{ id, name, arguments: args }] });
+    const turns: LlmCompleteResponse[] = [
+      call('a', 'record_value', { key: 'supplier_account', value: 'V-1' }),
+      call('b', 'finish_test', { outcome: 'passed' }),
+      call('c', 'recall_values', {}),
+      call('d', 'finish_test', { outcome: 'blocked' }),
+    ];
+    const orch = build(dir, {}, () => {
+      return turns.shift()!;
+    }, []);
+    const origComplete = (orch as unknown as { llm: { complete: (r: { messages: Array<{ role: string; content: string }> }) => Promise<LlmCompleteResponse> } }).llm;
+    const inner = origComplete.complete.bind(origComplete);
+    origComplete.complete = async (r) => {
+      const last = r.messages.at(-1);
+      if (last?.role === 'tool') seen.push(last.content);
+      return inner(r);
+    };
+    await orch.runTestCase(tc);
+    await orch.runTestCase({ ...tc, id: 'T2', title: 'change supplier' });
+    const recalled = JSON.parse(seen.at(-1)!);
+    assert.deepEqual(recalled, { thisCase: {}, earlierCases: [{ testCase: '#T1 login', outcome: 'passed', values: { supplier_account: 'V-1' } }] });
   });
 });

@@ -7,7 +7,7 @@ import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import { knownPathSummary, type KbEntry, type KbEntryInput, type KnowledgeBase } from '../knowledge/kb.js';
 import { mergeMenuItems, PageMap, pageKey, type ControlAction } from '../knowledge/page-map.js';
-import { isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot } from '../mcp/playwright-response.js';
+import { isFnoLoading, isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot } from '../mcp/playwright-response.js';
 import type { RunState, StepCause, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { classifyFailure, hintsMayBeAtFault, type FailureCategory } from '../testing/triage.js';
 import { D365ODataClient, hasAppRegistration, ODATA_TOOL, ODATA_TOOL_NAME } from '../d365fo/entra.js';
@@ -27,13 +27,18 @@ const DEFAULT_CONTEXT_KEEP_RECENT = 3;
 const MAX_POLICY_BLOCKS = 5;
 const MAX_LEARNINGS = 10;
 const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
-const STEP_CAUSES: readonly StepCause[] = ['not_found', 'no_access', 'sign_in', 'other'];
+const STEP_CAUSES: readonly StepCause[] = ['not_found', 'no_access', 'sign_in', 'missing_data', 'other'];
 const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
 const MAX_DATA_KEYS = 20;
 /** Lines kept in a recorded known-good path. */
 const MAX_PATH_LINES = 60;
 /** Text F&O shows on its blocking overlay while a form loads or a request is processed. */
 const FNO_BUSY_TEXT = 'Please wait';
+/** Model turns a long case gets per test step when that is more than AGENT_MAX_STEPS: a step takes a few calls (act, snapshot, check, report). */
+const TURNS_PER_STEP = 4;
+/** How often a page still on the F&O splash is checked, and the longest wait before it is reloaded once. */
+const SPLASH_POLL_MS = 1000;
+const SPLASH_RELOAD_AFTER_MS = 30000;
 const LIMITS = { dataKey: 60, dataValue: 500, observed: 2000, error: 2000, summary: 1000, learningSummary: 200, learningDetails: 2000, blockNote: 300 };
 
 const LOCAL_TOOLS: LlmTool[] = [
@@ -51,9 +56,9 @@ const LOCAL_TOOLS: LlmTool[] = [
         errorMessage: { type: 'string' },
         cause: {
           type: 'string',
-          enum: ['not_found', 'no_access', 'sign_in', 'other'],
+          enum: ['not_found', 'no_access', 'sign_in', 'missing_data', 'other'],
           description:
-            'Why a failed or blocked step could not be done. not_found: a page, menu item, path or record named in the test case does not exist. no_access: the user lacks permission. sign_in: sign-in needs MFA or was refused. These stop pointless retries.',
+            'Why a failed or blocked step could not be done. not_found: a page, menu item, path or record named in the test case does not exist. no_access: the user lacks permission. sign_in: sign-in needs MFA or was refused. missing_data: the test case leaves a value it needs unset (a TBC placeholder for existing data or setup). These stop pointless retries.',
         },
         verified: {
           type: 'boolean',
@@ -66,7 +71,7 @@ const LOCAL_TOOLS: LlmTool[] = [
   {
     name: 'record_value',
     description:
-      'Save a value created or discovered during this run (a generated vendor account, an order number) so later steps and the report can use it. Never store secrets. Use `recall_values` to read them back.',
+      'Save a value created or discovered during this run (a generated vendor account, an order number) so later steps, later test cases of the run and the report can use it. Never store secrets. Use `recall_values` to read them back.',
     inputSchema: {
       type: 'object',
       required: ['key', 'value'],
@@ -75,7 +80,8 @@ const LOCAL_TOOLS: LlmTool[] = [
   },
   {
     name: 'recall_values',
-    description: 'Return every value saved with `record_value` in this run.',
+    description:
+      'Return every value saved with `record_value` by this test case, and under `earlierCases` the values earlier test cases of this run saved, each with that case\'s outcome. Use a value from an earlier case only if that case passed or reported the step that created it as passed.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -192,6 +198,8 @@ export class AgentOrchestrator {
   /** MCP tool lists do not change during a run; listing them once saves a round trip per attempt. */
   private toolCache = new Map<string, McpToolDescriptor[]>();
   private replays: ReplayStore;
+  /** Values earlier cases of this run recorded, for cases that build on them ("the supplier created in TC1"). */
+  private earlierValues: Array<{ testCase: string; outcome: StepStatus; values: Record<string, string> }> = [];
 
   constructor(opts: RunOptions) {
     this.cfg = opts.cfg;
@@ -253,6 +261,9 @@ export class AgentOrchestrator {
       final.outcome === 'passed' || final.outcome === 'skipped' ? 'completed' : final.outcome === 'failed' ? 'failed' : 'blocked';
 
     const failureCategory = classifyFailure({ ...final, policyBlocks, timeouts });
+    if (Object.keys(final.data).length && !final.interrupted) {
+      this.earlierValues.push({ testCase: `#${tc.id} ${tc.title}`.slice(0, 200), outcome: final.outcome, values: { ...final.data } });
+    }
     return {
       testCaseId: tc.id,
       title: tc.title,
@@ -369,9 +380,13 @@ export class AgentOrchestrator {
     let repeats = 0;
     const guard = new AttemptGuard(this.cfg);
     const flags = { nonRetryable: false };
+    const maxTurns = turnBudget(this.cfg.AGENT_MAX_STEPS, tc.steps.length);
+    let turns = 0;
+    let finished = false;
 
     try {
-      for (let iter = 0; iter < this.cfg.AGENT_MAX_STEPS && !stopped && !signal?.aborted; iter++) {
+      for (let iter = 0; iter < maxTurns && !stopped && !signal?.aborted; iter++) {
+        turns = iter + 1;
         const compacted = compactHistory(messages, this.cfg.AGENT_CONTEXT_KEEP_RECENT ?? DEFAULT_CONTEXT_KEEP_RECENT);
         if (this.cfg.AGENT_VERBOSE && compacted > 0) this.log(`context: collapsed ${compacted} older tool result(s)`);
         const overBudget = guard.checkBudgets();
@@ -453,7 +468,16 @@ export class AgentOrchestrator {
           }
         }
 
-        if (response.stopReason === 'end_turn' && !stopped) break;
+        if (response.stopReason === 'end_turn' && !stopped) {
+          finished = true;
+          break;
+        }
+      }
+      // The loop ran out of turns with the model still working: say so instead of "ended without a reason".
+      if (!stopped && !finished && !overallError && turns >= maxTurns && !signal?.aborted) {
+        const reported = new Set(steps.map((s) => s.index));
+        const left = tc.steps.map((s) => s.index).filter((i) => !reported.has(i));
+        overallError = `Agent stopped: the test used all ${maxTurns} model turns (AGENT_MAX_STEPS) before it finished${left.length ? `; step ${left.join(', ')} ${left.length > 1 ? 'were' : 'was'} not reported` : ''}. Raise AGENT_MAX_STEPS for long cases, or split the case.`;
       }
     } catch (e) {
       const unavailable = toUnavailable(e);
@@ -579,7 +603,7 @@ export class AgentOrchestrator {
       ctx.path.push(`-- step ${index} ${step.status}`);
       ctx.recorder.step(index);
       if (args.status === 'failed' || args.status === 'blocked') {
-        if (args.cause === 'not_found' || args.cause === 'no_access') {
+        if (args.cause === 'not_found' || args.cause === 'no_access' || args.cause === 'missing_data') {
           ctx.flags.nonRetryable = true;
         } else if (args.cause === 'sign_in') {
           const stop = ctx.guard.authStop({ kind: 'mfa', evidence: step.observed ?? 'reported by the model' });
@@ -596,7 +620,9 @@ export class AgentOrchestrator {
       ctx.data[this.clean(key, LIMITS.dataKey)] = this.clean(value, LIMITS.dataValue);
       return { content: JSON.stringify({ ok: true, recorded: key }) };
     }
-    if (call.name === 'recall_values') return { content: JSON.stringify(ctx.data) };
+    if (call.name === 'recall_values') {
+      return { content: JSON.stringify(this.earlierValues.length ? { thisCase: ctx.data, earlierCases: this.earlierValues } : ctx.data) };
+    }
     if (call.name === CREDENTIAL_TOOL_NAME) {
       const field = String(args.field);
       const secret = credentialFor(this.cfg, args.field);
@@ -745,9 +771,17 @@ export class AgentOrchestrator {
         if (res.isError && ctx.page.key) this.pageMap?.failControl(ctx.page.key, locatorTarget);
       }
       if (autoWait && !res.isError && FNO_SETTLE_TOOLS.has(toolName)) await this.waitForFno();
+      // A page load leaves F&O on its splash for a while: wait it out here rather than leave the model to
+      // spend turns on waits and snapshots, or navigate again because the page looks stuck.
+      const loaded = autoWait && !res.isError && toolName !== 'browser_wait_for' ? await this.waitPastSplash(text) : undefined;
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
       let content = redactSecrets(this.cfg, fno && this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(text) : text);
+      if (loaded) {
+        content += `\n\nThe page then finished loading:\n${redactSecrets(this.cfg, this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(loaded) : loaded)}`;
+      } else if (loaded === null) {
+        content += `\n\nThe page was still on the F&O loading screen after ${Math.round((this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000) / 1000)}s, also after one reload.`;
+      }
       if (fno) {
         const problem = detectAuthProblem(text);
         const authStop = problem && ctx.guard.authStop(problem);
@@ -769,6 +803,7 @@ export class AgentOrchestrator {
         if (redactSecrets(this.cfg, text) !== text) ctx.recorder.reject('a secret appeared in a tool result');
         else ctx.recorder.add(toolName, text);
         this.learnFromResult(toolName, args, text, ctx);
+        if (loaded) this.learnFromResult('browser_snapshot', {}, loaded, ctx);
         const hint = opts.noHint ? undefined : this.takeHint(ctx);
         if (hint) content += `\n\n${redactSecrets(this.cfg, hint)}`;
       }
@@ -878,6 +913,39 @@ export class AgentOrchestrator {
     if (!key || !this.pageMap || ctx.page.hinted.has(key)) return undefined;
     ctx.page.hinted.add(key);
     return this.pageMap.hint(key);
+  }
+
+  /**
+   * When `text` shows the F&O splash, waits until the client has loaded (reloading once if it hangs, which is what
+   * unstuck it by hand) and returns the loaded page's snapshot; null when it never loaded, undefined when the page
+   * was not on the splash.
+   */
+  private async waitPastSplash(text: string): Promise<string | null | undefined> {
+    if (!isFnoLoading(text, this.cfg.D365_BASE_URL)) return undefined;
+    const budget = this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000;
+    const timeout = this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000;
+    const started = Date.now();
+    let reloaded = false;
+    try {
+      while (Date.now() - started < budget) {
+        await sleep(SPLASH_POLL_MS);
+        if (!reloaded && Date.now() - started >= Math.min(budget / 2, SPLASH_RELOAD_AFTER_MS)) {
+          reloaded = true;
+          await this.mcp.callTool('playwright', 'browser_press_key', { key: 'F5' }, timeout);
+          continue;
+        }
+        const snap = await this.mcp.callTool('playwright', 'browser_snapshot', {}, timeout);
+        const raw = responseText(snap.content);
+        if (snap.isError || isFnoLoading(raw, this.cfg.D365_BASE_URL)) continue;
+        await this.waitForFno();
+        const settled = await this.mcp.callTool('playwright', 'browser_snapshot', {}, timeout);
+        return settled.isError ? raw : responseText(settled.content);
+      }
+    } catch {
+      // The model sees the page state on its next snapshot.
+      return undefined;
+    }
+    return null;
   }
 
   /** Waits for F&O's blocking overlay to clear. Returns at once when it is not shown. */
@@ -1111,6 +1179,11 @@ export class AgentOrchestrator {
     }
     return paths;
   }
+}
+
+/** AGENT_MAX_STEPS, or more for a case long enough to need it. */
+export function turnBudget(maxSteps: number, stepCount: number): number {
+  return Math.max(maxSteps, stepCount * TURNS_PER_STEP);
 }
 
 function shouldRetry(outcome: StepStatus, retryOn: StepStatus[], attempt: number, maxAttempts: number): boolean {

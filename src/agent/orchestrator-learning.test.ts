@@ -103,6 +103,16 @@ describe('failure triage and knowledge feedback', () => {
     assert.ok(h.saves >= 1);
   });
 
+  it('does not retry a case whose test data is missing, and files it as blocked by data', async () => {
+    const h = await run([
+      call('report_step', { index: 1, durationMs: 0, status: 'blocked', cause: 'missing_data', errorMessage: 'TBC - supplier group' }),
+      call('finish_test', { outcome: 'blocked' }, 'b'),
+    ], { AGENT_RELOOP_MAX_RETRIES: 1, AGENT_RELOOP_RETRY_ON: ['blocked'] });
+    assert.equal(h.result.attemptCount, 1);
+    assert.equal(h.result.failureCategory, 'blocked');
+    assert.equal(h.result.steps[0].cause, 'missing_data');
+  });
+
   it('does not blame the knowledge used for a sign-in problem', async () => {
     const h = await run([
       call('report_step', { index: 1, durationMs: 0, status: 'blocked', cause: 'sign_in', observed: 'MFA prompt' }),

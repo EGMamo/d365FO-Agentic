@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formCaption, isMissingTarget, isSnapshotRef, menuItemOf, pageInfo, ranLocators, responseText, slimSnapshot } from './playwright-response.js';
+import { formCaption, isFnoLoading, isMissingTarget, isSnapshotRef, menuItemOf, pageInfo, ranLocators, responseText, slimSnapshot } from './playwright-response.js';
 
 // Shapes copied from @playwright/mcp 0.0.83 responses (run against a page with data-dyn-controlname attributes).
 const CLICK = [
@@ -23,6 +23,17 @@ describe('Playwright MCP response parsing', () => {
     assert.equal(formCaption(info?.title), 'All vendors');
     assert.equal(menuItemOf('https://x/?mi=bad%26cmp'), undefined);
     assert.equal(pageInfo('no page section'), undefined);
+  });
+
+  it('recognises the F&O loading screen: on the F&O host with no page title yet', () => {
+    const base = 'https://fo.sandbox.operations.dynamics.com';
+    const splash = '### Page\n- Page URL: https://fo.sandbox.operations.dynamics.com/?cmp=USMF&mi=VendTableListPage\n- Console: 2 errors';
+    assert.equal(isFnoLoading(splash, base), true);
+    assert.equal(isFnoLoading(splash, 'fo.sandbox.operations.dynamics.com'), true);
+    assert.equal(isFnoLoading(CLICK, base), false);
+    assert.equal(isFnoLoading('### Page\n- Page URL: https://login.microsoftonline.com/x/oauth2/authorize', base), false);
+    assert.equal(isFnoLoading('{"ok":true}', base), false);
+    assert.equal(isFnoLoading(splash, undefined), false);
   });
 
   it('extracts the locator each action resolved to, skipping refs and positional locators', () => {

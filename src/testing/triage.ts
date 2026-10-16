@@ -16,7 +16,7 @@ export type FailureCategory =
   | 'guardrail'
   /** The test or a tool call ran out of time. */
   | 'timeout'
-  /** The token budget was spent. */
+  /** The token or model-turn budget was spent. */
   | 'budget'
   /** A step with an expected result was reported passed without checking it. */
   | 'unverified'
@@ -33,7 +33,7 @@ export const FAILURE_CATEGORY_HINTS: Record<FailureCategory, string> = {
   not_found: 'Update the test case or environment: a page, menu item, record or permission is missing.',
   guardrail: 'The run was refused by policy: check the allowed hosts, tools and legal entity.',
   timeout: 'The environment was slow or the case is long: raise the time limits or split the case.',
-  budget: 'The token budget was spent: simplify the case or raise AGENT_MAX_TOKENS_PER_TEST.',
+  budget: 'The token or turn budget was spent: split the case, or raise AGENT_MAX_TOKENS_PER_TEST / AGENT_MAX_STEPS.',
   unverified: 'Expected results were not checked against the page: make them observable or rerun.',
   agent: 'The agent got stuck: rerun, or add a clearer step or a learning for this form.',
   infrastructure: 'The model provider or tooling was unavailable: rerun when it is back.',
@@ -77,7 +77,8 @@ export function classifyFailure(result: Classifiable): FailureCategory | undefin
   if (causes.has('sign_in') || /\bsign-in\b|multi-factor|\bmfa\b/.test(msg)) return 'sign_in';
   if (msg.includes('refused by the guardrails') || msg.includes('blocked by policy')) return 'guardrail';
   if (causes.has('not_found') || causes.has('no_access') || msg.includes('could not be found or opened')) return 'not_found';
-  if (msg.includes('agent_max_tokens_per_test')) return 'budget';
+  if (causes.has('missing_data')) return 'blocked';
+  if (msg.includes('agent_max_tokens_per_test') || msg.includes('(agent_max_steps)')) return 'budget';
   if (msg.includes('agent_test_timeout_ms') || msg.includes('timed out')) return 'timeout';
   if (msg.startsWith('not counted as passed')) return 'unverified';
   if (msg.startsWith('agent stopped') || msg.includes('without a reason') || msg.includes('no tool calls and no final verdict')) return 'agent';
