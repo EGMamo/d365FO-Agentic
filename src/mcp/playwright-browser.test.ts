@@ -64,7 +64,8 @@ describe('checkPlaywrightBrowser (used by doctor)', () => {
   it('reports a missing browser with the exact install command', async () => {
     const status = await checkPlaywrightBrowser({ PW_BROWSER: 'chromium' }, probe(['firefox-1495', 'chromium_headless_shell-1247']));
     assert.equal(status.installed, false);
-    assert.equal(status.cacheDir, '/home/u/.cache/ms-playwright');
+    // join: the path uses this computer's separator, so the tests pass on Windows too.
+    assert.equal(status.cacheDir, join('/home/u', '.cache', 'ms-playwright'));
     assert.equal(
       status.installCommand,
       `npx -y ${PLAYWRIGHT_MCP_PACKAGE} install-browser --no-progress --no-remove chrome-for-testing`,
@@ -92,8 +93,8 @@ describe('checkPlaywrightBrowser (used by doctor)', () => {
 
   it('resolves the cache directory per platform and honours the override', () => {
     assert.equal(playwrightCacheDir({ PLAYWRIGHT_BROWSERS_PATH: '/pw' }, 'linux', '/h'), '/pw');
-    assert.equal(playwrightCacheDir({}, 'darwin', '/Users/u'), '/Users/u/Library/Caches/ms-playwright');
-    assert.equal(playwrightCacheDir({ LOCALAPPDATA: '/L' }, 'win32', '/h'), '/L/ms-playwright');
+    assert.equal(playwrightCacheDir({}, 'darwin', '/Users/u'), join('/Users/u', 'Library', 'Caches', 'ms-playwright'));
+    assert.equal(playwrightCacheDir({ LOCALAPPDATA: '/L' }, 'win32', '/h'), join('/L', 'ms-playwright'));
   });
 });
 
@@ -200,7 +201,9 @@ describe('default executor (real child process)', () => {
     const oldPath = process.env.PATH;
     process.env.PATH = '/nonexistent-dir';
     try {
-      await assert.rejects(ensurePlaywrightBrowser(cfg()), /Could not start the Playwright browser installer/);
+      // On Windows npx runs through cmd, which starts and then exits with its own "not recognized" message.
+      const expected = process.platform === 'win32' ? /exited with code 1[\s\S]*PW_AUTO_INSTALL=false/ : /Could not start the Playwright browser installer/;
+      await assert.rejects(ensurePlaywrightBrowser(cfg()), expected);
     } finally {
       process.env.PATH = oldPath;
     }

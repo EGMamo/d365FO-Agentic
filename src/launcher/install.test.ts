@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join, sep } from 'node:path';
 import { describe, it } from 'node:test';
 import { iconIco, iconPng } from './icon.js';
 import { planLauncher, type LauncherContext } from './install.js';
@@ -8,7 +9,8 @@ const base: LauncherContext = { platform: 'linux', repoRoot: '/opt/my repo', nod
 describe('planLauncher', () => {
   it('macOS: one double-clickable .command on the desktop', () => {
     const p = planLauncher({ ...base, platform: 'darwin', repoRoot: "/Users/a/it's here" });
-    assert.equal(p.entry, '/home/a/Desktop/D365FO Agent.command');
+    // join: the plan uses this computer's separator, so the tests pass on Windows too.
+    assert.equal(p.entry, join('/home/a/Desktop', 'D365FO Agent.command'));
     assert.equal(p.files.length, 1);
     assert.ok(p.files[0].executable);
     const text = String(p.files[0].content);
@@ -30,11 +32,13 @@ describe('planLauncher', () => {
   it('Linux: a .desktop file on the desktop and in the applications menu, running in a terminal', () => {
     const p = planLauncher(base);
     const desktopFiles = p.files.filter((f) => String(f.path).endsWith('.desktop'));
-    assert.deepEqual(desktopFiles.map((f) => f.path), ['/home/a/Desktop/d365fo-agent.desktop', '/home/a/.local/share/applications/d365fo-agent.desktop']);
+    assert.deepEqual(desktopFiles.map((f) => f.path), [join('/home/a/Desktop', 'd365fo-agent.desktop'), join('/home/a', '.local', 'share', 'applications', 'd365fo-agent.desktop')]);
     const text = String(desktopFiles[0].content);
     assert.match(text, /^\[Desktop Entry\]/);
     assert.match(text, /Terminal=true/);
-    assert.match(text, /Exec="\/bin\/bash" "\/home\/a\/\.config\/d365fo-agent\/launch\.sh"/);
+    // The exact path only on a computer that joins paths with "/"; on Windows the separator is escaped for the .desktop format.
+    if (sep === '/') assert.match(text, /Exec="\/bin\/bash" "\/home\/a\/\.config\/d365fo-agent\/launch\.sh"/);
+    else assert.match(text, /Exec="\/bin\/bash" ".*launch\.sh"/);
     assert.ok(desktopFiles.every((f) => f.executable));
   });
 });

@@ -1,0 +1,136 @@
+name: desktop-e2e
+
+# End-to-end check of the Windows desktop app on a self-hosted Windows ARM computer: builds the installer, installs it
+# silently, starts the app and drives it (desktop/e2e/run.mjs). Setup of the runner: docs/windows-arm-runner.md.
+# Pull requests run it only once the repository variable WINDOWS_ARM_RUNNER is 'true' (so they never wait for a
+# runner that does not exist), and never for pull requests from forks, which must not run code on that computer.
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Installer to build and test (x64 runs under Windows' emulation)
+        type: choice
+        options: [arm64, x64]
+        default: arm64
+      openwebui:
+        description: Wait for Open WebUI to install and start in the Chat page
+        type: boolean
+        default: true
+      fresh:
+        description: Delete the app's data folder first, so Open WebUI installs from scratch as on a new computer
+        type: boolean
+        default: false
+  pull_request:
+    paths: ['desktop/**', 'src/desktop/**', 'src/runtime/**', 'src/ui/**', '.github/workflows/desktop-e2e.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run at a time on the one computer; a newer push replaces a queued or running one for the same branch.
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.WINDOWS_ARM_RUNNER == 'true' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, windows, arm64]
+    timeout-minutes: 90
+    env:
+      ARCH: ${{ inputs.arch || 'arm64' }}
+    defaults:
+      run:
+        # Windows PowerShell with the script policy bypassed for these steps only: a fresh Windows keeps it Restricted,
+        # which refuses the script file each step is written to.
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pick folders
+        run: |
+          # AppendAllText writes UTF-8 without the BOM that Windows PowerShell's Out-File adds.
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "E2E_OUT=$env:GITHUB_WORKSPACE\e2e-out`nINSTALL_DIR=$env:RUNNER_TEMP\d365fo-e2e\D365FO Agent`n")
+
+      - name: Stop an app left over from an earlier run
+        run: |
+          Get-Process -Name 'D365FO Agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (Test-Path "$env:INSTALL_DIR\Uninstall D365FO Agent.exe") { Start-Process "$env:INSTALL_DIR\Uninstall D365FO Agent.exe" -ArgumentList '/S' -Wait; Start-Sleep 5 }
+          Remove-Item -Recurse -Force (Split-Path $env:INSTALL_DIR) -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $env:E2E_OUT -ErrorAction SilentlyContinue
+
+      - name: Delete the app's data folder
+        if: inputs.fresh
+        run: Remove-Item -Recurse -Force "$env:APPDATA\D365FO Agent" -ErrorAction SilentlyContinue
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Install the desktop toolchain
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run stage; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node scripts/fetch-uv.mjs "win-$env:ARCH"; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npx electron-builder --win nsis "--$env:ARCH" --publish never; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Install it silently
+        run: |
+          $setup = Get-ChildItem 'desktop\release\D365FO Agent Setup*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'No installer in desktop\release' }
+          "Installing $($setup.Name) into $env:INSTALL_DIR"
+          # NSIS: /S is silent, /D= sets the folder and must come last, unquoted.
+          $p = Start-Process $setup.FullName -ArgumentList '/S', "/D=$env:INSTALL_DIR" -Wait -PassThru
+          if ($p.ExitCode) { throw "Installer exit code $($p.ExitCode)" }
+          if (-not (Test-Path "$env:INSTALL_DIR\D365FO Agent.exe")) { throw 'D365FO Agent.exe was not installed' }
+
+      - name: Start the app and drive it
+        env:
+          E2E_APP: ${{ env.INSTALL_DIR }}\D365FO Agent.exe
+          E2E_OPENWEBUI: ${{ github.event_name == 'pull_request' || inputs.openwebui }}
+          E2E_ANTHROPIC_API_KEY: ${{ secrets.E2E_ANTHROPIC_API_KEY }}
+          E2E_D365_BASE_URL: ${{ secrets.E2E_D365_BASE_URL }}
+          E2E_D365_USERNAME: ${{ secrets.E2E_D365_USERNAME }}
+          E2E_D365_PASSWORD: ${{ secrets.E2E_D365_PASSWORD }}
+          E2E_D365_COMPANY: ${{ secrets.E2E_D365_COMPANY }}
+        run: node desktop/e2e/run.mjs
+
+      # After the app check, so a unit test that fails on Windows does not hide how the app itself did.
+      - name: Unit tests on this computer
+        if: success() || failure()
+        run: node scripts/run-tests.mjs
+
+      - name: Uninstall
+        if: always()
+        run: |
+          Get-Process -Name 'D365FO Agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (Test-Path "$env:INSTALL_DIR\Uninstall D365FO Agent.exe") { Start-Process "$env:INSTALL_DIR\Uninstall D365FO Agent.exe" -ArgumentList '/S' -Wait }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-e2e-win-${{ env.ARCH }}
+          # Screenshots, the app's log, the profile check output and summary.md. No profiles: agent-home holds secrets.
+          path: |
+            ${{ env.E2E_OUT }}\screenshots
+            ${{ env.E2E_OUT }}\*.log
+            ${{ env.E2E_OUT }}\*.txt
+            ${{ env.E2E_OUT }}\*.md
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: installer-win-${{ env.ARCH }}
+          path: desktop/release/D365FO Agent Setup*.exe
+          if-no-files-found: ignore

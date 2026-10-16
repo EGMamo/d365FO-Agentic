@@ -46,6 +46,25 @@ GitHub Actions (`.github/workflows/desktop.yml`) builds the macOS and Windows in
 starts under the app's Electron. Download the installers from the run's artifacts (`installer-macos-latest`,
 `installer-windows-latest`).
 
+## End-to-end check on Windows ARM
+
+`.github/workflows/desktop-e2e.yml` runs on a self-hosted Windows ARM computer (labels `self-hosted`, `windows`, `arm64`;
+setup in [docs/windows-arm-runner.md](../docs/windows-arm-runner.md)). It builds a Windows installer for arm64 (or x64,
+picked when started by hand: `electron-builder --win nsis --arm64` with `node scripts/fetch-uv.mjs win-arm64`), installs it
+silently into a temporary folder, and runs `e2e/run.mjs`. That script starts the installed app with Chromium's remote
+debugging port, attaches with the Playwright bundled in the app, and checks, as a user would: the side strip and settings
+app load, the sample test cases are in the workspace, a profile can be created and selected, the agent's own commands run on
+the app's Electron (the profile check), every page opens from the strip, and Open WebUI installs and starts in the Chat
+page. With the `E2E_*` repository secrets set it also runs the sample login case against F&O in dry-run mode. Profiles and
+the workspace go to fresh folders, so the computer's own profiles are untouched; Open WebUI uses the app's usual data folder,
+so it installs on the first run only (or every run started with **fresh**). Screenshots, the app's log and a summary are kept
+as the run's `desktop-e2e-win-<arch>` artifact. The installer built here is the arm64 one only this workflow makes;
+`desktop.yml` still ships x64.
+
+The same script works against any unpacked build, for example on Linux:
+`npx electron-builder --linux dir`, then
+`E2E_APP=release/linux-unpacked/d365fo-agent E2E_OUT=/tmp/e2e E2E_APP_ARGS=--no-sandbox xvfb-run -a node e2e/run.mjs`.
+
 ## Signing
 
 The installers are unsigned (the workflow sets `CSC_IDENTITY_AUTO_DISCOVERY: 'false'`), so macOS Gatekeeper and Windows SmartScreen warn on first open (macOS: right-click >
