@@ -77,6 +77,7 @@ export function classifyFailure(result: Classifiable): FailureCategory | undefin
   if (causes.has('sign_in') || /\bsign-in\b|multi-factor|\bmfa\b/.test(msg)) return 'sign_in';
   if (msg.includes('refused by the guardrails') || msg.includes('blocked by policy')) return 'guardrail';
   if (causes.has('not_found') || causes.has('no_access') || msg.includes('could not be found or opened')) return 'not_found';
+  if (causes.has('missing_data')) return 'blocked';
   if (msg.includes('agent_max_tokens_per_test') || msg.includes('(agent_max_steps)')) return 'budget';
   if (msg.includes('agent_test_timeout_ms') || msg.includes('timed out')) return 'timeout';
   if (msg.startsWith('not counted as passed')) return 'unverified';

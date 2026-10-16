@@ -37,6 +37,7 @@ describe('classifyFailure', () => {
   it('uses the step cause the agent reported', () => {
     assert.equal(classifyFailure(r({ outcome: 'blocked', steps: [{ index: 1, durationMs: 0, status: 'blocked', cause: 'no_access' }] })), 'not_found');
     assert.equal(classifyFailure(r({ outcome: 'blocked', steps: [{ index: 1, durationMs: 0, status: 'blocked', cause: 'sign_in' }] })), 'sign_in');
+    assert.equal(classifyFailure(r({ outcome: 'blocked', steps: [{ index: 1, durationMs: 0, status: 'blocked', cause: 'missing_data' }] })), 'blocked');
   });
 
   it('classifies the messages the run guard really produces', () => {

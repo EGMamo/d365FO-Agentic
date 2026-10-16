@@ -27,7 +27,7 @@ const DEFAULT_CONTEXT_KEEP_RECENT = 3;
 const MAX_POLICY_BLOCKS = 5;
 const MAX_LEARNINGS = 10;
 const STEP_STATUSES: readonly StepStatus[] = ['passed', 'failed', 'skipped', 'blocked'];
-const STEP_CAUSES: readonly StepCause[] = ['not_found', 'no_access', 'sign_in', 'other'];
+const STEP_CAUSES: readonly StepCause[] = ['not_found', 'no_access', 'sign_in', 'missing_data', 'other'];
 const LEARNING_KINDS = ['selector', 'recipe', 'remediation', 'doc'] as const;
 const MAX_DATA_KEYS = 20;
 /** Lines kept in a recorded known-good path. */
@@ -56,9 +56,9 @@ const LOCAL_TOOLS: LlmTool[] = [
         errorMessage: { type: 'string' },
         cause: {
           type: 'string',
-          enum: ['not_found', 'no_access', 'sign_in', 'other'],
+          enum: ['not_found', 'no_access', 'sign_in', 'missing_data', 'other'],
           description:
-            'Why a failed or blocked step could not be done. not_found: a page, menu item, path or record named in the test case does not exist. no_access: the user lacks permission. sign_in: sign-in needs MFA or was refused. These stop pointless retries.',
+            'Why a failed or blocked step could not be done. not_found: a page, menu item, path or record named in the test case does not exist. no_access: the user lacks permission. sign_in: sign-in needs MFA or was refused. missing_data: the test case leaves a value it needs unset (a TBC placeholder for existing data or setup). These stop pointless retries.',
         },
         verified: {
           type: 'boolean',
@@ -603,7 +603,7 @@ export class AgentOrchestrator {
       ctx.path.push(`-- step ${index} ${step.status}`);
       ctx.recorder.step(index);
       if (args.status === 'failed' || args.status === 'blocked') {
-        if (args.cause === 'not_found' || args.cause === 'no_access') {
+        if (args.cause === 'not_found' || args.cause === 'no_access' || args.cause === 'missing_data') {
           ctx.flags.nonRetryable = true;
         } else if (args.cause === 'sign_in') {
           const stop = ctx.guard.authStop({ kind: 'mfa', evidence: step.observed ?? 'reported by the model' });
