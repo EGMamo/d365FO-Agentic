@@ -157,7 +157,7 @@ All configuration is via environment variables (loaded from `.env`). See [`.env.
 | `D365_TENANT_ID` / `D365_CLIENT_ID` / `D365_CLIENT_SECRET` | Optional Entra app registration: read-only OData data checks (`d365_odata_query`), see [D365 F&O notes](docs/d365fo.md#entra-app-registration-optional) |
 | `D365_ENVIRONMENT_TYPE` | Declare `sandbox` / `production` / `dev`; empty guesses from the URL (see [Grounding & safety](#grounding--safety)) |
 | `D365_STORAGE_STATE` | Optional saved browser session (see [docs/d365fo.md](docs/d365fo.md#signing-in-with-a-saved-session-optional)); replaces the password when set |
-| `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting |
+| `AZDO_ORG_URL` / `AZDO_PROJECT` / `AZDO_PAT` | Azure DevOps ingestion + reporting. Leave `AZDO_PAT` empty to sign in with your Microsoft account (`d365fo-agent devops-login`, see [docs/azure-devops.md](docs/azure-devops.md)) |
 | `AZDO_TEST_PLAN_ID` / `AZDO_TEST_SUITE_ID` | Default plan/suite to discover from |
 | `PW_ACTION_TIMEOUT_MS` | How long an action waits for its element (default 15 s; F&O renders slowly) |
 | `AGENT_LEARN_PAGES` / `AGENT_FNO_AUTO_WAIT` / `AGENT_SLIM_SNAPSHOTS` | F&O learning and speed-ups (all on by default): learn controls per form, wait for the busy overlay after actions, smaller snapshots |

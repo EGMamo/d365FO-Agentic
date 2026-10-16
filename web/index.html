@@ -490,11 +490,12 @@ function checkField(input) {
   box.textContent = msg; box.hidden = !msg;
   return !msg;
 }
+const AUTH_LABELS = { 'azure-cli': 'My Microsoft account (az login)', pat: 'Personal access token' };
 function fieldInput(spec, value) {
   const id = 'f_' + spec.key;
   let input, control;
   if (spec.options) {
-    const label = (o) => spec.key === 'LLM_PROVIDER' ? (state.providers[o] || o) : o === '' ? 'Guess from the address' : o === 'true' ? 'Yes (true)' : o === 'false' ? 'No (false)' : o;
+    const label = (o) => spec.key === 'LLM_PROVIDER' ? (state.providers[o] || o) : AUTH_LABELS[o] || (o === '' ? 'Guess from the address' : o === 'true' ? 'Yes (true)' : o === 'false' ? 'No (false)' : o);
     const opts = spec.options.slice();
     if (!opts.includes('') && spec.key !== 'LLM_PROVIDER') opts.unshift('');
     input = el('select', { id, 'data-key': spec.key }, opts.map((o) => el('option', { value: o }, o === '' && spec.key !== 'D365_ENVIRONMENT_TYPE' ? 'Default' : label(o))));
@@ -575,6 +576,13 @@ function renderEditor() {
       const d = el('details', { class: 'more', open: set > 0 }, el('summary', {}, 'More settings'));
       for (const spec of adv) d.append(fieldInput(spec, values.get(spec.key)));
       fs.append(d);
+    }
+    if (g === 'Azure DevOps') {
+      fs.append(el('div', { class: 'field' },
+        el('label', {}, 'Microsoft account'),
+        el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', id: 'adoLoginBtn', onclick: () => devopsLogin().catch(fail) }, 'Sign in to Azure DevOps')),
+        el('div', { class: 'help' }, 'Signs in with your work account, so no token is needed. Needs the Azure CLI on this computer (one-time install: winget install -e --id Microsoft.AzureCLI).'),
+        el('div', { class: 'help', id: 'adoLoginOut' })));
     }
     form.append(fs);
   }
@@ -699,6 +707,19 @@ async function checkSetup() {
       good ? el('button', { class: 'btn primary', type: 'button', onclick: () => showTab('run') }, 'Go to Run →') : null,
       el('button', { class: 'btn', type: 'button', onclick: () => $('checkOut').replaceChildren() }, 'Close'))));
   box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+async function devopsLogin() {
+  if (isDirty() && !(await save(true))) return;
+  const btn = $('adoLoginBtn'), out = $('adoLoginOut');
+  btn.disabled = true;
+  out.replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'A Microsoft sign-in page opened in your browser. Finish signing in there; this waits for you.'));
+  let r;
+  try { r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/devops-login', 'POST'); }
+  finally { const b = $('adoLoginBtn'); if (b) b.disabled = false; }
+  const box = $('adoLoginOut'); if (!box) return;
+  const lines = (r.output || '').split('\n').map((l) => l.replace(/^Error:\s*/, '').trim()).filter((l) => l && !/^Opening the Microsoft sign-in/.test(l));
+  const good = r.exitCode === 0;
+  box.replaceChildren(el('div', { class: 'banner ' + (good ? 'good' : 'bad') }, good ? '✓ Signed in to Azure DevOps. ' : 'Sign-in did not work. ', lines.slice(-3).join(' ')));
 }
 let renaming = false, dlgKind = 'profile';
 function setNewMode(rename, kind = 'profile') {

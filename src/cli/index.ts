@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { activeModel, ignoredModelHint, loadConfig, validateForRun } from '../config/index.js';
 import { dotenvFileProblems } from '../config/dotenv-check.js';
 import { AzureDevOpsClient } from '../devops/client.js';
+import { azdoAuthMode, azLogin, azTokenProblem } from '../devops/auth.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import {
   CopilotSessionAuth,
@@ -119,7 +120,15 @@ program
       console.log(`D365 session probe: ${probe.state.toUpperCase()} - ${probe.detail}`);
       if (probe.state === 'expired' && !(cfg.D365_USERNAME && cfg.D365_PASSWORD)) issues.push(`Saved D365 session is no longer accepted: ${probe.detail}`);
     }
-    console.log(`Azure DevOps: ${cfg.AZDO_ORG_URL ?? '(missing)'} / ${cfg.AZDO_PROJECT ?? '(missing)'}`);
+    if (cfg.AZDO_ORG_URL && cfg.AZDO_PROJECT) {
+      const how = azdoAuthMode(cfg) === 'pat' ? 'personal access token' : 'Microsoft account (az login)';
+      const ado = await new AzureDevOpsClient(cfg).check();
+      console.log(`Azure DevOps: ${ado.ok ? 'OK' : 'FAILED'} - ${cfg.AZDO_ORG_URL} / ${cfg.AZDO_PROJECT}, ${how}: ${ado.detail}`);
+      // Only a problem for a profile that reads a test plan; otherwise Azure DevOps is optional.
+      if (!ado.ok && cfg.AZDO_TEST_PLAN_ID) issues.push(`Azure DevOps: ${ado.detail}`);
+    } else {
+      console.log('Azure DevOps: not configured (optional)');
+    }
     const browser = await checkPlaywrightBrowser(cfg);
     if (browser.installed === false) {
       console.log(`Playwright browser (${cfg.PW_BROWSER}): NOT INSTALLED (looked in ${browser.cacheDir})`);
@@ -162,6 +171,28 @@ program
     await saveGitHubToken(token);
     console.log(`\nSigned in. Token saved to ${DEFAULT_AUTH_FILE}`);
     console.log('Set LLM_PROVIDER=github-copilot (and optionally GITHUB_COPILOT_MODEL) to use it.');
+  });
+
+program
+  .command('devops-login')
+  .description('Sign in to Azure DevOps with your Microsoft work account (through the Azure CLI) instead of a personal access token')
+  .action(async () => {
+    const cfg = loadConfig();
+    console.log('Opening the Microsoft sign-in in your browser. Finish it there, then come back here.');
+    const res = await azLogin(cfg.AZDO_TENANT_ID);
+    // Plain messages, no stack trace: the settings app shows this output as it is.
+    if (res.missing || res.code !== 0) {
+      console.error(res.missing ? azTokenProblem(res) : 'The sign-in did not finish. Try again.');
+      process.exitCode = 1;
+      return;
+    }
+    console.log('Signed in.');
+    if (cfg.AZDO_ORG_URL && cfg.AZDO_PROJECT) {
+      const check = await new AzureDevOpsClient({ ...cfg, AZDO_AUTH: 'azure-cli' }).check();
+      console.log(`Azure DevOps: ${check.ok ? 'OK' : 'FAILED'} - ${check.detail}`);
+      if (!check.ok) process.exitCode = 1;
+    }
+    if (azdoAuthMode(cfg) === 'pat') console.log('Note: a personal access token is also set and is used instead. Clear it (AZDO_PAT) to use this sign-in.');
   });
 
 program

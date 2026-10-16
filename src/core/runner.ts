@@ -110,8 +110,8 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   let upload: { runId: number; url: string } | undefined;
   // An outage is not a test result, so an aborted run is never published.
   if (opts.upload && !aborted) {
-    if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT || !cfg.AZDO_PAT) {
-      throw new Error('--upload requires AZDO_ORG_URL, AZDO_PROJECT, and AZDO_PAT');
+    if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT) {
+      throw new Error('--upload requires AZDO_ORG_URL and AZDO_PROJECT');
     }
     const planId = opts.plan ?? cfg.AZDO_TEST_PLAN_ID;
     if (!planId) {

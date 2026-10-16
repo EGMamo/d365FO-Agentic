@@ -69,9 +69,11 @@ export const FIELD_CATALOG: FieldSpec[] = [
 
   { group: 'Azure DevOps', key: 'AZDO_ORG_URL', label: 'Organization URL', type: 'url', placeholder: 'https://dev.azure.com/contoso' },
   { group: 'Azure DevOps', key: 'AZDO_PROJECT', label: 'Project' },
-  { group: 'Azure DevOps', key: 'AZDO_PAT', label: 'Personal access token', secret: true, help: 'Needs Test Management read and write.' },
+  { group: 'Azure DevOps', key: 'AZDO_PAT', label: 'Personal access token', secret: true, help: 'Optional. Leave it empty to sign in with your Microsoft work account instead (the "Sign in to Azure DevOps" button below). A token needs Work Items read and Test Management read and write.' },
   { group: 'Azure DevOps', key: 'AZDO_TEST_PLAN_ID', label: 'Test plan ID', type: 'number' },
   { group: 'Azure DevOps', key: 'AZDO_TEST_SUITE_ID', label: 'Test suite ID', type: 'number' },
+  { group: 'Azure DevOps', key: 'AZDO_AUTH', label: 'Sign in with', options: ['', 'azure-cli', 'pat'], advanced: true, help: 'Default: the token when one is set, otherwise your Microsoft account.' },
+  { group: 'Azure DevOps', key: 'AZDO_TENANT_ID', label: 'Microsoft tenant', advanced: true, help: 'Only if your account is in several organizations\' tenants: the tenant ID or domain (e.g. contoso.onmicrosoft.com) of this Azure DevOps organization.' },
 
   { group: 'Browser', key: 'PW_HEADLESS', label: 'Hide the browser window', options: bool, help: 'Choose false to watch the browser while a test runs.' },
   { group: 'Browser', key: 'PW_BROWSER', label: 'Browser', options: ['chromium', 'firefox', 'webkit'], advanced: true },

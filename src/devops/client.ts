@@ -3,9 +3,10 @@ import { basename } from 'node:path';
 import type { AppConfig } from '../config/index.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { fetchWithResilience } from '../utils/http.js';
+import { AzureCliTokenSource, azdoAuthMode, type AzRunner } from './auth.js';
 
 /**
- * Azure DevOps REST client (PAT-based). Covers the minimal surface needed by
+ * Azure DevOps REST client, signed in with a PAT or with the Azure CLI's Microsoft account (see auth.ts). Covers the minimal surface needed by
  * the agent MVP: enumerate test cases from a plan/suite, create test runs,
  * publish results, and attach artifacts.
  *
@@ -15,25 +16,49 @@ import { fetchWithResilience } from '../utils/http.js';
 export class AzureDevOpsClient {
   private orgUrl: string;
   private project: string;
-  private authHeader: string;
+  private authHeader: () => Promise<string>;
+  private usesPat: boolean;
   private apiVersion = '7.1';
 
-  constructor(private cfg: AppConfig) {
-    if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT || !cfg.AZDO_PAT) {
-      throw new Error('Azure DevOps configuration is incomplete (org URL, project, PAT required)');
+  /** `az` runs the Azure CLI; tests pass a fake. */
+  constructor(private cfg: AppConfig, az?: AzRunner) {
+    if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT) {
+      throw new Error('Azure DevOps configuration is incomplete (organization URL and project are required)');
     }
     this.orgUrl = cfg.AZDO_ORG_URL.replace(/\/$/, '');
     this.project = cfg.AZDO_PROJECT;
-    this.authHeader = 'Basic ' + Buffer.from(`:${cfg.AZDO_PAT}`).toString('base64');
+    this.usesPat = azdoAuthMode(cfg) === 'pat';
+    if (this.usesPat) {
+      if (!cfg.AZDO_PAT) throw new Error('AZDO_AUTH=pat needs a personal access token (AZDO_PAT). Or clear it to sign in with your Microsoft account.');
+      const basic = 'Basic ' + Buffer.from(`:${cfg.AZDO_PAT}`).toString('base64');
+      this.authHeader = async () => basic;
+    } else {
+      const source = new AzureCliTokenSource(cfg.AZDO_TENANT_ID, az);
+      this.authHeader = async () => `Bearer ${await source.token()}`;
+    }
   }
 
-  private url(path: string): string {
-    return `${this.orgUrl}/${encodeURIComponent(this.project)}${path}`;
+  private url(path: string, orgLevel = false): string {
+    return orgLevel ? `${this.orgUrl}${path}` : `${this.orgUrl}/${encodeURIComponent(this.project)}${path}`;
   }
 
-  private async request<T>(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string> }): Promise<T> {
+  /** Who the agent is signed in as, and whether that account can open the project. One or two requests, nothing written. */
+  async check(): Promise<{ ok: boolean; detail: string }> {
+    try {
+      const me = await this.request<{ authenticatedUser?: { providerDisplayName?: string; properties?: { Account?: { $value?: string } } } }>('/_apis/connectionData', { orgLevel: true });
+      const user = me?.authenticatedUser;
+      const name = user?.properties?.Account?.$value ?? user?.providerDisplayName;
+      if (!name || /anonymous/i.test(user?.providerDisplayName ?? '')) return { ok: false, detail: 'Azure DevOps did not accept the sign-in.' };
+      await this.request(`/_apis/projects/${encodeURIComponent(this.project)}?api-version=${this.apiVersion}`, { orgLevel: true });
+      return { ok: true, detail: `signed in as ${name}, project ${this.project} found` };
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message.split('\n')[0].slice(0, 400) };
+    }
+  }
+
+  private async request<T>(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string>; orgLevel?: boolean }): Promise<T> {
     const headers: Record<string, string> = {
-      authorization: this.authHeader,
+      authorization: await this.authHeader(),
       accept: 'application/json',
       ...(init?.headers ?? {}),
     };
@@ -43,7 +68,7 @@ export class AzureDevOpsClient {
       body = JSON.stringify(init.body);
     }
     const res = await fetchWithResilience(
-      this.url(path),
+      this.url(path, init?.orgLevel),
       { method: init?.method ?? 'GET', headers, body },
       {
         timeoutMs: this.cfg.AZDO_HTTP_TIMEOUT_MS,
@@ -51,6 +76,14 @@ export class AzureDevOpsClient {
         retryBaseMs: this.cfg.AZDO_HTTP_RETRY_BASE_MS,
       },
     );
+    // A refused sign-in is a 401, or a 203 with the HTML sign-in page instead of JSON.
+    if (res.status === 401 || res.status === 203) {
+      throw new Error(
+        this.usesPat
+          ? `Azure DevOps refused the personal access token (${res.status}). Create a new one with Work Items (Read) and Test Management (Read & write), or clear it to sign in with your Microsoft account.`
+          : `Azure DevOps refused your Microsoft account (${res.status}). Check that this account can open ${this.orgUrl}; if your account is in several Microsoft tenants, set AZDO_TENANT_ID to the one the organization belongs to and sign in again with \`d365fo-agent devops-login\`.`,
+      );
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Azure DevOps ${res.status} ${res.statusText}: ${text}`);
