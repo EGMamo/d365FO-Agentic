@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { describe, it } from 'node:test';
 import { iconIco, iconPng } from './icon.js';
 import { planLauncher, type LauncherContext } from './install.js';
@@ -36,7 +36,9 @@ describe('planLauncher', () => {
     const text = String(desktopFiles[0].content);
     assert.match(text, /^\[Desktop Entry\]/);
     assert.match(text, /Terminal=true/);
-    assert.ok(text.includes(`Exec="/bin/bash" "${join('/home/a/.config/d365fo-agent', 'launch.sh')}"`), text);
+    // The exact path only on a computer that joins paths with "/"; on Windows the separator is escaped for the .desktop format.
+    if (sep === '/') assert.match(text, /Exec="\/bin\/bash" "\/home\/a\/\.config\/d365fo-agent\/launch\.sh"/);
+    else assert.match(text, /Exec="\/bin\/bash" ".*launch\.sh"/);
     assert.ok(desktopFiles.every((f) => f.executable));
   });
 });
