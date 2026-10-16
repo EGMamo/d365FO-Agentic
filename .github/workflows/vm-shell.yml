@@ -10,10 +10,6 @@ on:
         description: PowerShell command to run on the Windows ARM computer
         required: true
         type: string
-      timeout:
-        description: Minutes before the run is stopped
-        type: number
-        default: 10
 
 permissions:
   contents: read
@@ -25,7 +21,7 @@ concurrency:
 jobs:
   run:
     runs-on: [self-hosted, windows, arm64]
-    timeout-minutes: ${{ inputs.timeout }}
+    timeout-minutes: 15
     defaults:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
