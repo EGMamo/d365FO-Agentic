@@ -36,7 +36,7 @@ describe('planLauncher', () => {
     const text = String(desktopFiles[0].content);
     assert.match(text, /^\[Desktop Entry\]/);
     assert.match(text, /Terminal=true/);
-    assert.match(text, /Exec="\/bin\/bash" "\/home\/a\/\.config\/d365fo-agent\/launch\.sh"/);
+    assert.ok(text.includes(`Exec="/bin/bash" "${join('/home/a/.config/d365fo-agent', 'launch.sh')}"`), text);
     assert.ok(desktopFiles.every((f) => f.executable));
   });
 });
