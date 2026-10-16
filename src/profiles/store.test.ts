@@ -12,9 +12,10 @@ const fresh = async (): Promise<ProfileStore> => new ProfileStore(await mkdtemp(
 
 describe('agentHome', () => {
   it('picks a per-user folder for each platform and honours the override', () => {
-    assert.equal(agentHome({}, 'darwin', '/Users/a'), '/Users/a/Library/Application Support/d365fo-agent');
-    assert.equal(agentHome({ XDG_CONFIG_HOME: '/x' }, 'linux', '/home/a'), '/x/d365fo-agent');
-    assert.equal(agentHome({}, 'linux', '/home/a'), '/home/a/.config/d365fo-agent');
+    // join: the path uses this computer's separator, so the test passes on Windows too.
+    assert.equal(agentHome({}, 'darwin', '/Users/a'), join('/Users/a', 'Library', 'Application Support', 'd365fo-agent'));
+    assert.equal(agentHome({ XDG_CONFIG_HOME: '/x' }, 'linux', '/home/a'), join('/x', 'd365fo-agent'));
+    assert.equal(agentHome({}, 'linux', '/home/a'), join('/home/a', '.config', 'd365fo-agent'));
     assert.equal(agentHome({ D365FO_AGENT_HOME: '/custom' }, 'linux', '/home/a'), '/custom');
   });
 });
