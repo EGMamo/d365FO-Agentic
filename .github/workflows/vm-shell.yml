@@ -10,9 +10,14 @@ on:
         description: PowerShell command to run on the Windows ARM computer
         required: true
         type: string
+      files:
+        description: Optional path or wildcard on the computer whose files are pushed to the vm-files branch
+        required: false
+        type: string
+        default: ''
 
 permissions:
-  contents: read
+  contents: write  # only for pushing the optional files to the vm-files branch
 
 concurrency:
   group: vm-shell
@@ -45,3 +50,22 @@ jobs:
           $summary = "### ``$env:VM_COMMAND```n`nExit code: $code`n`n``````text`n$text`n```````n"
           [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $summary)
           exit $code
+
+      - name: Publish files to the vm-files branch
+        if: inputs.files != ''
+        env:
+          VM_FILES: ${{ inputs.files }}
+          TOKEN: ${{ github.token }}
+        run: |
+          # The branch is replaced on every run and holds only these files, so they can be fetched with git.
+          $dir = Join-Path $env:RUNNER_TEMP 'vm-files'
+          if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item -Path $env:VM_FILES -Destination $dir -Recurse -Force
+          Set-Location $dir
+          git init -q
+          git checkout -q -b vm-files
+          git add -A
+          git -c user.name=vm-shell -c user.email=vm-shell@users.noreply.github.com commit -q -m "Files from $env:VM_FILES"
+          git push -q -f "https://x-access-token:$env:TOKEN@github.com/$env:GITHUB_REPOSITORY.git" vm-files
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
