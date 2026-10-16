@@ -42,7 +42,9 @@ jobs:
       ARCH: ${{ inputs.arch || 'arm64' }}
     defaults:
       run:
-        shell: powershell
+        # Windows PowerShell with the script policy bypassed for these steps only: a fresh Windows keeps it Restricted,
+        # which refuses the script file each step is written to.
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
     steps:
       - uses: actions/checkout@v4
 
