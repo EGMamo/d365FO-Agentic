@@ -62,3 +62,6 @@ jobs:
           name: installer-${{ matrix.os }}
           path: ${{ matrix.files }}
           if-no-files-found: error
+          # Installers count against the account's Actions storage: keep pull request builds for 3 days, tag builds for 30.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 30 || 3 }}
+          compression-level: 0
