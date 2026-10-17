@@ -88,17 +88,14 @@ async function run(turns: LlmCompleteResponse[], pages: string[] = [], over: Par
   let attempts = 0;
   const reached: Array<Record<string, unknown>> = [];
   const cfg = {
-    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40,
-    AGENT_RELOOP_MAX_RETRIES: 2, AGENT_RELOOP_RETRY_ON: ['failed', 'blocked'], AGENT_RELOOP_COOLDOWN_MS: 0,
-    D365_BASE_URL: BASE, D365_COMPANY: 'USMF', REPORT_DIR: await mkdtemp(join(tmpdir(), 'rg-')), ...over,
+    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40, D365_BASE_URL: BASE, D365_COMPANY: 'USMF', REPORT_DIR: await mkdtemp(join(tmpdir(), 'rg-')), ...over,
   } as AppConfig;
   const llm = { name: 'fake', async complete() { attempts++; return turns.shift() ?? finish({ outcome: 'blocked' }); } };
   const mcp = {
     async listTools() { return []; },
     async callTool(_s: string, _t: string, args: Record<string, unknown>) { reached.push(args); return { content: pages.shift() ?? 'page', isError: false }; },
   };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-  const result = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
+  const result = await new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
   return { result, attempts: () => attempts, reached };
 }
 
@@ -140,7 +137,7 @@ describe('orchestrator run limits', () => {
 
   it('stops after repeated failing tool calls', async () => {
     const bad = (i: number) => call('nonexistent_tool', { n: i }, `x${i}`);
-    const { result } = await run(Array.from({ length: 10 }, (_, i) => bad(i)), [], { AGENT_MAX_CONSECUTIVE_ERRORS: 3, AGENT_RELOOP_MAX_RETRIES: 0 });
+    const { result } = await run(Array.from({ length: 10 }, (_, i) => bad(i)), [], { AGENT_MAX_CONSECUTIVE_ERRORS: 3 });
     assert.match(result.errorMessage ?? '', /3 tool calls in a row failed/);
   });
 });

@@ -37,7 +37,6 @@ const DEFAULT_ALLOWED_TOOLS: Record<string, readonly string[]> = {
   ],
   learn: ['microsoft_docs_search', 'microsoft_docs_fetch', 'microsoft_code_sample_search'],
   // Read-only queries of Microsoft's public release plans (FastTrack Release Planner MCP sample).
-  'release-planner': ['search_release_plans', 'list_products', 'get_release_wave_summary'],
 };
 
 type GuardrailConfig = Pick<AppConfig, 'D365_BASE_URL' | 'D365_COMPANY'> &

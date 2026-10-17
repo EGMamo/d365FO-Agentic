@@ -13,7 +13,7 @@ const tc: TestCase = { id: 'T1', source: 'local', title: 'login', steps: [{ inde
 function build(dir: string, over: Partial<AppConfig>, next: () => LlmCompleteResponse, called: string[]) {
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: true, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20,
-    AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir,
+    REPORT_DIR: dir,
     D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF', ...over,
   } as AppConfig;
   const llm = { name: 'fake', async complete() { return next(); } };
@@ -21,8 +21,7 @@ function build(dir: string, over: Partial<AppConfig>, next: () => LlmCompleteRes
     async listTools() { return []; },
     async callTool(_s: string, tool: string) { called.push(tool); return { content: 'page', isError: false }; },
   };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-  return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never);
+  return new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright', 'learn'] } as never);
 }
 
 const nav = (id: string): LlmCompleteResponse => ({
@@ -105,7 +104,7 @@ describe('F&O loading screen', () => {
     const turns: LlmCompleteResponse[] = [nav('1'), { text: '', stopReason: 'tool_use', toolCalls: [{ id: 'f', name: 'finish_test', arguments: { outcome: 'blocked' } }] }];
     const cfg = {
       LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20,
-      AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir,
+      REPORT_DIR: dir,
       D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF',
     } as unknown as AppConfig;
     const llm = {
@@ -128,37 +127,9 @@ describe('F&O loading screen', () => {
         return { content: 'ok', isError: false };
       },
     };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-    await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
+
+    await new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
     assert.deepEqual(called.slice(0, 5), ['browser_navigate', 'browser_snapshot', 'browser_snapshot', 'browser_wait_for', 'browser_snapshot']);
     assert.match(seen[0], /finished loading:[\s\S]*All suppliers/);
-  });
-});
-
-describe('values recorded across cases', () => {
-  it('lets a later case recall what an earlier case of the run recorded, with its outcome', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
-    const seen: string[] = [];
-    const call = (id: string, name: string, args: Record<string, unknown>): LlmCompleteResponse => ({ text: '', stopReason: 'tool_use', toolCalls: [{ id, name, arguments: args }] });
-    const turns: LlmCompleteResponse[] = [
-      call('a', 'record_value', { key: 'supplier_account', value: 'V-1' }),
-      call('b', 'finish_test', { outcome: 'passed' }),
-      call('c', 'recall_values', {}),
-      call('d', 'finish_test', { outcome: 'blocked' }),
-    ];
-    const orch = build(dir, {}, () => {
-      return turns.shift()!;
-    }, []);
-    const origComplete = (orch as unknown as { llm: { complete: (r: { messages: Array<{ role: string; content: string }> }) => Promise<LlmCompleteResponse> } }).llm;
-    const inner = origComplete.complete.bind(origComplete);
-    origComplete.complete = async (r) => {
-      const last = r.messages.at(-1);
-      if (last?.role === 'tool') seen.push(last.content);
-      return inner(r);
-    };
-    await orch.runTestCase(tc);
-    await orch.runTestCase({ ...tc, id: 'T2', title: 'change supplier' });
-    const recalled = JSON.parse(seen.at(-1)!);
-    assert.deepEqual(recalled, { thisCase: {}, earlierCases: [{ testCase: '#T1 login', outcome: 'passed', values: { supplier_account: 'V-1' } }] });
   });
 });

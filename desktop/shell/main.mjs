@@ -1,7 +1,7 @@
 // Electron main process of the D365FO Agent desktop app.
 // It starts the settings app (with its tool server) and Open WebUI on this computer, shows Open WebUI as the main
 // window and the settings app in a second window. Open WebUI is installed by the bundled uv on first start; when it
-// cannot start, the settings app opens instead, whose Chat tab works without it.
+// cannot start, Tests, Results and Settings remain available.
 import { app, BaseWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron';
 import { spawn } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync } from 'node:fs';
@@ -21,14 +21,14 @@ let rail;
 let chatView;
 let settingsView;
 /** The strip above Open WebUI that picks the chat model. */
-let barView;
+
 let webuiUrl;
-const BAR_HEIGHT = 44;
+
 /** Which page is showing: chat, or a tab of the settings app. */
 let current = 'chat';
 /** Open WebUI is up, so Chat shows it; otherwise Chat is the settings app's own chat tab. */
-let chatReady = false;
-let profileInfo = { active: null, profiles: [], models: [], chatModel: null, busy: false };
+
+let profileInfo = { active: null, profiles: [], busy: false };
 let ui;
 let webui;
 let quitting = false;
@@ -54,7 +54,11 @@ function uvPath() {
 function status(text, line) {
   if (text || line) console.log(`[app] ${text ?? line}`);
   if (!chatView || chatView.webContents.isDestroyed()) return;
-  chatView.webContents.executeJavaScript(`window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)})`).catch(() => {});
+  chatView.webContents
+    .executeJavaScript(
+      `window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)})`,
+    )
+    .catch(() => {});
 }
 
 function guardLinks(contents) {
@@ -71,9 +75,7 @@ function layout() {
   const { width, height } = win.getContentBounds();
   rail.setBounds({ x: 0, y: 0, width: RAIL_WIDTH, height });
   const w = Math.max(width - RAIL_WIDTH, 0);
-  barView?.setBounds({ x: RAIL_WIDTH, y: 0, width: w, height: BAR_HEIGHT });
-  const top = barView?.getVisible() ? BAR_HEIGHT : 0;
-  chatView?.setBounds({ x: RAIL_WIDTH, y: top, width: w, height: Math.max(height - top, 0) });
+  chatView?.setBounds({ x: RAIL_WIDTH, y: 0, width: w, height });
   settingsView?.setBounds({ x: RAIL_WIDTH, y: 0, width: w, height });
 }
 
@@ -82,20 +84,21 @@ const run = (view, code) => view.webContents.executeJavaScript(code).catch(() =>
 /** Chat, or one tab of the settings app: 'chat' | 'profiles' | 'models' | 'cases' | 'run' | 'results' | 'history'. */
 async function go(id) {
   if (!win || win.isDestroyed()) return;
-  const chatPage = id === 'chat' && chatReady;
+  if (!['chat', 'cases', 'results', 'settings'].includes(id)) return;
+  const chatPage = id === 'chat';
   if (!chatPage && !settingsView) return; // the settings app is still starting
   current = id;
   chatView.setVisible(chatPage);
-  barView?.setVisible(chatPage);
   layout();
   settingsView?.setVisible(!chatPage);
-  if (!chatPage) await run(settingsView, `${id === 'results' ? 'viewRun = null; ' : ''}showTab(${JSON.stringify(id)})`);
+  if (!chatPage) await run(settingsView, `showTab(${JSON.stringify(id)})`);
   (chatPage ? chatView : settingsView).webContents.focus();
   pushState();
 }
 
 function pushState() {
-  if (rail && !rail.webContents.isDestroyed()) rail.webContents.send('rail:state', { current, profile: profileInfo.active, busy: profileInfo.busy });
+  if (rail && !rail.webContents.isDestroyed())
+    rail.webContents.send('rail:state', { current, profile: profileInfo.active, busy: profileInfo.busy });
 }
 
 /** Reads the profile in use and whether a run is going, from the settings app's own page. */
@@ -103,12 +106,11 @@ async function pollProfiles() {
   if (!settingsView || settingsView.webContents.isDestroyed()) return;
   const info = await run(
     settingsView,
-    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), models: state.models.map((m) => ({ id: m.id, name: m.name })), chatModel: state.chatModel, busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
+    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
   );
   if (!info) return;
   profileInfo = info;
   pushState();
-  if (barView && !barView.webContents.isDestroyed()) barView.webContents.send('bar:state', { models: info.models ?? [], chatModel: info.chatModel ?? null, profile: info.active });
 }
 
 function profileMenu() {
@@ -127,7 +129,7 @@ function profileMenu() {
   if (!items.length) items.push({ label: 'No profiles yet', enabled: false });
   items.push({ type: 'separator' });
   if (busy) items.push({ label: 'A run is in progress; switching is off until it ends', enabled: false });
-  items.push({ label: 'Manage profiles…', click: () => void go('profiles') });
+  items.push({ label: 'Manage profiles…', click: () => void go('settings') });
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 
@@ -139,12 +141,9 @@ function buildMenu() {
       submenu: [
         ...[
           ['Chat', 'chat'],
-          ['Profiles and setup', 'profiles'],
-          ['AI models', 'models'],
-          ['Test cases', 'cases'],
-          ['Run', 'run'],
+          ['Tests', 'cases'],
           ['Results', 'results'],
-          ['History', 'history'],
+          ['Settings', 'settings'],
         ].map(([label, id], i) => ({ label, accelerator: `CmdOrCtrl+${i + 1}`, click: () => void go(id) })),
         { type: 'separator' },
         { label: 'Open the workspace folder', click: () => shell.openPath(workspace()) },
@@ -173,30 +172,24 @@ async function waitFor(url, ms, stopped = () => undefined) {
   return false;
 }
 
-/** Open WebUI's connection for the chat AI model, which is one setting for every profile. */
-async function chatConn(home, owui) {
-  try {
-    const { ModelStore } = await lib('profiles/models.js');
-    const { parseConfig } = await lib('config/index.js');
-    const models = new ModelStore(home);
-    const id = await models.getChat();
-    if (!id) return undefined;
-    return owui.chatConnection(parseConfig(Object.fromEntries((await models.read(id, true)).map((e) => [e.key, e.value]))));
-  } catch {
-    return undefined; // add a model on the AI models page instead
-  }
-}
-
-async function startOpenWebUi(home) {
+async function startOpenWebUi() {
   const owui = await lib('desktop/openwebui.js');
   const paths = { uv: uvPath(), dataRoot: app.getPath('userData') };
   if (!(await owui.isInstalled(paths))) {
-    status('Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.');
+    status(
+      'Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.',
+    );
     await owui.install(paths, (line) => status(undefined, line));
   }
-  const chat = await chatConn(home, owui);
+  const chat = { url: `${ui.url}model/v1`, key: ui.toolToken };
   const port = await owui.freePort();
-  const env = owui.serveEnv({ dataDir: owui.layout(paths).data, toolUrl: `${ui.url}tools`, toolKey: ui.toolToken, chat });
+  const env = owui.serveEnv({
+    dataDir: owui.layout(paths).data,
+    toolUrl: `${ui.url}tools`,
+    toolKey: ui.toolToken,
+    chat,
+    model: 'd365fo-claude',
+  });
   status('Starting the chat…');
   webui = owui.serve(paths, port, env, (line) => status(undefined, line));
   let failed;
@@ -204,7 +197,12 @@ async function startOpenWebUi(home) {
   webui.on('exit', (code) => {
     webui = undefined;
     failed ??= new Error(`Open WebUI exited (code ${code}).`);
-    if (!quitting && ready) void dialog.showMessageBox({ type: 'warning', message: 'The chat stopped', detail: `${failed.message} The settings app still works; restart the app to try again.` });
+    if (!quitting && ready)
+      void dialog.showMessageBox({
+        type: 'warning',
+        message: 'The chat stopped',
+        detail: `${failed.message} The settings app still works; restart the app to try again.`,
+      });
   });
   const url = `http://127.0.0.1:${port}`;
   const up = await waitFor(`${url}/health`, 240_000, () => failed);
@@ -225,23 +223,6 @@ async function startOpenWebUi(home) {
   return url;
 }
 
-/** The Chat page's model picker: saved for every profile, and written to Open WebUI's connection. */
-async function setChatModel(id) {
-  if (!id || !settingsView) return;
-  await run(settingsView, `api('/api/chat-model', 'POST', { id: ${JSON.stringify(id)} }).then(() => refresh()).catch(fail)`);
-  try {
-    const owui = await lib('desktop/openwebui.js');
-    const { agentHome } = await lib('profiles/paths.js');
-    if (webuiUrl) {
-      await owui.syncChatModel(webuiUrl, await chatConn(agentHome(), owui));
-      await chatView.webContents.reload();
-    }
-  } catch (e) {
-    await dialog.showMessageBox(win, { type: 'warning', message: 'The chat model could not be changed', detail: e.message });
-  }
-  void pollProfiles();
-}
-
 function stopOpenWebUi() {
   if (!webui?.pid) return;
   if (process.platform === 'win32') spawn('taskkill', ['/pid', String(webui.pid), '/T', '/F'], { windowsHide: true });
@@ -252,12 +233,11 @@ async function main() {
   await app.whenReady();
   buildMenu();
   win = new BaseWindow({ width: 1320, height: 860, minWidth: 900, minHeight: 600, title: 'D365FO Agent' });
-  rail = new WebContentsView({ webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true } });
+  rail = new WebContentsView({
+    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
+  });
   chatView = new WebContentsView();
-  barView = new WebContentsView({ webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true } });
   win.contentView.addChildView(chatView);
-  win.contentView.addChildView(barView);
-  barView.setVisible(false);
   win.contentView.addChildView(rail);
   win.on('resize', layout);
   win.on('close', () => {
@@ -266,10 +246,11 @@ async function main() {
   guardLinks(chatView.webContents);
   ipcMain.on('rail:go', (_e, id) => void go(id));
   ipcMain.on('rail:profile-menu', profileMenu);
-  ipcMain.on('bar:new-chat', () => webuiUrl && void chatView.webContents.loadURL(webuiUrl));
-  ipcMain.on('bar:set-model', (_e, id) => void setChatModel(id));
   layout();
-  await Promise.all([rail.webContents.loadFile(join(here, 'rail.html')), barView.webContents.loadFile(join(here, 'chatbar.html')), chatView.webContents.loadFile(join(here, 'splash.html'))]);
+  await Promise.all([
+    rail.webContents.loadFile(join(here, 'rail.html')),
+    chatView.webContents.loadFile(join(here, 'splash.html')),
+  ]);
   pushState();
 
   const root = workspace();
@@ -278,7 +259,8 @@ async function main() {
   const { agentHome } = await lib('profiles/paths.js');
   const home = agentHome();
   // The agent's own commands run on this app's Electron in Node mode, so nothing else needs to be installed.
-  const childEnv = () => ({ ...process.env, ELECTRON_RUN_AS_NODE: '1' });
+  const { environmentForChild } = await lib('config/load-env.js');
+  const childEnv = () => ({ ...environmentForChild(), ELECTRON_RUN_AS_NODE: '1' });
   status('Starting the settings app…');
   ui = await startUiServer({ home, root, childEnv });
 
@@ -294,10 +276,9 @@ async function main() {
   setInterval(() => void pollProfiles(), 2000).unref();
 
   try {
-    const url = await startOpenWebUi(home);
+    const url = await startOpenWebUi();
     if (quitting) return;
     await chatView.webContents.loadURL(url);
-    chatReady = true;
     if (current === 'chat') await go('chat');
   } catch (e) {
     if (quitting) return;
@@ -305,7 +286,7 @@ async function main() {
     await dialog.showMessageBox(win, {
       type: 'warning',
       message: 'Open WebUI could not start',
-      detail: `${e.message}\n\nThe Chat button now opens the settings app's own chat, which works without Open WebUI.`,
+      detail: `${e.message}\n\nTests, Results and Settings remain available. Restart the app to retry Chat.`,
     });
     if (current === 'chat') await go('chat');
   }

@@ -21,7 +21,7 @@ async function run(turns: LlmCompleteResponse[], replies: (tool: string, args: R
   const h: Harness = { calls: [], toolResults: [], outcome: '', dir };
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20, AGENT_MAX_CONSECUTIVE_ERRORS: 0,
-    AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir, KB_DIR: dir,
+    REPORT_DIR: dir, KB_DIR: dir,
     D365_BASE_URL: BASE, D365_COMPANY: 'USMF', AGENT_ALLOW_DESTRUCTIVE: false, ...over,
   } as AppConfig;
   const llm = {
@@ -40,8 +40,7 @@ async function run(turns: LlmCompleteResponse[], replies: (tool: string, args: R
       return { content: [{ type: 'text', text: r.content }], isError: Boolean(r.isError) };
     },
   };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
-  const res = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright'] } as never).runTestCase(tc);
+  const res = await new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
   h.outcome = res.outcome;
   return h;
 }

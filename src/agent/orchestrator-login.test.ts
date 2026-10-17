@@ -24,9 +24,6 @@ function cfg(over: Partial<AppConfig> = {}, dir = '.'): AppConfig {
     AGENT_DRY_RUN: false,
     AGENT_VERBOSE: false,
     AGENT_MAX_STEPS: 5,
-    AGENT_RELOOP_MAX_RETRIES: 0,
-    AGENT_RELOOP_RETRY_ON: [],
-    AGENT_RELOOP_COOLDOWN_MS: 0,
     REPORT_DIR: dir,
     ...over,
   } as AppConfig;
@@ -68,8 +65,8 @@ describe('D365 login credentials', () => {
         return { content: `typed ${String(args.text)}`, isError: false };
       },
     };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, kb, mcpServers: [] } as never);
+
+    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, mcpServers: [] } as never);
     const res = await orch.runTestCase(tc);
 
     assert.equal(res.outcome, 'passed');
@@ -112,8 +109,8 @@ describe('D365 login credentials', () => {
         return { content: [{ type: 'text', text: `bad element, text was ${String(args.text)}` }], isError: true };
       },
     };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, kb, mcpServers: ['playwright'] } as never);
+
+    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, mcpServers: ['playwright'] } as never);
     await orch.runTestCase(tc);
     assert.equal(seen[0].ref, 'e9');
     assert.ok(!('target' in seen[0]));
