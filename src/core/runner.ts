@@ -5,11 +5,10 @@ import { ensurePlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { activeSessionFile } from '../d365fo/session.js';
 import { assertSafeEnvironment } from '../d365fo/environment.js';
 import { buildDefaultManager } from '../mcp/registry.js';
-import { KnowledgeBase } from '../knowledge/kb.js';
 import { AgentOrchestrator } from '../agent/orchestrator.js';
 import { loadLocalTestCases } from '../testing/loader.js';
 import { writeReports } from '../reporting/reporters.js';
-import type { StepStatus, TestCase, TestResult } from '../testing/types.js';
+import type { TestCase, TestResult } from '../testing/types.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { LlmUnavailableError } from '../llm/errors.js';
 import { FAILURE_CATEGORY_HINTS, summarizeFailures } from '../testing/triage.js';
@@ -32,9 +31,7 @@ export interface RunExecutionOptions {
   signal?: AbortSignal;
   dryRun?: boolean;
   upload?: boolean;
-  reloopMaxRetries?: number;
-  reloopRetryOn?: StepStatus[];
-  reloopCooldownMs?: number;
+
 }
 
 export interface RunExecutionResult {
@@ -63,9 +60,6 @@ export async function discoverTestCases(cfg: AppConfig, opts: Pick<RunExecutionO
 
 export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions): Promise<RunExecutionResult> {
   if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
-  if (opts.reloopMaxRetries !== undefined) cfg.AGENT_RELOOP_MAX_RETRIES = Math.max(0, opts.reloopMaxRetries);
-  if (opts.reloopRetryOn !== undefined) cfg.AGENT_RELOOP_RETRY_ON = opts.reloopRetryOn;
-  if (opts.reloopCooldownMs !== undefined) cfg.AGENT_RELOOP_COOLDOWN_MS = Math.max(0, opts.reloopCooldownMs);
 
   assertSafeEnvironment(cfg);
 
@@ -85,15 +79,11 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   // After the LLM check so missing credentials fail before a large download.
   await ensurePlaywrightBrowser(cfg);
   const mcp = buildDefaultManager(cfg, activeSessionFile(cfg));
-  const kb = new KnowledgeBase(cfg.KB_DIR);
-  await kb.load();
-
   const orchestrator = new AgentOrchestrator({
     cfg,
     llm,
     mcp,
-    kb,
-    mcpServers: ['playwright', 'learn', ...(cfg.RELEASE_PLANNER_MCP_URL ? ['release-planner'] : [])],
+    mcpServers: ['playwright', 'learn'],
   });
 
   let results: TestResult[] = [];
@@ -102,7 +92,6 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
     ({ results, aborted } = await runCases(orchestrator, filtered, console.log, opts.signal));
   } finally {
     await mcp.closeAll();
-    await kb.save();
   }
 
   const reportPaths = await writeReports(cfg.REPORT_DIR, results);

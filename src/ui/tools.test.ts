@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { TestResult } from '../testing/types.js';
-import { cliError, cliJson, MAX_WAIT_SECONDS, nextStep, runProgress, summarizeResults } from './tools.js';
+import { MAX_WAIT_SECONDS, nextStep, runProgress, summarizeResults } from './tools.js';
 
 describe('runProgress', () => {
   it('follows each case of a run from its log, with the time left', () => {
@@ -39,16 +39,5 @@ describe('summarizeResults', () => {
     assert.equal(out.cases[0].category, undefined);
     assert.equal(out.cases[2].category, 'assertion');
     assert.equal((summarizeResults([r('A', 'passed')]) as any).triage, undefined);
-  });
-});
-
-describe('CLI output for tool replies', () => {
-  it('reads the JSON line a command printed and the message of the error it threw', () => {
-    assert.deepEqual(cliJson('Drafting…\n{"saved":[]}\n'), { saved: [] });
-    assert.equal(cliJson('no json here'), undefined);
-    assert.equal(cliJson('{broken'), undefined);
-    assert.equal(cliError('Error: Azure DevOps 401 Unauthorized: nope\n    at request (client.js:1:1)'), 'Azure DevOps 401 Unauthorized: nope');
-    assert.equal(cliError('config: AZDO_PROJECT is required'), 'AZDO_PROJECT is required');
-    assert.equal(cliError(''), 'The command failed without a message.');
   });
 });

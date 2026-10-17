@@ -7,7 +7,7 @@ on:
   push:
     tags: ['v*']
   pull_request:
-    paths: ['desktop/**', 'src/desktop/**', 'src/runtime/**', '.github/workflows/desktop.yml']
+    paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop.yml']
 
 permissions:
   contents: read

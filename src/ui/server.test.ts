@@ -1,10 +1,39 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { request } from 'node:http';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, request } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { startUiServer, type RunningUi } from './server.js';
+import { ProfileStore } from '../profiles/store.js';
+
+it('Tests and Chat read the same Azure DevOps suite through the existing REST client', async () => {
+  const remote = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(req.url?.includes('/_apis/test/Plans/')
+      ? { value: [{ testCase: { id: '123' } }] }
+      : { value: [{ id: 123, fields: { 'System.Title': 'Read supplier', 'Microsoft.VSTS.TCM.Steps': '<steps><step id="1"><parameterizedString>Open suppliers</parameterizedString><parameterizedString>Supplier list</parameterizedString></step></steps>' } }] }));
+  });
+  await new Promise<void>((resolve) => remote.listen(0, '127.0.0.1', resolve));
+  const home = await mkdtemp(join(tmpdir(), 'devops-selection-'));
+  const store = new ProfileStore(home);
+  await store.write('UAT', [{ key: 'AZDO_ORG_URL', value: `http://127.0.0.1:${(remote.address() as AddressInfo).port}/org` }, { key: 'AZDO_PROJECT', value: 'Finance' }, { key: 'AZDO_PAT', value: 'fake-test-pat' }], 'create');
+  await store.setActive('UAT');
+  const server = await startUiServer({ home, port: 0, childEnv: () => ({}) });
+  try {
+    const query = '?plan=1&suite=2';
+    const cases = await (await fetch(server.url + 'api/cases' + query, { headers: { Cookie: `d365fo_ui=${server.token}` } })).json() as any[];
+    assert.equal(cases[0].id, '123');
+    assert.equal(cases[0].steps[0].expected, 'Supplier list');
+    const chat = await (await fetch(server.url + 'tools/testcases' + query, { headers: { Authorization: `Bearer ${server.toolToken}` } })).json();
+    assert.deepEqual(chat, cases);
+    assert.equal((await fetch(server.url + 'api/cases?plan=1', { headers: { Cookie: `d365fo_ui=${server.token}` } })).status, 400);
+  } finally {
+    await server.close();
+    await new Promise<void>((resolve) => remote.close(() => resolve()));
+  }
+});
 
 let ui: RunningUi;
 let cookie = '';
@@ -96,6 +125,7 @@ describe('run management', () => {
     "const args = process.argv.slice(2);",
     "console.log('ARGS ' + args.join(' '));",
     "console.log('PROFILE ' + (process.env.D365FO_PROFILE ?? 'none'));",
+    "console.log('DRY ' + process.env.AGENT_DRY_RUN);",
     "if (args.includes('--case') && args[args.indexOf('--case') + 1] === 'slow') await sleep(60000);",
     "else process.exitCode = args.includes('--dry-run') ? 0 : 3;",
   ].join('\n');
@@ -144,22 +174,20 @@ describe('run management', () => {
   });
 
   it('starts a run with the chosen options and records its output', async () => {
-    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', caseId: 'TC-1', dryRun: true, retries: 2 }) });
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', caseId: 'TC-1', dryRun: true }) });
     assert.equal(started.status, 200);
     const r = await pollStatus('passed');
-    assert.match(r.lines.join('\n'), /ARGS run --local cases --case TC-1 --dry-run --reloop-max-retries 2/);
+    assert.match(r.lines.join('\n'), /ARGS run --local cases --case TC-1 --dry-run --fail-on failed,blocked/);
     assert.match(r.lines.join('\n'), /PROFILE none/);
+    assert.match(r.lines.join('\n'), /DRY true/);
   });
 
-  it('passes a ticked list of cases, an AI model for this run and the priority limit to the run', async () => {
-    const made = (await (await rcall('/api/models', { method: 'POST', body: JSON.stringify({ name: 'Run model', entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] }) })).json()) as any;
-    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC-1', 'TC-2'], model: 'Run model', maxPriority: 2, sortByPriority: true, dryRun: true }) });
+  it('passes the selected case IDs to the single shared execution path', async () => {
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC-1', 'TC-2'], dryRun: true }) });
     assert.equal(started.status, 200);
     const r = await pollStatus('passed');
-    assert.match(r.lines.join('\n'), new RegExp(`ARGS run --local cases --case TC-1,TC-2 --model ${made.id} --max-priority 2 --sort-by-priority --dry-run`));
-    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', model: 'Nope' }) })).status, 400);
-    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', cases: ['TC 1; x'] }) })).status, 400);
-    assert.equal((await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', maxPriority: 9 }) })).status, 400);
+    assert.match(r.lines.join('\n'), /--case TC-1,TC-2/);
+    assert.doesNotMatch(r.lines.join('\n'), /--model|reloop/);
   });
 
   it('refuses a second run while busy and can stop the first', async () => {
@@ -303,14 +331,6 @@ describe('Open WebUI tool server', () => {
     "  console.log('Running 2 test case(s).');",
     "} else if (args[0] === 'upload') {",
     "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",
-    "} else if (args[0] === 'generate') {",
-    "  const at = args.indexOf('--');",
-    "  if (args[at + 1] === 'nothing') { console.log(JSON.stringify({ saved: [], rejected: ['Draft 1: steps are missing'] })); process.exit(1); }",
-    "  console.log(JSON.stringify({ saved: args.includes('--dry-run') ? [] : [{ file: 'tc-ap-001.json', id: 'TC-AP-001', title: args[at + 1], steps: 2 }], ...(args.includes('--dry-run') ? { drafts: [{ id: 'TC-AP-001', title: args[at + 1], steps: [] }] } : {}), rejected: [], args, cwd: process.cwd() }));",
-    "} else if (args[0] === 'plans') {",
-    "  const plan = args.includes('--plan') ? args[args.indexOf('--plan') + 1] : undefined;",
-    "  if (plan === '404') { console.error(new Error('Azure DevOps 404 Not Found: no such plan')); process.exit(1); }",
-    "  console.log(JSON.stringify(plan ? { plan, suites: [{ id: '11', name: 'Root' }, { id: '12', name: 'AP', parentId: '11' }] } : { plans: [{ id: '10', name: 'Regression', rootSuiteId: '11' }] }));",
     "}",
   ].join('\n');
 
@@ -331,7 +351,14 @@ describe('Open WebUI tool server', () => {
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'd365ui-tools-'));
     await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
-    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir });
+    const devopsClient = () => ({
+      listPlans: async () => [{ id: '10', name: 'Regression', rootSuiteId: '11' }],
+      listSuites: async (plan: string) => {
+        if (plan === '404') throw new Error('Azure DevOps 404 Not Found: no such plan\n{"details":1}');
+        return [{ id: '11', name: 'Root' }, { id: '12', name: 'AP', parentId: '11' }];
+      },
+    });
+    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, devopsClient });
     tcall = (path, init = {}) => {
       const { key = tui.toolToken, ...rest } = init;
       const headers: Record<string, string> = {};
@@ -356,13 +383,11 @@ describe('Open WebUI tool server', () => {
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
     assert.deepEqual(ops.sort(), [
-      'check_setup', 'delete_test_case', 'draft_test_cases', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_learned_pages', 'list_profiles', 'list_runs',
-      'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile',
+      'check_setup', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile',
     ]);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
     assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
-    assert.match(String(pre.headers.get('access-control-allow-methods')), /DELETE/, 'Open WebUI can call delete_test_case from the browser');
   });
 
   it('refuses tool calls without the right key, and the browser cookie token is not accepted', async () => {
@@ -389,55 +414,22 @@ describe('Open WebUI tool server', () => {
     assert.equal(JSON.parse(text).active, 'UAT');
   });
 
-  it('lists the F&O forms learned during runs, and checks the profile in use', async () => {
-    await mkdir(join(dir, 'knowledge'), { recursive: true });
-    const learned = { version: 1, pages: [{ key: 'mi:vendtablelistpage', mi: 'VendTableListPage', caption: 'All vendors', visits: 3, controls: [{ name: 'New', target: "getByTestId('SystemDefinedNewButton')", action: 'click', uses: 2, failures: 0, lastUsed: '' }], notes: ['n'], updatedAt: '' }] };
-    await writeFile(join(dir, 'knowledge', 'pages.json'), JSON.stringify(learned));
-    const pages = ((await (await tcall('/knowledge/pages?search=vend')).json()) as any).pages;
-    assert.deepEqual(pages, [{ caption: 'All vendors', menuItem: 'VendTableListPage', visits: 3, controls: 1, notes: ['n'], updatedAt: '' }]);
-    assert.deepEqual(((await (await tcall('/knowledge/pages?search=sales')).json()) as any).pages, []);
+  it('checks the active environment', async () => {
     const check = (await (await tcall('/setup/check', { method: 'POST' })).json()) as any;
     assert.equal(check.profile, 'UAT');
     assert.equal(typeof check.output, 'string');
   });
 
-  it('saves, lists and reads test cases', async () => {
-    const tc = { title: 'Post invoice', steps: [{ action: 'Open invoice journal', expected: 'Journal list shown' }] };
-    const saved = await tcall('/testcases?dir=cases', { method: 'PUT', body: JSON.stringify({ testCase: tc }) });
-    assert.equal(saved.status, 200);
-    const { file } = (await saved.json()) as any;
+  it('allows chat to read cases, with writing reserved for the Tests screen', async () => {
+    const { TestCaseFiles } = await import('../testing/store.js');
+    const saved = await new TestCaseFiles(dir).save('cases', { title: 'Post invoice', steps: [{ action: 'Open invoice journal', expected: 'Journal list shown' }] });
+    assert.equal((await tcall('/testcases?dir=cases', { method: 'PUT', body: '{}' })).status, 404);
     assert.deepEqual(((await (await tcall('/testcases?dir=cases')).json()) as any[]).map((c) => c.title), ['Post invoice']);
-    assert.equal(((await (await tcall(`/testcases/file?dir=cases&file=${file}`)).json()) as any).steps.length, 1);
+    assert.equal(((await (await tcall(`/testcases/file?dir=cases&file=${saved.file}`)).json()) as any).steps.length, 1);
     assert.equal((await tcall('/testcases?dir=../..')).status, 400);
-    assert.equal((await tcall('/testcases/file?dir=cases', { method: 'DELETE' })).status, 400, 'the file name is required');
-    assert.equal((await tcall('/testcases/file?dir=cases&file=../x.json', { method: 'DELETE' })).status, 400);
-    const del = await tcall(`/testcases/file?dir=cases&file=${file}`, { method: 'DELETE' });
-    assert.deepEqual(await del.json(), { deleted: file, dir: 'cases' });
-    assert.deepEqual(await (await tcall('/testcases?dir=cases')).json(), []);
-    assert.equal((await tcall(`/testcases/file?dir=cases&file=${file}`, { method: 'DELETE' })).status, 404);
   });
 
-  it('drafts test cases with the profile in use, in the project folder', async () => {
-    const draft = (body: unknown, dir = 'cases') => tcall(`/testcases/draft?dir=${dir}`, { method: 'POST', body: JSON.stringify(body) });
-    assert.equal((await draft({})).status, 400);
-    assert.equal((await draft({ description: 'x', count: 11 })).status, 400);
-    assert.equal((await draft({ description: 'x', module: 'a\nb' })).status, 400);
-    assert.equal((await draft({ description: 'x' }, '../..')).status, 400);
-    const r = await draft({ description: '--create a vendor', count: 2, module: 'Accounts payable', legalEntity: 'USMF' });
-    assert.equal(r.status, 200);
-    const body = (await r.json()) as any;
-    assert.deepEqual(body.saved, [{ file: 'tc-ap-001.json', id: 'TC-AP-001', title: '--create a vendor', steps: 2 }], 'a description that looks like an option is passed as text');
-    assert.deepEqual(body.args, ['generate', '--dir', 'cases', '--count', '2', '--json', '--module', 'Accounts payable', '--legal-entity', 'USMF', '--', '--create a vendor']);
-    assert.equal(body.cwd, await realpath(dir), 'drafts are saved inside the project');
-    const shown = (await (await draft({ description: 'post invoice', save: false })).json()) as any;
-    assert.equal(shown.drafts.length, 1);
-    assert.ok(shown.args.includes('--dry-run'));
-    const none = await draft({ description: 'nothing' });
-    assert.equal(none.status, 422);
-    assert.deepEqual(((await none.json()) as any).rejected, ['Draft 1: steps are missing']);
-  });
-
-  it('lists Azure DevOps test plans and suites, and reports a refusal in one line', async () => {
+  it('lists Azure DevOps test plans and suites for the profile in use, and reports a refusal in one line', async () => {
     assert.deepEqual(await (await tcall('/devops/plans')).json(), { plans: [{ id: '10', name: 'Regression', rootSuiteId: '11' }] });
     assert.deepEqual(((await (await tcall('/devops/plans/10/suites')).json()) as any).suites.map((x: any) => x.id), ['11', '12']);
     assert.equal((await tcall('/devops/plans/1%3Bx/suites')).status, 400);

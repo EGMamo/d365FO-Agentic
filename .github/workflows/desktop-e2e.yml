@@ -21,7 +21,7 @@ on:
         type: boolean
         default: false
   pull_request:
-    paths: ['desktop/**', 'src/desktop/**', 'src/runtime/**', 'src/ui/**', '.github/workflows/desktop-e2e.yml']
+    paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop-e2e.yml']
 
 permissions:
   contents: read

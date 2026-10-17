@@ -13,7 +13,7 @@ import { packageCommand } from '../runtime/bundled.js';
  */
 
 /** Shared by the server launch and the browser install so both resolve the same Playwright version. */
-export const PLAYWRIGHT_MCP_PACKAGE = '@playwright/mcp@latest';
+export const PLAYWRIGHT_MCP_PACKAGE = '@playwright/mcp@0.0.82';
 
 /** `install-browser` uses Playwright's registry names, which differ from `--browser` for chromium. */
 const INSTALL_NAMES: Record<AppConfig['PW_BROWSER'], string> = {

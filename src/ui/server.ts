@@ -6,22 +6,24 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultRepoRoot } from '../launcher/install.js';
+import { defaultRepoRoot } from '../runtime/paths.js';
 import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.js';
 import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
 import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
-import { migrateProfileModels, ModelStore, PROFILE_MODEL_KEY } from '../profiles/models.js';
-import { loadLocalTestCases } from '../testing/loader.js';
+import { AiSettings } from '../profiles/ai.js';
+import { discoverTestCases } from '../core/runner.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
-import { cliError, cliJson, MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
-import { callTool, chatTools, chatTurn, parseHistory } from './chat.js';
+import { MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { AzureDevOpsClient } from '../devops/client.js';
+import { environmentForChild } from '../config/load-env.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
+import { completionRequest, sendCompletion } from './completions.js';
+import { redactSecrets } from '../d365fo/login.js';
 import { checkModel as checkModelEndpoint } from '../llm/check.js';
 import type { LlmProvider } from '../llm/types.js';
-import { PageMap } from '../knowledge/page-map.js';
 import type { TestResult } from '../testing/types.js';
 
 /**
@@ -70,7 +72,9 @@ export interface UiServerOptions {
    */
   childEnv?: () => NodeJS.ProcessEnv;
   /** Builds the chat model from the profile in use. Defaults to the provider the profile selects; tests pass a fake. */
-  chatProvider?: (cfg: AppConfig) => LlmProvider;
+  modelProvider?: (cfg: AppConfig) => LlmProvider;
+  /** Builds the Azure DevOps client for the profile in use (test plans and suites). Tests pass a fake. */
+  devopsClient?: (cfg: AppConfig) => Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -147,53 +151,34 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 /** Secret values of a profile, used to scrub child-process output before it reaches the browser. */
-async function profileSecrets(store: ProfileStore, name: string): Promise<string[]> {
-  return (await store.read(name, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value);
+async function profileSecrets(store: ProfileStore, name: string, env: NodeJS.ProcessEnv = {}): Promise<string[]> {
+  return [...await store.read(name, true), ...await new AiSettings(store.home).read(true), ...Object.entries(env).map(([key, value]) => ({ key, value: value ?? '' }))].filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value);
 }
 
 /** Runs `doctor` against a profile and returns its output with that profile's secrets scrubbed. */
 function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
-  return runProfileCommand(['doctor'], 90_000, store, name, cliPath, baseEnv).then(({ exitCode, output }) => ({ exitCode, output }));
+  return runProfileCommand('doctor', 90_000, store, name, cliPath, baseEnv);
 }
 
-/**
- * Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. `stdout` is
- * the standard output alone, for commands that print JSON there.
- */
-async function runProfileCommand(
-  args: string[],
-  timeoutMs: number,
-  store: ProfileStore,
-  name: string,
-  cliPath: string,
-  baseEnv: NodeJS.ProcessEnv,
-  cwd?: string,
-): Promise<{ exitCode: number | null; output: string; stdout: string }> {
-  const secrets = await profileSecrets(store, name);
+/** Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. */
+async function runProfileCommand(command: 'doctor' | 'devops-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
+  const secrets = await profileSecrets(store, name, baseEnv);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
-      ...(cwd ? { cwd } : {}),
-      env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0', NO_COLOR: '1' },
+    const child = spawn(process.execPath, [cliPath, command], {
+      env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
-    let stdout = '';
     const add = (b: Buffer): void => {
       if (output.length < 20_000) output += b.toString('utf8');
     };
-    child.stdout.on('data', (b: Buffer) => {
-      if (stdout.length < 200_000) stdout += b.toString('utf8');
-      add(b);
-    });
+    child.stdout.on('data', add);
     child.stderr.on('data', add);
     const timer = setTimeout(() => child.kill(), timeoutMs);
     const done = (exitCode: number | null): void => {
       clearTimeout(timer);
-      for (const s of secrets) {
-        output = output.split(s).join('***');
-        stdout = stdout.split(s).join('***');
-      }
-      resolve({ exitCode, output: output.trim(), stdout: stdout.trim() });
+      for (const s of secrets) output = output.split(s).join('***');
+      resolve({ exitCode, output: output.trim() });
     };
     child.on('error', (e) => {
       output += `Could not start the check: ${e.message}`;
@@ -205,21 +190,15 @@ async function runProfileCommand(
 
 export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const store = new ProfileStore(opts.home);
-  const models = new ModelStore(opts.home);
-  try {
-    // Older profiles hold their own AI model settings; move them into the shared list once.
-    const moved = await migrateProfileModels(store, models);
-    if (moved) console.log(`[ui] moved the AI model settings of ${moved} profile(s) into the shared AI models list`);
-  } catch (e) {
-    console.error(`[ui] could not move profile AI models: ${(e as Error).message}`);
-  }
+  const ai = new AiSettings(opts.home);
+  await ai.migrate(store);
   const token = await loadOrCreateToken(opts.home);
   const toolToken = await loadOrCreateToolToken(opts.home);
   const host = opts.host ?? '127.0.0.1';
   let port = opts.port ?? DEFAULT_PORT;
   const cliPath = opts.cliPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'index.js');
   const repoRoot = opts.root ?? defaultRepoRoot();
-  const childEnv = opts.childEnv ?? (() => process.env);
+  const childEnv = opts.childEnv ?? environmentForChild;
   const caseFiles = new TestCaseFiles(repoRoot);
   let run: RunState | undefined;
   let runSeq = 0;
@@ -236,10 +215,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
   function runCli(args: string[], active?: string): ChildProcess {
     const env: NodeJS.ProcessEnv = { ...childEnv(), FORCE_COLOR: '0', NO_COLOR: '1', D365FO_ORIGIN: 'app' };
-    if (active) {
-      env.D365FO_PROFILE = active;
-      env.D365FO_AGENT_HOME = store.home;
-    }
+    env.D365FO_AGENT_HOME = store.home;
+    env.D365FO_PROFILE = active ?? 'none';
+    if (args[0] === 'run') env.AGENT_DRY_RUN = String(args.includes('--dry-run'));
     return spawn(process.execPath, [cliPath, ...args], {
       cwd: repoRoot,
       env,
@@ -249,6 +227,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   async function startRun(body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
+    if (['model', 'retries', 'upload', 'tags', 'modules', 'maxPriority', 'sortByPriority'].some((key) => body[key] !== undefined)) return { error: 'Choose cases and use the shared AI connection. Upload a selected result after the run.' };
     if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
     const args = ['run'];
     const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
@@ -266,31 +245,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const caseIds = [str('caseId'), ...(Array.isArray(body.cases) ? (body.cases as unknown[]).map((c) => (typeof c === 'string' ? c.trim() : '')) : [])].filter(Boolean);
     if (caseIds.some((c) => !ID.test(c))) return { error: 'Invalid case id' };
     if (caseIds.length) args.push('--case', caseIds.join(','));
-    const model = str('model');
-    if (model) {
-      const found = await models.find(model);
-      if (!found) return { error: `No AI model "${model}".` };
-      args.push('--model', found.id);
-    }
-    for (const [flag, key] of [['--tag', 'tags'], ['--module', 'modules']] as const) {
-      const v = str(key);
-      if (!v) continue;
-      if (v.length > 200 || /[\r\n]/.test(v) || v.startsWith('-')) return { error: `Invalid ${key} filter` };
-      args.push(flag, v);
-    }
-    if (body.maxPriority !== undefined && body.maxPriority !== '') {
-      const n = Number(body.maxPriority);
-      if (!Number.isInteger(n) || n < 1 || n > 4) return { error: 'Priority must be 1-4' };
-      args.push('--max-priority', String(n));
-    }
-    if (body.sortByPriority === true) args.push('--sort-by-priority');
     if (body.dryRun === true) args.push('--dry-run');
-    if (body.upload === true) args.push('--upload');
-    if (body.retries !== undefined && body.retries !== '') {
-      const n = Number(body.retries);
-      if (!Number.isInteger(n) || n < 0 || n > 10) return { error: 'Retries must be 0-10' };
-      args.push('--reloop-max-retries', String(n));
-    }
+    args.push('--fail-on', 'failed,blocked');
     return startCli('run', args);
   }
 
@@ -327,7 +283,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   ): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
     const active = profile ?? (await store.getActive());
     if (active) await store.idOf(active); // older profiles get their id (and report folder) before the run reads the file
-    const secrets = active ? await profileSecrets(store, active) : [];
+    const secrets = active ? await profileSecrets(store, active, childEnv()) : (await ai.read(true)).filter((e) => isSecretKey(e.key)).map((e) => e.value);
     const state: RunState = { id: ++runSeq, kind, status: 'running', args, profile: active, startedAt: new Date().toISOString(), lines: [] };
     run = state;
     const push = (line: string): void => {
@@ -400,20 +356,6 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return true;
   }
 
-  /** A folder setting of the active profile (REPORT_DIR, KB_DIR), resolved inside the project. */
-  async function profileDir(key: string, fallback: string): Promise<string> {
-    let dir = fallback;
-    const active = await store.getActive();
-    if (active) {
-      try {
-        const entry = (await store.read(active, true)).find((e) => e.key === key);
-        if (entry?.value) dir = entry.value;
-      } catch {
-        /* fall back to the default */
-      }
-    }
-    return resolve(repoRoot, dir);
-  }
   /** A profile's own report folder: its REPORT_DIR, else reports/<profile id>. */
   async function reportDirOf(name: string): Promise<string> {
     const explicit = (await store.read(name, true)).find((e) => e.key === 'REPORT_DIR')?.value;
@@ -437,25 +379,24 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return active ? store.idOf(active) : null;
   }
 
-  /** The AI model setup the profile in use points to. */
-  async function activeModelOf(): Promise<{ id: string; name: string } | null> {
+  async function modelConfig(): Promise<AppConfig> {
+    return parseConfig({ ...Object.fromEntries((await ai.read(true)).map((e) => [e.key, e.value])), ...childEnv() });
+  }
+
+  /** The agent's settings for the profile in use, as a run would read them. */
+  async function activeConfig(): Promise<AppConfig> {
     const active = await store.getActive();
-    if (!active) return null;
-    const ref = (await store.read(active, true)).find((e) => e.key === PROFILE_MODEL_KEY)?.value;
-    const found = ref ? await models.find(ref) : undefined;
-    return found ? { id: found.id, name: found.name } : null;
+    if (!active) throw new ProfileError('Choose an environment in Settings first.');
+    return parseConfig({ ...Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value])), ...childEnv() });
   }
-
-  /** Setups with where each is used, for the AI models page and the pickers. */
-  async function modelList(): Promise<Array<Awaited<ReturnType<ModelStore['list']>>[number] & { usedBy: { profiles: string[]; chat: boolean }; check?: unknown }>> {
-    const checks = await models.getChecks();
-    return Promise.all((await models.list()).map(async (m) => ({ ...m, usedBy: await models.usedBy(m.id, store), ...(checks[m.id] ? { check: checks[m.id] } : {}) })));
-  }
-
-  /** The agent's settings for a setup, as a run would read them. */
-  async function modelConfig(id: string): Promise<AppConfig> {
-    const entries = await models.read(id, true);
-    return parseConfig({ ...Object.fromEntries(entries.map((e) => [e.key, e.value])), ...childEnv() });
+  async function casesFor(url: URL) {
+    const plan = url.searchParams.get('plan');
+    const suite = url.searchParams.get('suite');
+    if (plan || suite) {
+      if (!plan || !suite || !/^\d+$/.test(plan) || !/^\d+$/.test(suite)) throw new ProfileError('Give numeric plan and suite IDs.');
+      return discoverTestCases(await activeConfig(), { plan, suite });
+    }
+    return caseFiles.list(url.searchParams.get('local') || url.searchParams.get('dir') || 'examples/testcases');
   }
 
   /** Reads a report written by the CLI: the latest run's, or a run from the history. */
@@ -465,7 +406,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   /** Bearer tokens carry no ambient browser credentials, so any origin may call (Open WebUI user tool servers call from the browser). */
-  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Max-Age': '600' };
+  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600' };
   const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' });
   const intParam = (url: URL, name: string, def: number, max: number): number => {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
@@ -504,18 +445,6 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       next: nextStep({ kind: run.kind, status: run.settled ? run.status : 'running' }, progress, Boolean(results)),
     };
   }
-  /** The profile a tool call acts for, or a reply saying there is none. */
-  async function activeOr400(res: ServerResponse): Promise<string | undefined> {
-    const active = await store.getActive();
-    if (!active) tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
-    return active;
-  }
-  const shortText = (v: unknown, max: number): string | undefined | null => {
-    if (v === undefined || v === null || v === '') return undefined;
-    if (typeof v !== 'string') return null;
-    const t = v.trim();
-    return t.length > max || /[\r\n]/.test(t) ? null : t || undefined;
-  };
 
   /** The Open WebUI tool server: the same actions as the app, for a chat model. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
@@ -529,10 +458,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       return tsend(res, 200, openApiSpec(base));
     }
     const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
-    if (!auth || !same(auth[1].trim(), toolToken)) return tsend(res, 401, { error: 'Missing or wrong bearer token. Run "d365fo-agent openwebui" to see it.' });
+    if (!auth || !same(auth[1].trim(), toolToken)) return tsend(res, 401, { error: 'Missing or wrong tool-server token. Restart the desktop app to reconnect.' });
 
     if (method === 'GET' && path === '/profiles') return tsend(res, 200, { active: (await store.getActive()) ?? null, profiles: await store.list() });
     if (method === 'POST' && path === '/profiles/active') {
+      if (run?.status === 'running') return tsend(res, 409, { error: 'Stop the current run before switching environments.' });
       const body = await readJson(req);
       if (typeof body.name !== 'string' || !body.name) return tsend(res, 400, { error: 'Give the profile name.' });
       await store.read(body.name); // 404 for an unknown profile
@@ -542,49 +472,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (path === '/testcases' || path === '/testcases/file') {
       const dir = url.searchParams.get('dir') ?? '';
       const file = url.searchParams.get('file') ?? '';
-      if (method === 'GET' && path === '/testcases') return tsend(res, 200, await caseFiles.list(dir));
+      if (method === 'GET' && path === '/testcases') return tsend(res, 200, await casesFor(url));
       if (method === 'GET') return tsend(res, 200, await caseFiles.read(dir, file));
-      if (method === 'PUT' && path === '/testcases') return tsend(res, 200, await caseFiles.save(dir, (await readJson(req)).testCase, file || undefined));
-      if (method === 'DELETE' && path === '/testcases/file') {
-        if (!file) return tsend(res, 400, { error: 'Give the file name, as listed by list_test_cases.' });
-        await caseFiles.delete(dir, file);
-        return tsend(res, 200, { deleted: file, dir });
-      }
-    }
-    if (method === 'POST' && path === '/testcases/draft') {
-      const dir = url.searchParams.get('dir') ?? '';
-      await caseFiles.list(dir); // 400 for a folder outside the project
-      const body = await readJson(req);
-      const description = typeof body.description === 'string' ? body.description.trim() : '';
-      if (!description) return tsend(res, 400, { error: 'Describe what the test cases should test.' });
-      if (description.length > 4000) return tsend(res, 400, { error: 'The description is too long (4000 characters at most).' });
-      const count = body.count === undefined ? 1 : Number(body.count);
-      if (!Number.isInteger(count) || count < 1 || count > 10) return tsend(res, 400, { error: 'count must be 1-10.' });
-      const module = shortText(body.module, 100);
-      const legalEntity = shortText(body.legalEntity, 20);
-      if (module === null || legalEntity === null) return tsend(res, 400, { error: 'module and legalEntity must be short single-line text.' });
-      const active = await activeOr400(res);
-      if (!active) return;
-      const args = ['generate', '--dir', dir, '--count', String(count), '--json'];
-      if (module) args.push('--module', module);
-      if (legalEntity) args.push('--legal-entity', legalEntity);
-      if (body.save === false) args.push('--dry-run');
-      args.push('--', description);
-      const out = await runProfileCommand(args, MAX_WAIT_SECONDS * 1000, store, active, cliPath, childEnv(), repoRoot);
-      const drafted = cliJson(out.stdout);
-      if (!drafted) return tsend(res, 502, { error: `No test case was drafted: ${cliError(out.output)}` });
-      const any = (drafted.saved as unknown[] | undefined)?.length || (drafted.drafts as unknown[] | undefined)?.length;
-      return tsend(res, any ? 200 : 422, { dir, ...drafted, ...(any ? {} : { error: 'No valid test case was drafted. Describe the steps more precisely and try again.' }) });
-    }
-    const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
-    if (method === 'GET' && plans) {
-      const plan = plans[1] ? decodeURIComponent(plans[1]) : undefined;
-      if (plan !== undefined && !ID.test(plan)) return tsend(res, 400, { error: 'Invalid plan id.' });
-      const active = await activeOr400(res);
-      if (!active) return;
-      const out = await runProfileCommand(['plans', '--json', ...(plan ? ['--plan', plan] : [])], 90_000, store, active, cliPath, childEnv(), repoRoot);
-      const listed = out.exitCode === 0 ? cliJson(out.stdout) : undefined;
-      return listed ? tsend(res, 200, listed) : tsend(res, 502, { error: `Azure DevOps could not be read: ${cliError(out.output)}` });
     }
     if (method === 'POST' && path === '/runs') {
       const result = await startRun(await readJson(req));
@@ -594,6 +483,23 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (run) await waitToSettle(run, intParam(url, 'waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, res);
       return tsend(res, 200, await runView(intParam(url, 'tail', 40, 400)));
     }
+    const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
+    if (method === 'GET' && plans) {
+      const plan = plans[1] ? decodeURIComponent(plans[1]) : undefined;
+      if (plan !== undefined && !/^\d+$/.test(plan)) return tsend(res, 400, { error: 'Give a numeric plan ID.' });
+      let client: Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
+      try {
+        client = (opts.devopsClient ?? ((cfg: AppConfig) => new AzureDevOpsClient(cfg)))(await activeConfig());
+      } catch (e) {
+        if (e instanceof ProfileError) throw e;
+        return tsend(res, 400, { error: (e as Error).message });
+      }
+      try {
+        return tsend(res, 200, plan ? { plan, suites: await client.listSuites(plan) } : { plans: await client.listPlans() });
+      } catch (e) {
+        return tsend(res, 502, { error: `Azure DevOps could not be read: ${(e as Error).message.split('\n')[0].slice(0, 400)}` });
+      }
+    }
     if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
     if (method === 'GET' && path === '/results') {
       const runId = url.searchParams.get('run');
@@ -602,18 +508,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       return tsend(res, 200, { run: runId ?? 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) });
     }
     if (method === 'POST' && path === '/setup/check') {
-      const active = await activeOr400(res);
-      if (!active) return;
+      const active = await store.getActive();
+      if (!active) return tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
       return tsend(res, 200, { profile: active, ...(await runDoctor(store, active, cliPath, childEnv())) });
-    }
-    if (method === 'GET' && path === '/knowledge/pages') {
-      const search = (url.searchParams.get('search') ?? '').toLowerCase();
-      const pages = (await PageMap.load(await profileDir('KB_DIR', 'knowledge'))).pages()
-        .filter((p) => !search || `${p.caption ?? ''} ${p.mi ?? ''}`.toLowerCase().includes(search))
-        .sort((a, b) => b.visits - a.visits)
-        .slice(0, 100)
-        .map((p) => ({ caption: p.caption, menuItem: p.mi, visits: p.visits, controls: p.controls.length, notes: p.notes, updatedAt: p.updatedAt }));
-      return tsend(res, 200, { pages });
     }
     if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
     const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
@@ -641,6 +538,25 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (hostHeader !== `127.0.0.1:${port}` && hostHeader !== `localhost:${port}`) return send(res, 403, { error: 'Unexpected Host header.' });
     const url = new URL(req.url ?? '/', `http://${hostHeader}`);
     const method = req.method ?? 'GET';
+    if (url.pathname.startsWith('/model/v1/')) {
+      const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
+      if (!auth || !same(auth[1], toolToken)) return send(res, 401, { error: { message: 'Wrong model-bridge token.' } });
+      try {
+        const cfg = await modelConfig();
+        if (method === 'GET' && url.pathname === '/model/v1/models') return send(res, 200, { object: 'list', data: [{ id: 'd365fo-claude', name: 'Claude (shared connection)', object: 'model', owned_by: 'anthropic' }] });
+        if (method === 'POST' && url.pathname === '/model/v1/chat/completions') {
+          const body = await readJson(req);
+          const answer = await (opts.modelProvider ?? createLlmProvider)(cfg).complete(completionRequest(body));
+          return sendCompletion(res, answer, 'd365fo-claude', body.stream === true);
+        }
+        return send(res, 404, { error: { message: 'Unknown model endpoint.' } });
+      } catch (e) {
+        const cfg = await modelConfig().catch(() => undefined);
+        const message = cfg ? redactSecrets(cfg, (e as Error).message) : 'Check the AI connection in Settings.';
+        return send(res, e instanceof ProfileError ? e.status : 502, { error: { message } });
+      }
+    }
+
 
     if (method === 'GET' && url.pathname === '/' && url.searchParams.has('token')) {
       if (!same(url.searchParams.get('token') ?? '', token)) return send(res, 403, { error: 'Wrong token.' });
@@ -665,7 +581,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return void res.end(await readFile(join(WEB_DIR, 'icon.svg')));
       }
       if (method === 'GET' && url.pathname === '/api/state') {
-        return send(res, 200, { profiles: await store.list(), models: await modelList(), chatModel: (await models.getChat()) ?? null, active: (await store.getActive()) ?? null, activeId: await activeIdOf(), activeModel: await activeModelOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
+        return send(res, 200, { profiles: await store.list(), aiConfigured: (await ai.read(true)).some((e) => ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(e.key) && e.value), active: (await store.getActive()) ?? null, activeId: await activeIdOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
@@ -685,10 +601,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         const name = decodeURIComponent(m[1]);
         if (m[2] === '/check' && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
         // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
-        if (m[2] === '/devops-login' && method === 'POST') {
-          const { exitCode, output } = await runProfileCommand(['devops-login'], 300_000, store, name, cliPath, childEnv());
-          return send(res, 200, { exitCode, output });
-        }
+        if (m[2] === '/devops-login' && method === 'POST') return send(res, 200, await runProfileCommand('devops-login', 300_000, store, name, cliPath, childEnv()));
         if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');
@@ -704,77 +617,20 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
           return send(res, 200, { deleted: name });
         }
       }
-      if (url.pathname === '/api/models' || url.pathname.startsWith('/api/models/')) {
-        if (method === 'GET' && url.pathname === '/api/models') return send(res, 200, await modelList());
-        if (method === 'POST' && url.pathname === '/api/models') {
-          const body = await readJson(req);
-          const id =
-            typeof body.copyFrom === 'string' && body.copyFrom
-              ? await models.duplicate(body.copyFrom, body.name)
-              : await models.write(undefined, body.name, body.entries ?? []);
-          return send(res, 201, { id });
-        }
-        const mm = /^\/api\/models\/([a-z0-9]+)(\/check)?$/.exec(url.pathname);
-        if (mm) {
-          const id = mm[1];
-          if (mm[2] && method === 'POST') {
-            const result = await checkModelEndpoint(await modelConfig(id), (await models.read(id, true)).filter((e) => isSecretKey(e.key) && e.value.length >= 4).map((e) => e.value), opts.chatProvider);
-            await models.setCheck(id, result);
-            return send(res, 200, result);
-          }
-          if (!mm[2] && method === 'GET') {
-            const entries = await models.read(id);
-            return send(res, 200, { id, name: entries.find((e) => e.key === 'MODEL_NAME')?.value ?? id, entries: entries.filter((e) => e.key !== 'MODEL_NAME'), usedBy: await models.usedBy(id, store) });
-          }
-          if (!mm[2] && method === 'PUT') {
-            const body = await readJson(req);
-            await models.write(id, body.name ?? (await models.name(id)), body.entries ?? []);
-            await models.setCheck(id, undefined);
-            return send(res, 200, { id });
-          }
-          if (!mm[2] && method === 'PATCH') {
-            await models.rename(id, (await readJson(req)).name);
-            return send(res, 200, { id });
-          }
-          if (!mm[2] && method === 'DELETE') {
-            await models.delete(id, store);
-            return send(res, 200, { deleted: id });
-          }
+      if (url.pathname === '/api/ai') {
+        if (method === 'GET') return send(res, 200, { entries: await ai.read() });
+        if (method === 'PUT') {
+          if (run?.status === 'running') return send(res, 409, { error: 'Wait for the current run before changing the AI connection.' });
+          await ai.write((await readJson(req)).entries);
+          return send(res, 200, { saved: true });
         }
       }
-      if (method === 'POST' && url.pathname === '/api/chat-model') {
-        const body = await readJson(req);
-        await models.setChat(typeof body.id === 'string' && body.id ? body.id : undefined);
-        return send(res, 200, { chatModel: (await models.getChat()) ?? null });
+      if (method === 'POST' && url.pathname === '/api/ai/check') {
+        const cfg = await modelConfig();
+        const secrets = Object.entries(cfg).filter(([key, value]) => isSecretKey(key) && typeof value === 'string' && value.length >= 4).map(([, value]) => String(value));
+        return send(res, 200, await checkModelEndpoint(cfg, secrets, opts.modelProvider));
       }
-      if (method === 'POST' && url.pathname === '/api/chat') {
-        const history = parseHistory((await readJson(req)).messages);
-        if (!history) return send(res, 400, { error: 'Type a message first.' });
-        const chatId = await models.getChat();
-        if (!chatId) return send(res, 400, { error: 'Add an AI model on the AI models tab first: the chat uses it.' });
-        let provider: LlmProvider;
-        try {
-          provider = (opts.chatProvider ?? createLlmProvider)(await modelConfig(chatId));
-        } catch (e) {
-          return send(res, 400, { error: `The AI model "${await models.name(chatId)}" is not set up: ${(e as Error).message.split('\n')[0]}` });
-        }
-        const base = `http://127.0.0.1:${port}${TOOLS_PREFIX}`;
-        const set = chatTools(openApiSpec(base));
-        try {
-          return send(res, 200, await chatTurn(provider, history, set.tools, (name, args) => callTool(set, base, toolToken, name, args)));
-        } catch (e) {
-          const secrets = (await models.read(chatId, true)).filter((x) => isSecretKey(x.key) && x.value.length >= 4).map((x) => x.value);
-          let msg = (e as Error).message;
-          for (const s of secrets) msg = msg.split(s).join('***');
-          return send(res, 502, { error: `The AI model did not answer: ${msg}` });
-        }
-      }
-      if (method === 'GET' && url.pathname === '/api/cases') {
-        const local = url.searchParams.get('local');
-        if (!local) return send(res, 200, []);
-        const cases = await loadLocalTestCases(resolve(repoRoot, local));
-        return send(res, 200, cases.map((c) => ({ id: c.id, title: c.title, steps: c.steps.length, legalEntity: c.legalEntity })));
-      }
+      if (method === 'GET' && url.pathname === '/api/cases') return send(res, 200, await casesFor(url));
       if (method === 'POST' && url.pathname === '/api/run') {
         const result = await startRun(await readJson(req));
         return send(res, result.busy ? 409 : result.error ? 400 : 200, result);

@@ -1,16 +1,14 @@
 # Azure DevOps setup
 
-The agent connects to Azure DevOps through its REST API (version 7.1) ([`src/devops/client.ts`](../src/devops/client.ts)). Reading test cases and uploading results always use this client. It signs in one of two ways:
+The app connects to Azure DevOps through its REST API (version 7.1) ([`src/devops/client.ts`](../src/devops/client.ts)). Reading test cases and uploading results always use this client. It signs in one of two ways:
 
 - **Your Microsoft work account (recommended).** No token to create, store or renew: the agent uses the account the Azure CLI is signed in with.
 - **A personal access token (PAT)**, as before.
 
-`AZDO_USE_MCP=true` registers the Azure DevOps MCP server (`@azure-devops/mcp`) in the server list, but a run only connects to the Playwright, Microsoft Learn and (when configured) Release Planner servers, so the setting currently has no effect.
-
 ## Sign in with your Microsoft account
 
 1. Install the Azure CLI once. On Windows: `winget install -e --id Microsoft.AzureCLI`, then reopen the app.
-2. Leave **Personal access token** empty and press **Sign in to Azure DevOps** in the settings app (or run `d365fo-agent devops-login`). The Microsoft sign-in opens in your browser; MFA and company sign-in pages work as usual.
+2. Leave **Personal access token** empty and press **Sign in to Azure DevOps** in the Settings (or run `d365fo-agent devops-login`). The Microsoft sign-in opens in your browser; MFA and company sign-in pages work as usual.
 3. **Check setup** (or `d365fo-agent doctor`) then shows `Azure DevOps: OK - … signed in as you@company.com, project … found`.
 
 The agent asks the Azure CLI for a short-lived token (`az account get-access-token`) when it needs one, so the sign-in lasts as long as the Azure CLI's (usually weeks). When it expires, the check says so and you press the button again. Your account needs access to the test plan in Azure DevOps; no Azure subscription is needed.
@@ -44,7 +42,7 @@ AZDO_TEST_SUITE_ID=5678
 
 The agent lists the suite's test cases from `Plans/<planId>/Suites/<suiteId>/testcases`, then reads the work items' title, area path, tags (split on `;`), priority and `Microsoft.VSTS.TCM.Steps`. Each step's first parameterized string becomes the action and the second the expected result. If the field has no `<step>` elements (for example plain text), the parser falls back to one step per line, without expected results. Nothing else is read from the test case: attachments such as Task recorder recordings or RSAT Excel parameter files are ignored.
 
-`d365fo-agent plans` lists the project's test plans with their ids and root suites, and `plans --plan <id>` lists the suites of one plan (read only; the Open WebUI chat has the same as `list_devops_plans` and `list_devops_suites`). `d365fo-agent discover --plan <id> --suite <id>` lists what would run; `--output <file>` writes the parsed cases as JSON.
+In the Open WebUI chat, `list_devops_plans` lists the project's test plans with their ids and root suites, and `list_devops_suites` the suites of one plan (read only). `d365fo-agent discover --plan <id> --suite <id>` lists what would run; `--output <file>` writes the parsed cases as JSON.
 
 ## Runs & results
 

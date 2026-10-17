@@ -2,15 +2,14 @@ import './load-env.js';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { resolveGitHubToken } from '../llm/github-copilot.js';
+import { DEFAULT_MODEL } from '../profiles/ai.js';
 import { productionIssue } from '../d365fo/environment.js';
 
 /**
  * Central configuration loaded from environment variables. All secrets and
  * endpoints live in `.env` so the agent stays portable.
  */
-const providerEnum = z.enum(['anthropic', 'openai', 'azure-openai', 'github-models', 'github-copilot', 'openai-compatible']);
-const stepStatusEnum = z.enum(['passed', 'failed', 'skipped', 'blocked']);
+const providerEnum = z.literal('anthropic');
 const csvList = z
   .string()
   .default('')
@@ -23,7 +22,7 @@ const csvList = z
 
 const envSchema = z.object({
   LLM_PROVIDER: providerEnum.default('anthropic'),
-  LLM_MODEL: z.string().default('claude-opus-4-5-20251101'),
+  LLM_MODEL: z.preprocess((v) => typeof v === 'string' ? v.trim() || undefined : v, z.string().default(DEFAULT_MODEL)),
   LLM_MAX_TOKENS: z.coerce.number().int().positive().default(4096),
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.1),
   // Anthropic only: cache the system prompt, tool schemas and conversation prefix between turns.
@@ -43,24 +42,6 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v?.trim() || undefined),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-4o'),
-  AZURE_OPENAI_ENDPOINT: z.string().optional(),
-  AZURE_OPENAI_API_KEY: z.string().optional(),
-  AZURE_OPENAI_DEPLOYMENT: z.string().optional(),
-  AZURE_OPENAI_API_VERSION: z.string().default('2024-10-21'),
-  GITHUB_TOKEN: z.string().optional(),
-  GITHUB_MODELS_MODEL: z.string().default('gpt-4o'),
-  GITHUB_COPILOT_TOKEN: z.string().optional(),
-  GITHUB_COPILOT_MODEL: z.string().default('gpt-4.1'),
-  // Any OpenAI-compatible chat endpoint: a local Ollama / LM Studio / llama.cpp / vLLM server, or a hosted one.
-  OPENAI_COMPATIBLE_BASE_URL: z.string().default('http://localhost:11434/v1'),
-  OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
-  OPENAI_COMPATIBLE_MODEL: z
-    .string()
-    .optional()
-    .transform((v) => v?.trim() || undefined),
-
   AZDO_ORG_URL: z.string().optional(),
   AZDO_PROJECT: z.string().optional(),
   AZDO_PAT: z.string().optional(),
@@ -74,17 +55,7 @@ const envSchema = z.object({
   AZDO_TENANT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
   AZDO_TEST_PLAN_ID: z.string().optional(),
   AZDO_TEST_SUITE_ID: z.string().optional(),
-  AZDO_USE_MCP: z
-    .string()
-    .default('false')
-    .transform((v) => v.toLowerCase() === 'true'),
-
   D365_BASE_URL: z.string().optional(),
-  // Optional Entra app registration (client credentials) for read-only OData checks; see d365fo/entra.ts.
-  D365_TENANT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
-  D365_CLIENT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
-  D365_CLIENT_SECRET: z.string().optional().transform((v) => v || undefined),
-  D365_AUTHORITY_HOST: z.string().optional().transform((v) => v?.trim() || undefined),
   D365_USERNAME: z.string().optional(),
   D365_PASSWORD: z.string().optional(),
   D365_COMPANY: z.string().default('USMF'),
@@ -115,12 +86,6 @@ const envSchema = z.object({
   PW_ACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
   LEARN_MCP_URL: z.string().default('https://learn.microsoft.com/api/mcp'),
-  // Optional: URL of a running Release Planner MCP server (FastTrack sample, e.g. http://localhost:3000/mcp).
-  RELEASE_PLANNER_MCP_URL: z
-    .string()
-    .optional()
-    .transform((v) => v?.trim() || undefined),
-
   AGENT_DRY_RUN: z
     .string()
     .default('false')
@@ -164,12 +129,6 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
-  // Replay a case from the recorded Playwright code of its last passing run before asking the AI (<KB_DIR>/replays.json).
-  // Only cases whose every expected result was checked with a recorded assertion are replayed; a failed replay falls back to the AI.
-  AGENT_REPLAY: z
-    .string()
-    .default('true')
-    .transform((v) => v.toLowerCase() !== 'false'),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
   // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.
@@ -179,20 +138,6 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() === 'true'),
   AGENT_ALLOWED_HOSTS: csvList.transform((v) => v.map((h) => h.toLowerCase())),
   AGENT_ALLOWED_TOOLS_EXTRA: csvList,
-  AGENT_RELOOP_MAX_RETRIES: z.coerce.number().int().min(0).default(1),
-  AGENT_RELOOP_RETRY_ON: z
-    .string()
-    .default('failed,blocked')
-    .transform((v) =>
-      v
-        .split(',')
-        .map((x) => x.trim().toLowerCase())
-        .filter((x): x is z.infer<typeof stepStatusEnum> => stepStatusEnum.safeParse(x).success),
-    ),
-  AGENT_RELOOP_COOLDOWN_MS: z.coerce.number().int().min(0).default(1000),
-  LLM_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
-  LLM_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
-  LLM_HTTP_RETRY_BASE_MS: z.coerce.number().int().positive().default(500),
   AZDO_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   AZDO_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
   AZDO_HTTP_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
@@ -239,39 +184,15 @@ export function validateForRun(cfg: AppConfig): string[] {
       }
       if (cfg.ANTHROPIC_BASE_URL && !isHttpUrl(cfg.ANTHROPIC_BASE_URL)) issues.push(`ANTHROPIC_BASE_URL is not a valid http(s) URL: ${cfg.ANTHROPIC_BASE_URL}`);
       break;
-    case 'openai':
-      if (!cfg.OPENAI_API_KEY) issues.push('OPENAI_API_KEY is required for provider=openai');
-      break;
-    case 'azure-openai':
-      if (!cfg.AZURE_OPENAI_ENDPOINT || !cfg.AZURE_OPENAI_API_KEY || !cfg.AZURE_OPENAI_DEPLOYMENT) {
-        issues.push('AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT are required');
-      }
-      break;
-    case 'github-models':
-      if (!cfg.GITHUB_TOKEN) issues.push('GITHUB_TOKEN is required for provider=github-models');
-      break;
-    case 'github-copilot':
-      if (!resolveGitHubToken(cfg.GITHUB_COPILOT_TOKEN)) {
-        issues.push('No GitHub Copilot credentials: set GITHUB_COPILOT_TOKEN or run `d365fo-agent copilot-login`');
-      }
-      break;
-    case 'openai-compatible':
-      if (!cfg.OPENAI_COMPATIBLE_MODEL) issues.push('OPENAI_COMPATIBLE_MODEL is required for provider=openai-compatible (e.g. the name shown by `ollama list`)');
-      if (!isHttpUrl(cfg.OPENAI_COMPATIBLE_BASE_URL)) issues.push(`OPENAI_COMPATIBLE_BASE_URL is not a valid http(s) URL: ${cfg.OPENAI_COMPATIBLE_BASE_URL}`);
-      break;
   }
 
   if (!cfg.D365_BASE_URL) issues.push('D365_BASE_URL is required to run tests');
   const prod = productionIssue(cfg);
   if (prod) issues.push(prod);
   const hasPassword = !!cfg.D365_USERNAME && !!cfg.D365_PASSWORD;
-  const hasApp = !!(cfg.D365_TENANT_ID && cfg.D365_CLIENT_ID && cfg.D365_CLIENT_SECRET);
-  const appParts = [cfg.D365_TENANT_ID, cfg.D365_CLIENT_ID, cfg.D365_CLIENT_SECRET].filter(Boolean).length;
-  if (appParts > 0 && !hasApp) issues.push('The Entra app registration needs all three of D365_TENANT_ID, D365_CLIENT_ID and D365_CLIENT_SECRET');
   if (!hasPassword) {
     if (!cfg.D365_STORAGE_STATE) {
-      // An app registration alone is enough for data-only test cases; browser steps will report blocked.
-      if (!hasApp) issues.push('Sign-in is not configured: set D365_USERNAME and D365_PASSWORD, a saved session (D365_STORAGE_STATE), or an Entra app registration (D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET)');
+      issues.push('Sign-in is not configured: set D365_USERNAME and D365_PASSWORD, or a saved session (D365_STORAGE_STATE).');
     } else if (!existsSync(resolve(cfg.D365_STORAGE_STATE))) {
       issues.push(`D365_STORAGE_STATE points at ${cfg.D365_STORAGE_STATE}, which does not exist. Run \`d365fo-agent session-login\` or set D365_USERNAME and D365_PASSWORD`);
     }
@@ -279,40 +200,7 @@ export function validateForRun(cfg: AppConfig): string[] {
   return issues;
 }
 
-/**
- * A hint for the most common mix-up: LLM_MODEL only applies to the anthropic provider, every other provider
- * reads its own variable, so setting LLM_MODEL silently changes nothing.
- */
-export function ignoredModelHint(cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const ownVariable: Partial<Record<AppConfig['LLM_PROVIDER'], string>> = {
-    openai: 'OPENAI_MODEL',
-    'azure-openai': 'AZURE_OPENAI_DEPLOYMENT',
-    'github-models': 'GITHUB_MODELS_MODEL',
-    'github-copilot': 'GITHUB_COPILOT_MODEL',
-    'openai-compatible': 'OPENAI_COMPATIBLE_MODEL',
-  };
-  const own = ownVariable[cfg.LLM_PROVIDER];
-  if (!own || !env.LLM_MODEL?.trim() || env[own]?.trim()) return undefined;
-  return `LLM_MODEL=${env.LLM_MODEL.trim()} is ignored: it only applies to provider=anthropic. Provider ${cfg.LLM_PROVIDER} uses ${own}, which is not set, so it runs ${activeModel(cfg)}.`;
-}
-
-/** The model the selected provider will actually use (each provider reads its own variable). */
-export function activeModel(cfg: AppConfig): string {
-  switch (cfg.LLM_PROVIDER) {
-    case 'anthropic':
-      return cfg.LLM_MODEL;
-    case 'openai':
-      return cfg.OPENAI_MODEL;
-    case 'azure-openai':
-      return cfg.AZURE_OPENAI_DEPLOYMENT ?? '(missing)';
-    case 'github-models':
-      return cfg.GITHUB_MODELS_MODEL;
-    case 'github-copilot':
-      return cfg.GITHUB_COPILOT_MODEL;
-    case 'openai-compatible':
-      return cfg.OPENAI_COMPATIBLE_MODEL ?? '(missing)';
-  }
-}
+export function activeModel(cfg: AppConfig): string { return cfg.LLM_MODEL; }
 
 function isHttpUrl(v: string): boolean {
   try {
