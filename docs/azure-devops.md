@@ -1,16 +1,14 @@
 # Azure DevOps setup
 
-The agent connects to Azure DevOps through its REST API (version 7.1) ([`src/devops/client.ts`](../src/devops/client.ts)). Reading test cases and uploading results always use this client. It signs in one of two ways:
+The app connects to Azure DevOps through its REST API (version 7.1) ([`src/devops/client.ts`](../src/devops/client.ts)). Reading test cases and uploading results always use this client. It signs in one of two ways:
 
 - **Your Microsoft work account (recommended).** No token to create, store or renew: the agent uses the account the Azure CLI is signed in with.
 - **A personal access token (PAT)**, as before.
 
-`AZDO_USE_MCP=true` registers the Azure DevOps MCP server (`@azure-devops/mcp`) in the server list, but a run only connects to the Playwright, Microsoft Learn and (when configured) Release Planner servers, so the setting currently has no effect.
-
 ## Sign in with your Microsoft account
 
 1. Install the Azure CLI once. On Windows: `winget install -e --id Microsoft.AzureCLI`, then reopen the app.
-2. Leave **Personal access token** empty and press **Sign in to Azure DevOps** in the settings app (or run `d365fo-agent devops-login`). The Microsoft sign-in opens in your browser; MFA and company sign-in pages work as usual.
+2. Leave **Personal access token** empty and press **Sign in to Azure DevOps** in the Settings (or run `d365fo-agent devops-login`). The Microsoft sign-in opens in your browser; MFA and company sign-in pages work as usual.
 3. **Check setup** (or `d365fo-agent doctor`) then shows `Azure DevOps: OK - … signed in as you@company.com, project … found`.
 
 The agent asks the Azure CLI for a short-lived token (`az account get-access-token`) when it needs one, so the sign-in lasts as long as the Azure CLI's (usually weeks). When it expires, the check says so and you press the button again. Your account needs access to the test plan in Azure DevOps; no Azure subscription is needed.

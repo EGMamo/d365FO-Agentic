@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { LlmHttpError, LlmUnavailableError, toUnavailable } from './errors.js';
-import { OpenAiCompatibleProvider } from './openai-compatible.js';
 import { AgentOrchestrator } from '../agent/orchestrator.js';
 import { runCases } from '../core/runner.js';
 import { fetchWithResilience, parseRetryAfterMs, retryDelayMs } from '../utils/http.js';
@@ -35,23 +34,6 @@ describe('toUnavailable', () => {
     assert.equal(toUnavailable(new LlmHttpError('not found', 404)), undefined);
     assert.equal(toUnavailable(new Error('something else')), undefined);
     assert.equal(toUnavailable(undefined), undefined);
-  });
-});
-
-describe('openai-compatible provider errors', () => {
-  const realFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = realFetch; });
-
-  it('throws an LlmHttpError carrying the status', async () => {
-    globalThis.fetch = async () => new Response('Sorry, you have exceeded your rate limit', { status: 429, headers: { 'retry-after': '5868' } });
-    const llm = new OpenAiCompatibleProvider({ name: 'p', baseUrl: 'https://x/y', apiKey: 'k', model: 'm', maxTokens: 1, temperature: 0, maxRetries: 0 });
-    await assert.rejects(llm.complete({ messages: [{ role: 'user', content: 'hi' }] }), (e: unknown) => {
-      assert.ok(e instanceof LlmHttpError);
-      assert.equal(e.status, 429);
-      assert.equal(e.retryAfterMs, 5_868_000);
-      assert.match(e.message, /p error 429: Sorry, you have exceeded/);
-      return true;
-    });
   });
 });
 
@@ -111,14 +93,12 @@ function orchestrator(complete: () => Promise<LlmCompleteResponse>, over: Partia
   const calls = { llm: 0 };
   const build = async () => {
     const cfg = {
-      LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 10,
-      AGENT_RELOOP_MAX_RETRIES: 2, AGENT_RELOOP_RETRY_ON: ['failed', 'blocked'], AGENT_RELOOP_COOLDOWN_MS: 0,
-      D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_COMPANY: 'USMF', REPORT_DIR: await dir, ...over,
+      LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 10, D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_COMPANY: 'USMF', REPORT_DIR: await dir, ...over,
     } as AppConfig;
     const llm = { name: 'fake', async complete() { calls.llm += 1; return complete(); } };
     const mcp = { async listTools() { return []; }, async callTool() { return { content: 'page', isError: false }; } };
-    const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {} };
-    return new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never);
+
+    return new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright', 'learn'] } as never);
   };
   return { calls, run: async (t: TestCase) => (await build()).runTestCase(t) };
 }
@@ -131,7 +111,7 @@ describe('orchestrator and LLM outages', () => {
   });
 
   it('still records a per-request LLM error (bad request) as a blocked case', async () => {
-    const o = orchestrator(async () => { throw new LlmHttpError('provider error 400: context too long', 400); }, { AGENT_RELOOP_MAX_RETRIES: 0 });
+    const o = orchestrator(async () => { throw new LlmHttpError('provider error 400: context too long', 400); }, { });
     const res = await o.run(tc('B'));
     assert.equal(res.outcome, 'blocked');
     assert.match(res.errorMessage ?? '', /Transient orchestration failure.*400/);
@@ -142,7 +122,7 @@ describe('orchestrator and LLM outages', () => {
       { text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: 'report_step', arguments: { index: 1, status: 'blocked', observed: 'Sign-in page asked for MFA' } }] },
       { text: '', stopReason: 'tool_use', toolCalls: [{ id: '2', name: 'finish_test', arguments: { outcome: 'blocked' } }] },
     ];
-    const res = await orchestrator(async () => turns.shift()!, { AGENT_RELOOP_MAX_RETRIES: 0 }).run(tc('C'));
+    const res = await orchestrator(async () => turns.shift()!, { }).run(tc('C'));
     assert.equal(res.outcome, 'blocked');
     assert.equal(res.errorMessage, 'Step 1 blocked: Sign-in page asked for MFA');
   });

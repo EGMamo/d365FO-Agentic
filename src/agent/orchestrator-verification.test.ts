@@ -19,8 +19,7 @@ const finish = (outcome = 'passed') => call('finish_test', { outcome }, 'fin');
 async function run(turns: LlmCompleteResponse[], over: Partial<AppConfig> = {}, callTool?: (s: string, t: string, a: Record<string, unknown>, ms?: number) => Promise<{ content: unknown; isError: boolean }>, testCase = tc) {
   const dir = await mkdtemp(join(tmpdir(), 'orch-'));
   const cfg = {
-    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 30, AGENT_RELOOP_MAX_RETRIES: 0,
-    AGENT_RELOOP_RETRY_ON: [], AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir, D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com',
+    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 30, REPORT_DIR: dir, D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com',
     D365_COMPANY: 'USMF', AGENT_TOOL_TIMEOUT_MS: 60000, AGENT_NAV_TIMEOUT_MS: 90000, ...over,
   } as AppConfig;
   const toolResults: string[] = [];
@@ -33,8 +32,7 @@ async function run(turns: LlmCompleteResponse[], over: Partial<AppConfig> = {}, 
     },
   };
   const mcp = { async listTools() { return []; }, callTool: callTool ?? (async () => ({ content: 'page', isError: false })) };
-  const kb = { retrieve: () => [], recipeFor: () => undefined, upsert() {}, async save() {}, recordOutcome() { return 0; } };
-  const result = await new AgentOrchestrator({ cfg, llm, mcp, kb, mcpServers: ['playwright', 'learn'] } as never).runTestCase(testCase);
+  const result = await new AgentOrchestrator({ cfg, llm, mcp, mcpServers: ['playwright', 'learn'] } as never).runTestCase(testCase);
   return { result, toolResults, dir };
 }
 

@@ -3,7 +3,6 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import type { AppConfig } from '../config/index.js';
 
 /**
  * Open WebUI for the desktop app, without Docker. The app ships `uv` (a single binary); on first start uv downloads a
@@ -122,32 +121,11 @@ export async function install(p: OpenWebUiPaths, onLine: (line: string) => void,
 }
 
 export const PROMPT_SUGGESTIONS = [
-  { title: ['Check my setup', 'for the profile in use'], content: 'Which profile is in use? Check its setup and tell me in plain words what is missing.' },
-  { title: ['Dry-run the examples', 'and summarise the results'], content: 'Dry-run the test cases in examples/testcases, wait for the run to finish and tell me what passed and what failed, with the reason.' },
-  { title: ['Write a test case', 'from a description'], content: 'Write a test case in examples/testcases: open All vendors, create a vendor with a new account number, save, and check the vendor appears in the list.' },
-  { title: ['What has it learned?', 'about F&O forms'], content: 'List the F&O forms the agent has learned so far and what it knows about each.' },
-  { title: ['Upload the last run', 'to Azure DevOps'], content: 'Show the latest run in the history and upload it to Azure DevOps.' },
+  { title: ['Check my setup', 'before testing'], content: 'Check the active environment setup and explain anything missing.' },
+  { title: ['Run selected tests', 'from a local folder or DevOps'], content: 'Help me select test cases. Show the environment and cases and ask me to confirm before starting a real run.' },
+  { title: ['Explain my results', 'and the next action'], content: 'Show the latest test run results and explain any failed or blocked steps.' },
+  { title: ['Upload results', 'to Azure DevOps'], content: 'Show the latest run and ask me to confirm before uploading its results to Azure DevOps.' },
 ];
-
-/**
- * The chat model Open WebUI starts with, taken from the profile in use when it speaks an OpenAI-style API.
- * Anthropic has an OpenAI-compatible endpoint; GitHub Copilot does not, so it is left for the user to add.
- */
-export function chatConnection(cfg: AppConfig | undefined): { url: string; key: string } | undefined {
-  if (!cfg) return undefined;
-  switch (cfg.LLM_PROVIDER) {
-    case 'openai':
-      return cfg.OPENAI_API_KEY ? { url: 'https://api.openai.com/v1', key: cfg.OPENAI_API_KEY } : undefined;
-    case 'anthropic':
-      return cfg.ANTHROPIC_API_KEY && !cfg.ANTHROPIC_BASE_URL ? { url: 'https://api.anthropic.com/v1', key: cfg.ANTHROPIC_API_KEY } : undefined;
-    case 'github-models':
-      return cfg.GITHUB_TOKEN ? { url: 'https://models.inference.ai.azure.com', key: cfg.GITHUB_TOKEN } : undefined;
-    case 'openai-compatible':
-      return { url: cfg.OPENAI_COMPATIBLE_BASE_URL.replace(/\/+$/, ''), key: cfg.OPENAI_COMPATIBLE_API_KEY ?? '' };
-    default:
-      return undefined;
-  }
-}
 
 /** The D365FO tool server as Open WebUI stores it. */
 export function toolConnection(opts: { toolUrl: string; toolKey: string }): Record<string, unknown> {
@@ -216,19 +194,31 @@ export async function syncChatModel(baseUrl: string, conn: { url: string; key: s
 }
 
 /** Environment for `open-webui serve`. */
-export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; chat?: { url: string; key: string } }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; chat?: { url: string; key: string }; model?: string }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
-    ...base,
+    // These credentials belong to the Node service; Python only needs the local bridge token.
+    ...Object.fromEntries(Object.entries(base).filter(([key]) => !['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'D365_USERNAME', 'D365_PASSWORD', 'D365_CLIENT_SECRET', 'AZDO_PAT'].includes(key))),
     DATA_DIR: opts.dataDir,
     // One person on one computer: no sign-up screen.
     WEBUI_AUTH: 'False',
+    // App-managed settings take effect on existing installs too; conversation data stays in the same database.
+    ENABLE_PERSISTENT_CONFIG: 'False',
+    DEFAULT_MODELS: opts.model ?? '',
+    DEFAULT_MODEL_PARAMS: JSON.stringify({ function_calling: 'native' }),
+    DEFAULT_MODEL_METADATA: JSON.stringify({ toolIds: ['server:d365fo'], capabilities: { vision: false, file_upload: false, web_search: false, image_generation: false, code_interpreter: false } }),
     // Open WebUI's slim mode: no local embeddings, speech or vector database (those packages are not installed).
     USE_SLIM_DOCKER: 'true',
     ...Object.fromEntries(DISABLED_FEATURES.map((f) => [f, 'False'])),
     // Open WebUI reads these on its first start and keeps them in its own settings after that (the tool server is written again on every start: syncToolServer).
     TOOL_SERVER_CONNECTIONS: JSON.stringify([toolConnection(opts)]),
     DEFAULT_PROMPT_SUGGESTIONS: JSON.stringify(PROMPT_SUGGESTIONS),
-    ...(opts.chat ? { ENABLE_OPENAI_API: 'True', OPENAI_API_BASE_URL: opts.chat.url, OPENAI_API_KEY: opts.chat.key } : {}),
+    ...(opts.chat ? { ENABLE_OPENAI_API: 'True', OPENAI_API_BASE_URL: opts.chat.url, OPENAI_API_KEY: opts.chat.key, OPENAI_API_BASE_URLS: opts.chat.url, OPENAI_API_KEYS: opts.chat.key, OPENAI_API_CONFIGS: JSON.stringify({ '0': { enable: true, model_ids: ['d365fo-claude'] } }) } : {}),
+    USER_PERMISSIONS_CHAT_FILE_UPLOAD: 'False',
+    USER_PERMISSIONS_CHAT_WEB_UPLOAD: 'False',
+    USER_PERMISSIONS_CHAT_STT: 'False',
+    USER_PERMISSIONS_CHAT_TTS: 'False',
+    USER_PERMISSIONS_CHAT_CALL: 'False',
+    USER_PERMISSIONS_CHAT_MULTIPLE_MODELS: 'False',
     BYPASS_EMBEDDING_AND_RETRIEVAL: 'True',
     SCARF_NO_ANALYTICS: 'true',
     DO_NOT_TRACK: 'true',

@@ -9,11 +9,8 @@ const specs = (cfg: Partial<AppConfig>) =>
   }).specs;
 
 describe('buildDefaultManager', () => {
-  it('registers the Release Planner MCP server only when its URL is set', () => {
-    assert.ok(!specs({}).has('release-planner'));
-    const s = specs({ RELEASE_PLANNER_MCP_URL: 'http://localhost:3000/mcp' });
-    assert.deepEqual(s.get('release-planner'), { name: 'release-planner', transport: 'http', url: 'http://localhost:3000/mcp' });
-    assert.ok(s.has('playwright') && s.has('learn'));
+  it('registers only the browser and Microsoft Learn', () => {
+    assert.deepEqual([...specs({}).keys()], ['playwright', 'learn']);
   });
 
   it('turns on the testing tools, merged with devtools when tracing', () => {

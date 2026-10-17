@@ -1,1140 +1,1022 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>D365FO Agent</title>
-<link rel="icon" href="/icon.svg" type="image/svg+xml">
-<style>
-  :root { --bg:#f5f6f8; --panel:#fff; --sunk:#f0f2f5; --text:#1b1f27; --muted:#5d6878; --line:#d9dde4; --accent:#1f5fd6; --accent-soft:#e8f0fe; --accent-text:#fff; --danger:#b42318; --danger-soft:#fdecea; --ok:#067647; --ok-soft:#e6f6ee; --warn:#8a5a00; --warn-soft:#fff4e0; --radius:12px; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#11141a; --panel:#1a1f28; --sunk:#141820; --text:#e7eaf0; --muted:#9aa5b5; --line:#2f3644; --accent:#6b9cf5; --accent-soft:#1c2a45; --accent-text:#0b1220; --danger:#f97066; --danger-soft:#3a1b1a; --ok:#47cd89; --ok-soft:#13301f; --warn:#e0a83a; --warn-soft:#35280f; } }
-  * { box-sizing:border-box; }
-  [hidden] { display:none !important; }
-  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-  header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:.75rem; padding:.55rem 1.25rem; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  header img { width:28px; height:28px; }
-  header h1 { font-size:1.02rem; margin:0; white-space:nowrap; }
-  nav.tabs { display:flex; gap:2px; margin-left:.75rem; flex-wrap:wrap; }
-  nav.tabs button { background:none; border:0; border-bottom:2px solid transparent; padding:.5rem .8rem; color:var(--muted); font:inherit; cursor:pointer; border-radius:6px 6px 0 0; }
-  nav.tabs button:hover { color:var(--text); background:var(--sunk); }
-  nav.tabs button[aria-selected="true"] { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
-  #using { margin-left:auto; display:flex; align-items:center; gap:.4rem; font-size:.85rem; padding:.3rem .7rem; border-radius:99px; border:1px solid var(--line); background:var(--sunk); color:var(--text); cursor:pointer; max-width:46ch; }
-  #using .dot { width:.55rem; height:.55rem; border-radius:50%; background:var(--ok); flex:none; }
-  #using.none .dot { background:var(--warn); }
-  #using span.t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  main { padding:1.25rem; max-width:1180px; margin:0 auto; }
-  .view { display:none; } .view.active { display:block; }
-  .layout { display:grid; grid-template-columns:270px minmax(0,1fr); gap:1.25rem; align-items:start; }
-  @media (max-width:820px) { .layout { grid-template-columns:1fr; } }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:1rem 1.1rem; margin-bottom:1rem; }
-  h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 .6rem; font-weight:600; }
-  h3 { font-size:1.15rem; margin:0; }
-  p { margin:.3rem 0 .8rem; }
-  .muted { color:var(--muted); } .small { font-size:.85rem; }
-  code { font:12.5px ui-monospace,Menlo,Consolas,monospace; background:var(--sunk); padding:.05rem .3rem; border-radius:4px; }
-  a { color:var(--accent); }
-
-  button.btn, a.btn { font:inherit; padding:.45rem .85rem; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:.35rem; white-space:nowrap; }
-  button.btn:hover, a.btn:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); color:var(--accent-text); border-color:var(--accent); font-weight:600; }
-  button.danger { color:var(--danger); } button.danger:hover { border-color:var(--danger); }
-  button.link { background:none; border:0; padding:0; color:var(--accent); font:inherit; cursor:pointer; text-decoration:underline; }
-  button:disabled { opacity:.5; cursor:default; }
-  input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  .actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-  .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-  .spacer { flex:1; }
-
-  .item { display:flex; align-items:center; gap:.5rem; width:100%; text-align:left; padding:.5rem .65rem; border:1px solid transparent; border-radius:8px; background:none; color:inherit; font:inherit; cursor:pointer; }
-  .item:hover { background:var(--sunk); }
-  .item[aria-current="true"] { border-color:var(--accent); background:var(--accent-soft); }
-  .item small { display:block; color:var(--muted); }
-  .pill { font-size:.72rem; padding:.1rem .5rem; border-radius:99px; background:var(--accent); color:var(--accent-text); white-space:nowrap; }
-  .pill.right { margin-left:auto; }
-  .pill.bad { background:var(--danger); color:#fff; }
-
-  fieldset.group { border:1px solid var(--line); border-radius:var(--radius); padding:.9rem 1rem .5rem; margin:0 0 1rem; min-width:0; }
-  fieldset.group > legend { font-weight:600; padding:0 .4rem; font-size:1rem; }
-  .gdesc { color:var(--muted); font-size:.87rem; margin:-.1rem 0 .8rem; }
-  .field { display:grid; grid-template-columns:210px minmax(0,1fr); gap:.2rem .9rem; align-items:start; margin-bottom:.7rem; }
-  @media (max-width:820px) { .field { grid-template-columns:1fr; } }
-  .field > label { font-size:.92rem; padding-top:.42rem; }
-  .field .req { color:var(--danger); margin-left:.15rem; }
-  .field .help, .field .ferr { grid-column:2; font-size:.82rem; }
-  .field .help { color:var(--muted); }
-  .field .ferr { color:var(--danger); }
-  @media (max-width:820px) { .field .help, .field .ferr { grid-column:1; } }
-  input[type=text], input[type=password], input[type=number], select, textarea { width:100%; font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); }
-  input[aria-invalid="true"] { border-color:var(--danger); }
-  input::placeholder, textarea::placeholder { color:var(--muted); opacity:.75; }
-  textarea { resize:vertical; min-height:2.4rem; }
-  .withbtn { display:flex; gap:.4rem; } .withbtn input { flex:1; min-width:0; }
-  details.more { margin:.2rem 0 .6rem; }
-  details.more > summary { cursor:pointer; color:var(--accent); font-size:.9rem; padding:.25rem 0; width:max-content; }
-  details.more[open] > summary { margin-bottom:.6rem; }
-  .custom { display:grid; grid-template-columns:1fr 1.5fr auto; gap:.5rem; margin-bottom:.5rem; }
-
-  .checklist { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:.6rem; margin:0 0 1rem; padding:0; list-style:none; }
-  .checklist li { display:flex; gap:.6rem; align-items:flex-start; padding:.6rem .75rem; border-radius:10px; border:1px solid var(--line); background:var(--panel); }
-  .checklist li.ok { background:var(--ok-soft); border-color:transparent; }
-  .checklist li.todo { background:var(--warn-soft); border-color:transparent; }
-  .checklist .ico { font-weight:700; width:1.3rem; height:1.3rem; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; flex:none; font-size:.8rem; margin-top:.1rem; }
-  .checklist li.ok .ico { background:var(--ok); color:var(--panel); }
-  .checklist li.todo .ico { background:var(--warn); color:var(--panel); }
-  .checklist li > div { min-width:0; overflow-wrap:anywhere; }
-  .checklist b { display:block; font-size:.92rem; } .checklist span.d { font-size:.82rem; color:var(--muted); }
-
-  .savebar { position:sticky; bottom:0; display:flex; align-items:center; gap:.6rem; padding:.7rem 1rem; margin:0 -1.1rem -1rem; background:var(--panel); border-top:1px solid var(--line); border-radius:0 0 var(--radius) var(--radius); flex-wrap:wrap; }
-  .savebar .state { font-size:.88rem; color:var(--muted); }
-  .savebar .state.dirty { color:var(--warn); font-weight:600; }
-
-  .banner { border-radius:10px; padding:.65rem .85rem; font-size:.9rem; margin-bottom:1rem; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
-  .banner.info { background:var(--accent-soft); } .banner.warn { background:var(--warn-soft); } .banner.bad { background:var(--danger-soft); } .banner.good { background:var(--ok-soft); }
-  .empty { color:var(--muted); padding:1.5rem 1rem; text-align:center; }
-  .welcome { text-align:center; padding:2rem 1rem; }
-  .welcome ol { text-align:left; max-width:34rem; margin:1rem auto; padding-left:1.3rem; } .welcome li { margin-bottom:.4rem; }
-
-  pre { background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:.75rem; overflow:auto; max-height:460px; white-space:pre-wrap; word-break:break-word; font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; margin:0; }
-  ul.checks { list-style:none; padding:0; margin:.4rem 0 .8rem; }
-  ul.checks li { display:flex; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--line); font-size:.92rem; }
-  ul.checks li:last-child { border-bottom:0; }
-  ul.checks .ico { flex:none; width:1.25rem; text-align:center; font-weight:700; }
-  .s-ok .ico { color:var(--ok); } .s-warn .ico { color:var(--warn); } .s-bad .ico { color:var(--danger); } .s-info .ico { color:var(--muted); }
-  ul.checks .v { color:var(--muted); word-break:break-word; }
-
-  .seg { display:inline-flex; justify-self:start; flex-wrap:wrap; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .seg label { padding:.4rem .9rem; cursor:pointer; font-size:.92rem; }
-  .seg input { position:absolute; opacity:0; pointer-events:none; }
-  .seg label:has(input:checked) { background:var(--accent); color:var(--accent-text); font-weight:600; }
-  .seg label:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:2px; }
-  label.check { display:inline-flex; align-items:center; gap:.4rem; font-size:.92rem; cursor:pointer; }
-  #runStatus { font-size:.9rem; padding:.2rem .7rem; border-radius:99px; }
-  #runStatus.running { background:var(--accent-soft); color:var(--accent); }
-  #runStatus.passed { background:var(--ok-soft); color:var(--ok); }
-  #runStatus.failed, #runStatus.stopped { background:var(--danger-soft); color:var(--danger); }
-  #progress { font-size:.9rem; color:var(--muted); margin-top:.6rem; min-height:1.3em; }
-  .spin { display:inline-block; width:.8rem; height:.8rem; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
-
-  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:.6rem; margin-bottom:1rem; }
-  .tile { border:1px solid var(--line); border-radius:10px; padding:.6rem .8rem; background:var(--panel); }
-  .tile b { display:block; font-size:1.5rem; line-height:1.2; } .tile span { font-size:.82rem; color:var(--muted); }
-  .tile.passed b { color:var(--ok); } .tile.failed b, .tile.blocked b { color:var(--danger); }
-  .tablewrap { overflow-x:auto; }
-  table { width:100%; border-collapse:collapse; font-size:14px; }
-  th, td { text-align:left; padding:.5rem .55rem; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; white-space:nowrap; }
-  .badge { display:inline-block; font-size:.75rem; font-weight:600; padding:.1rem .55rem; border-radius:99px; text-transform:uppercase; letter-spacing:.03em; }
-  .badge.passed { background:var(--ok-soft); color:var(--ok); } .badge.failed, .badge.blocked { background:var(--danger-soft); color:var(--danger); } .badge.skipped { background:var(--sunk); color:var(--muted); }
-  .passed { color:var(--ok); } .failed, .blocked { color:var(--danger); } .skipped { color:var(--muted); }
-  .cat { display:inline-block; font-size:.75rem; padding:.05rem .45rem; border-radius:6px; border:1px solid var(--line); margin-bottom:.2rem; }
-  .hint { font-size:.85rem; color:var(--muted); }
-  td details summary { cursor:pointer; color:var(--accent); font-size:.85rem; }
-  .steplist { margin:.4rem 0 0; padding:0; list-style:none; font-size:.87rem; } .steplist li { padding:.15rem 0; }
-  .totals span { margin-right:.6rem; white-space:nowrap; }
-
-  .steps .step { display:grid; grid-template-columns:2rem 1fr 1fr auto; gap:.5rem; align-items:start; margin-bottom:.5rem; }
-  @media (max-width:820px) { .steps .step { grid-template-columns:2rem 1fr; } }
-  .steps .num { color:var(--muted); padding-top:.5rem; text-align:right; }
-  .err { color:var(--danger); font-size:.87rem; min-height:1.2em; margin-top:.4rem; }
-
-  #toast { position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); padding:.6rem 1rem; border-radius:8px; opacity:0; pointer-events:none; transition:opacity .2s; max-width:90vw; z-index:20; }
-  #toast.show { opacity:1; } #toast.bad { background:var(--danger); color:#fff; }
-  dialog { border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); color:var(--text); padding:1.25rem; width:min(440px,92vw); }
-  dialog::backdrop { background:rgba(0,0,0,.45); }
-  dialog label { display:block; margin:.7rem 0 .25rem; font-size:.9rem; }
-  dialog h3 { margin-bottom:.4rem; }
-  dialog .row { justify-content:flex-end; margin-top:1.1rem; }
-
-  .checks { display:flex; flex-direction:column; gap:.15rem; max-height:16rem; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:.3rem .5rem; background:var(--sunk); }
-  .checks label.check { display:flex; align-items:baseline; gap:.5rem; padding:.2rem 0; } .checks small { color:var(--muted); margin-left:.3rem; }
-  /* Inside the desktop app the side strip does the navigation. */
-  body.embedded > header { display:none; }
-</style>
-</head>
-<body>
-<script>if (location.hash === '#embedded') document.body.classList.add('embedded');</script>
-<header>
-  <img src="/icon.svg" alt="">
-  <h1>D365FO Agent</h1>
-  <nav class="tabs" role="tablist" aria-label="Sections">
-    <button role="tab" data-tab="profiles" aria-selected="true" type="button">Setup</button>
-    <button role="tab" data-tab="models" aria-selected="false" type="button">AI models</button>
-    <button role="tab" data-tab="cases" aria-selected="false" type="button">Test cases</button>
-    <button role="tab" data-tab="run" aria-selected="false" type="button">Run</button>
-    <button role="tab" data-tab="results" aria-selected="false" type="button">Results</button>
-    <button role="tab" data-tab="history" aria-selected="false" type="button">History</button>
-  </nav>
-  <button id="using" type="button" title="Open Setup"><span class="dot"></span><span class="t" id="usingText">Loading…</span></button>
-</header>
-<main>
-  <section class="view active" id="tab-profiles" role="tabpanel">
-    <div class="layout">
-      <aside class="panel">
-        <h2>Profiles</h2>
-        <p class="muted small">One per environment, for example "Sandbox UAT" and "Dev".</p>
-        <div id="list"></div>
-        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="newBtn" type="button">+ New profile</button></div>
-        <p class="muted small" id="activeInfo" style="margin:.9rem 0 .4rem"></p>
-        <button class="btn" id="noneBtn" type="button" hidden>Use the .env file instead</button>
-        <p class="muted small" id="homeInfo" style="margin-top:.9rem;word-break:break-all"></p>
-      </aside>
-      <section class="panel" id="editor" aria-live="polite"></section>
-    </div>
-  </section>
-
-  <section class="view" id="tab-models" role="tabpanel">
-    <div class="layout">
-      <aside class="panel">
-        <h2>AI models</h2>
-        <p class="muted small">Set up each AI connection once. Profiles and Chat pick one from this list.</p>
-        <div id="modelList"></div>
-        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="modelNew" type="button">+ New AI model</button></div>
-      </aside>
-      <section class="panel" id="modelEditor" aria-live="polite"></section>
-    </div>
-  </section>
-
-  <section class="view" id="tab-cases" role="tabpanel">
-    <div class="layout">
-      <aside class="panel">
-        <h2>Folder</h2>
-        <div class="withbtn" style="margin-bottom:.6rem"><input type="text" id="caseDir" value="examples/testcases" aria-label="Test-case folder"><button class="btn" id="caseDirLoad" type="button">Open</button></div>
-        <div id="caseList"></div>
-        <div class="actions" style="margin-top:.75rem"><button class="btn primary" id="caseNew" type="button">+ New test case</button></div>
-      </aside>
-      <section class="panel" id="caseEditor" aria-live="polite"></section>
-    </div>
-  </section>
-
-  <section class="view" id="tab-run" role="tabpanel">
-    <div id="runBanner"></div>
-    <div class="panel">
-      <h2>What to run</h2>
-      <div class="field">
-        <label id="srcLabel">Test cases from</label>
-        <div class="seg" role="radiogroup" aria-labelledby="srcLabel">
-          <label><input type="radio" name="source" value="local" checked> A folder on this computer</label>
-          <label><input type="radio" name="source" value="devops"> Azure DevOps</label>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>D365FO Agent</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f8fafc;
+        --panel: white;
+        --fg: #17212f;
+        --muted: #64748b;
+        --line: #dbe1e8;
+        --accent: #2563eb;
+        --bad: #b91c1c;
+        --good: #15803d;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #17181b;
+          --panel: #202226;
+          --fg: #eceef3;
+          --muted: #a0a7b4;
+          --line: #383c43;
+          --accent: #7eabff;
+          --bad: #ff9696;
+          --good: #87d9a0;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--line);
+      }
+      header strong {
+        margin-right: auto;
+      }
+      nav {
+        display: flex;
+        gap: 8px;
+      }
+      .embedded nav {
+        display: none;
+      }
+      main {
+        max-width: 1100px;
+        margin: auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 6px;
+      }
+      h2 {
+        font-size: 18px;
+      }
+      p {
+        color: var(--muted);
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 9px 12px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: transparent;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      a {
+        color: var(--accent);
+      }
+      .card {
+        padding: 20px;
+        margin: 18px 0;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .row input,
+      .row select {
+        flex: 1;
+        min-width: 100px;
+      }
+      .field {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 12px;
+        align-items: center;
+        margin: 12px 0;
+      }
+      .help {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .field small {
+        grid-column: 2;
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 18px;
+        flex-wrap: wrap;
+      }
+      details {
+        margin: 16px 0;
+      }
+      summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+      textarea {
+        min-height: 85px;
+        resize: vertical;
+        width: 100%;
+      }
+      .step {
+        border-bottom: 1px solid var(--line);
+        padding: 12px 0;
+      }
+      .case {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .case input {
+        flex: none;
+      }
+      .link {
+        border: 0;
+        padding: 0;
+        text-align: left;
+        background: none;
+        color: var(--accent);
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 330px;
+        overflow: auto;
+        font:
+          13px/1.5 ui-monospace,
+          monospace;
+      }
+      .bad {
+        color: var(--bad);
+      }
+      .good {
+        color: var(--good);
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #notice {
+        position: static;
+        margin: 0;
+        padding: 10px 24px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      #runPanel {
+        border-left: 4px solid var(--accent);
+      }
+      .badge {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      @media (max-width: 650px) {
+        .field {
+          grid-template-columns: 1fr;
+          gap: 5px;
+        }
+        .field small {
+          grid-column: 1;
+        }
+        header {
+          flex-wrap: wrap;
+        }
+        main {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>D365FO Agent</strong><span id="environment" class="badge">No environment selected</span>
+      <nav aria-label="App">
+        <button data-tab="cases">Tests</button><button data-tab="results">Results</button
+        ><button data-tab="settings">Settings</button>
+      </nav>
+    </header>
+    <div id="notice" role="status" hidden></div>
+    <main>
+      <section id="runPanel" class="card" hidden aria-label="Current run">
+        <div class="row">
+          <strong id="runStatus"></strong><button id="stopRun">Stop</button
+          ><button id="openRunResults">View results</button>
         </div>
-      </div>
-      <div class="field" data-src="local"><label for="local">Folder</label><input type="text" id="local" value="examples/testcases">
-        <div class="help">Inside the project folder. Edit the cases on the Test cases tab.</div></div>
-      <div class="field" data-src="devops" hidden><label for="plan">Test plan and suite</label>
-        <div class="row"><input type="text" id="plan" placeholder="Plan ID (default from the profile)" style="width:16rem" inputmode="numeric"><input type="text" id="suite" placeholder="Suite ID (optional)" style="width:14rem" inputmode="numeric"></div>
-        <div class="help">The whole plan or suite runs. Needs the Azure DevOps settings in the profile.</div></div>
-      <div class="field" data-src="local"><label id="casesLabel">Test cases</label>
-        <div>
-          <div class="row" style="margin-bottom:.3rem"><b id="selCount" role="status"></b><button class="link small" id="selAll" type="button">Select all</button><button class="link small" id="selNone" type="button">Clear</button></div>
-          <div class="checks" id="caseChecks" role="group" aria-labelledby="casesLabel"></div><div class="help" id="caseHelp"></div>
-        </div></div>
-      <div class="field" data-src="devops" hidden><label for="caseIdText">One case only</label>
-        <input type="text" id="caseIdText" placeholder="Work item ID (optional)" style="max-width:16rem"></div>
-      <div class="field">
-        <label>Options</label>
-        <div>
-          <div class="row" style="gap:1.2rem">
-            <label class="check"><input type="checkbox" id="dryRun"> Dry run</label>
-            <label class="check"><input type="checkbox" id="upload"> Upload results to Azure DevOps</label>
+        <pre id="runLog"></pre>
+      </section>
+      <section id="tab-cases">
+        <h1>Tests</h1>
+        <p>Select cases from a local folder or Azure DevOps, then run them in the active environment.</p>
+        <div class="card">
+          <div class="row">
+            <label for="source">Source</label
+            ><select id="source">
+              <option value="local">Local files</option>
+              <option value="devops">Azure DevOps</option></select
+            ><span id="localSource"
+              ><input id="caseDir" aria-label="Test-case folder" value="examples/testcases" /></span
+            ><span id="devopsSource" hidden
+              ><input id="plan" aria-label="Test plan ID" placeholder="Plan ID" inputmode="numeric" /><input
+                id="suite"
+                aria-label="Test suite ID"
+                placeholder="Suite ID"
+                inputmode="numeric" /></span
+            ><button id="loadCases">Load cases</button><button id="newCase">New case</button>
           </div>
-          <div class="help" style="margin-top:.3rem">A dry run opens pages and reads them but does not click or type anything that changes data. Try it first on a new environment.</div>
-          <details class="more" style="margin-top:.5rem"><summary>More options</summary>
-            <div class="field"><label for="tags">Only tags</label><input type="text" id="tags" placeholder="smoke, vendor"></div>
-            <div class="field"><label for="modules">Only modules</label><input type="text" id="modules" placeholder="Accounts payable"></div>
-            <div class="field"><label for="retries">Retries per case</label><input type="number" id="retries" min="0" max="10" placeholder="From the profile" style="max-width:12rem"></div>
-            <div class="field"><label for="maxPrio">Most urgent priority</label><select id="maxPrio" style="max-width:12rem"><option value="">Any priority</option><option value="1">1 only</option><option value="2">1 to 2</option><option value="3">1 to 3</option></select></div>
-            <div class="field"><label></label><label class="check"><input type="checkbox" id="sortPrio"> Run the most urgent cases first (by priority)</label></div>
-            <div class="field"><label for="runModel">AI model for this run</label><select id="runModel" style="max-width:24rem"></select><div class="help">Same as --model in the terminal. The profile is not changed.</div></div>
+          <div id="caseList"><p>Load cases to begin.</p></div>
+          <div class="actions">
+            <button id="selectAll">Select all</button><button id="runSelected" class="primary">Run selected</button>
+          </div>
+          <details>
+            <summary>Advanced diagnostic</summary>
+            <label
+              ><input type="checkbox" id="dryRun" /> Skip clicks and typing. This does not validate the business
+              workflow.</label
+            >
           </details>
         </div>
-      </div>
-      <div class="actions" style="margin-top:.4rem">
-        <button class="btn primary" id="start" type="button">▶ Run</button>
-        <button class="btn danger" id="stop" type="button" disabled>Stop</button>
-        <span id="runStatus" role="status"></span>
-        <span class="spacer"></span>
-        <button class="btn" id="toResults" type="button" hidden>View results →</button>
-      </div>
-      <div id="progress" aria-live="polite"></div>
-    </div>
-    <div class="panel">
-      <div class="actions" style="margin-bottom:.5rem"><h2 style="margin:0">Live log</h2><span class="spacer"></span><button class="btn" id="copyLog" type="button">Copy</button></div>
-      <pre id="log" tabindex="0">Nothing has run yet. Choose what to run and press Run.</pre>
-    </div>
-  </section>
-
-  <section class="view" id="tab-results" role="tabpanel">
-    <div class="layout">
-      <aside class="panel">
-        <h2>Runs</h2>
-        <label class="check small" style="margin-bottom:.5rem"><input type="checkbox" id="resMine" checked> <span id="resMineText">Only the profile in use</span></label>
-        <div id="resultRuns"></div>
-      </aside>
-      <section class="panel">
-        <div class="actions" style="margin-bottom:.3rem">
-          <h3 id="resultsTitle">Latest run</h3>
-          <span class="spacer"></span>
-          <label class="check"><input type="checkbox" id="onlyBad"> Only cases that did not pass</label>
-          <a class="btn" id="reportLink" href="/report" target="_blank" rel="noopener">Full report ↗</a>
-          <a class="btn" id="jsonLink" href="/download/results.json">JSON</a>
-          <a class="btn" id="junitLink" href="/download/results.junit.xml">JUnit XML</a>
-          <span id="resultUpload"></span>
-        </div>
-        <p class="muted small" id="resultMeta" style="margin:0 0 .8rem"></p>
-        <div id="results"></div>
+        <div id="caseEditor" class="card" hidden></div>
       </section>
-    </div>
-  </section>
+      <section id="tab-results" hidden>
+        <h1>Results</h1>
+        <p>Current and previous runs, with the evidence behind each outcome.</p>
+        <div class="card">
+          <div class="row">
+            <select id="runPicker" aria-label="Choose a run"></select
+            ><button id="refreshResults">Refresh</button>
+          </div>
+          <div id="resultDetail"></div>
+        </div>
+      </section>
+      <section id="tab-settings" hidden>
+        <h1>Settings</h1>
+        <p>Choose an environment and configure one Claude connection for chat and all tests.</p>
+        <div class="card">
+          <div class="row">
+            <label for="profilePicker">Environment</label
+            ><select id="profilePicker"></select
+            ><button id="newProfile">New</button><button id="renameProfile">Rename</button
+            ><button id="useProfile">Use this environment</button>
+          </div>
+          <form id="profileForm">
+            <div id="profileFields"></div>
+            <div class="actions">
+              <button class="primary" type="submit" id="saveProfile" disabled>Save environment</button
+              ><button type="button" id="checkSetup">Check setup</button
+              ><button type="button" id="devopsLogin">Sign in to Azure DevOps</button
+              ><span id="profileStatus" role="status"></span>
+            </div>
+          </form>
+          <pre id="setupOutput"></pre>
+        </div>
+        <div class="card">
+          <h2>Shared AI connection</h2>
+          <p>Claude handles both chat and test execution. Enter credentials here, never in chat.</p>
+          <form id="aiForm">
+            <div id="aiFields"></div>
+            <div class="actions">
+              <button class="primary" type="submit" id="saveAi" disabled>Save AI connection</button
+              ><button type="button" id="checkAi">Test connection</button><span id="aiStatus" role="status"></span>
+            </div>
+          </form>
+        </div>
+        <p class="help">
+          Previous settings are backed up automatically before migration. Existing conversations and reports are
+          retained.
+        </p>
+      </section>
+    </main>
+    <dialog id="question">
+      <form method="dialog">
+        <p id="questionText"></p>
+        <input id="questionInput" aria-label="Answer" />
+        <div class="actions">
+          <button value="cancel">Cancel</button><button class="primary" value="ok" id="questionOk">Continue</button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      function question(message, initial) {
+        return new Promise((resolve) => {
+          const dialog = $('question'),
+            input = $('questionInput');
+          $('questionText').textContent = message;
+          input.hidden = initial === undefined;
+          input.value = initial || '';
+          dialog.returnValue = 'cancel';
+          dialog.addEventListener(
+            'close',
+            () =>
+              resolve(
+                dialog.returnValue === 'ok'
+                  ? initial === undefined
+                    ? true
+                    : input.value
+                  : initial === undefined
+                    ? false
+                    : null,
+              ),
+            { once: true },
+          );
+          dialog.showModal();
+          (input.hidden ? $('questionOk') : input).focus();
+        });
+      }
+      const confirmAction = (message) => question(message);
+      const promptText = (message, initial = '') => question(message, initial);
 
-  <section class="view" id="tab-history" role="tabpanel">
-    <div class="panel">
-      <div class="actions" style="margin-bottom:.8rem">
-        <h3>Run history</h3>
-        <label class="check small"><input type="checkbox" id="histMine" checked> <span id="histMineText">Only the profile in use</span></label>
-        <span class="spacer"></span>
-        <label class="row small">Plan for upload <input type="text" id="uploadPlan" placeholder="Default from the profile" style="width:13rem"></label>
-        <button class="btn" id="refreshHistory" type="button">Refresh</button>
-      </div>
-      <div id="history"></div>
-      <p class="muted small" style="margin-top:.8rem">Uploads always use the profile the run belongs to, whatever profile is in use now.</p>
-    </div>
-  </section>
-</main>
-
-<dialog id="newDlg">
-  <form method="dialog" id="newForm">
-    <h3 id="newTitle">New profile</h3>
-    <p class="muted small" id="newHint">A profile holds the settings for one environment.</p>
-    <label for="newName">Name</label>
-    <input type="text" id="newName" maxlength="60" placeholder="e.g. Sandbox UAT" required autocomplete="off">
-    <label for="newFrom" id="newFromLabel">Start from</label>
-    <select id="newFrom"></select>
-    <div class="err" id="newErr" role="alert"></div>
-    <div class="row"><button class="btn" type="button" id="newCancel">Cancel</button><button class="btn primary" type="submit" id="newOk">Create</button></div>
-  </form>
-</dialog>
-<dialog id="askDlg" aria-labelledby="askTitle">
-  <h3 id="askTitle"></h3>
-  <p id="askBody" class="muted"></p>
-  <div class="row"><button class="btn" type="button" id="askNo">Cancel</button><button class="btn primary" type="button" id="askYes">OK</button></div>
-</dialog>
-<div id="toast" role="status"></div>
-
-<script>
-'use strict';
-const MASK = '••••••••';
-const SECRET = /PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|_KEY$|_PAT$/i;
-let state = { profiles: [], active: null, catalog: [], groups: {}, providers: {}, categoryHints: {}, home: '' };
-let current = null;   // { name, entries: [{key,value}] }
-let snapshot = '';    // saved form contents, to tell whether there are unsaved changes
-let activeUrl = '';
-
-const $ = (id) => document.getElementById(id);
-function el(tag, props = {}, ...kids) {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== false && v !== null) e.setAttribute(k, v === true ? '' : v);
-  }
-  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
-  return e;
-}
-async function api(path, method = 'GET', body) {
-  let res;
-  try {
-    res = await fetch(path, { method, headers: { 'content-type': 'application/json', 'x-requested-with': 'd365fo-ui' }, body: body ? JSON.stringify(body) : undefined });
-  } catch {
-    // The browser's own text ("Load failed", "Failed to fetch") says nothing useful.
-    throw new Error('Could not reach the settings app. Check that it is still running, then try again.');
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
-  return data;
-}
-let toastTimer;
-function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.className = 'show' + (bad ? ' bad' : ''); clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, bad ? 5000 : 3000); }
-const fail = (e) => toast(e.message || String(e), true);
-
-/** A yes/no question in a dialog; resolves true when confirmed. */
-function ask(title, body, okLabel, danger) {
-  return new Promise((resolve) => {
-    const d = $('askDlg'), yes = $('askYes'), no = $('askNo');
-    $('askTitle').textContent = title; $('askBody').textContent = body || '';
-    yes.textContent = okLabel || 'OK'; yes.className = 'btn ' + (danger ? 'danger' : 'primary');
-    const done = (v) => { yes.onclick = no.onclick = d.oncancel = null; d.close(); resolve(v); };
-    yes.onclick = () => done(true); no.onclick = () => done(false); d.oncancel = (ev) => { ev.preventDefault(); done(false); };
-    d.showModal(); (danger ? no : yes).focus();
-  });
-}
-
-// ── Setup: profiles ──
-async function refresh(select) {
-  state = await api('/api/state');
-  $('homeInfo').textContent = 'Profiles are stored on this computer in ' + state.home;
-  $('activeInfo').textContent = state.active ? 'Runs use "' + state.active + '".' : 'No profile is in use: runs read the .env file in the project folder.';
-  $('noneBtn').hidden = !state.active;
-  await refreshUsing();
-  renderList(); renderModelList();
-  if (curModel && !state.models.some((m) => m.id === curModel.id)) curModel = null;
-  if (!curModel) renderModelEditor();
-  if (select === null) { current = null; return renderEditor(); }
-  const name = select || (current && state.profiles.some((p) => p.name === current.name) ? current.name : (state.active || (state.profiles[0] && state.profiles[0].name)));
-  if (name) await open(name, true); else { current = null; renderEditor(); }
-}
-async function refreshUsing() {
-  activeUrl = '';
-  if (state.active) {
-    try { const d = await api('/api/profiles/' + encodeURIComponent(state.active)); activeUrl = (d.entries.find((e) => e.key === 'D365_BASE_URL') || {}).value || ''; } catch { /* shown without the address */ }
-  }
-  const host = activeUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  $('using').classList.toggle('none', !state.active);
-  $('usingText').textContent = state.active ? state.active + (host ? ' · ' + host : '') : 'No profile in use';
-  renderRunBanner();
-}
-function renderList() {
-  const list = $('list'); list.replaceChildren();
-  for (const p of state.profiles) {
-    list.append(el('button', { class: 'item', type: 'button', 'aria-current': current && current.name === p.name ? 'true' : 'false', onclick: () => open(p.name).catch(fail) },
-      p.name, p.active ? el('span', { class: 'pill right' }, 'In use') : null));
-  }
-}
-const isDirty = () => Boolean(current) && $('form') && JSON.stringify(collect()) !== snapshot;
-async function leaveOk() {
-  return !isDirty() || ask('Discard unsaved changes?', 'You changed "' + current.name + '" and have not saved it.', 'Discard changes', true);
-}
-async function open(name, force) {
-  if (!force && current && current.name !== name && !(await leaveOk())) return;
-  const data = await api('/api/profiles/' + encodeURIComponent(name));
-  current = { name, id: data.id, entries: data.entries };
-  renderList(); renderEditor();
-}
-
-const provider = (root = '#mform') => { const s = document.querySelector(root + ' [data-key="LLM_PROVIDER"]'); return (s && s.value) || 'anthropic'; };
-const formValue = (key, root = '#form') => { const i = document.querySelector(root + ' [data-key="' + key + '"]'); return i ? i.value.trim() : ''; };
-const modelFields = () => state.catalog.filter((f) => f.group === 'AI model');
-const profileFields = () => state.catalog.filter((f) => f.group !== 'AI model');
-const modelName = (id) => { const m = state.models.find((x) => x.id === id); return m ? m.name : ''; };
-function checkField(input) {
-  const v = input.value.trim(), type = input.dataset.type;
-  let msg = '';
-  if (v && v !== MASK && type === 'url') {
-    let ok = false;
-    try { ok = ['http:', 'https:'].includes(new URL(v).protocol); } catch { /* not a URL */ }
-    if (!ok) msg = 'Enter a full web address that starts with https:// (or http://).';
-  }
-  if (v && type === 'number' && !/^\d+$/.test(v)) msg = 'Enter a whole number.';
-  input.setAttribute('aria-invalid', msg ? 'true' : 'false');
-  const box = input.closest('.field').querySelector('.ferr');
-  box.textContent = msg; box.hidden = !msg;
-  return !msg;
-}
-const AUTH_LABELS = { 'azure-cli': 'My Microsoft account (az login)', pat: 'Personal access token' };
-function fieldInput(spec, value) {
-  const id = 'f_' + spec.key;
-  let input, control;
-  if (spec.options) {
-    const label = (o) => spec.key === 'LLM_PROVIDER' ? (state.providers[o] || o) : AUTH_LABELS[o] || (o === '' ? 'Guess from the address' : o === 'true' ? 'Yes (true)' : o === 'false' ? 'No (false)' : o);
-    const opts = spec.options.slice();
-    if (!opts.includes('') && spec.key !== 'LLM_PROVIDER') opts.unshift('');
-    input = el('select', { id, 'data-key': spec.key }, opts.map((o) => el('option', { value: o }, o === '' && spec.key !== 'D365_ENVIRONMENT_TYPE' ? 'Default' : label(o))));
-    if (value && !opts.includes(value)) input.append(el('option', { value }, value));
-    input.value = value || (spec.key === 'LLM_PROVIDER' ? 'anthropic' : '');
-    control = input;
-  } else {
-    input = el('input', { id, 'data-key': spec.key, 'data-type': spec.type, type: spec.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', placeholder: spec.placeholder || '', inputmode: spec.type === 'number' ? 'numeric' : spec.type === 'url' ? 'url' : null });
-    input.value = value || '';
-    control = input;
-    if (spec.secret) {
-      const saved = value === MASK;
-      if (saved) input.addEventListener('focus', () => input.select());
-      const show = el('button', { class: 'btn', type: 'button', 'aria-pressed': 'false', onclick: () => {
-        if (input.value === MASK) return toast('The saved value is hidden. Type a new one to replace it.');
-        const on = input.type === 'password'; input.type = on ? 'text' : 'password'; show.textContent = on ? 'Hide' : 'Show'; show.setAttribute('aria-pressed', String(on));
-      } }, 'Show');
-      control = el('div', { class: 'withbtn' }, input, show);
-    }
-    input.addEventListener('blur', () => checkField(input));
-  }
-  const help = [spec.help, spec.secret && value === MASK ? 'A value is saved. Type to replace it, or clear the box to remove it.' : ''].filter(Boolean).join(' ');
-  return el('div', { class: 'field', 'data-providers': spec.providers ? spec.providers.join(' ') : null, 'data-required': spec.required ? '1' : null },
-    el('label', { for: id }, spec.label, spec.required ? el('span', { class: 'req', title: 'Needed before a run', 'aria-label': 'required' }, '*') : null),
-    control, help ? el('div', { class: 'help' }, help) : null, el('div', { class: 'ferr', role: 'alert', hidden: true }));
-}
-function customRow(key, value) {
-  const k = el('input', { type: 'text', placeholder: 'VARIABLE_NAME', 'aria-label': 'Variable name', 'data-ck': '1', spellcheck: 'false' }); k.value = key;
-  const v = el('input', { type: SECRET.test(key) ? 'password' : 'text', placeholder: 'value', 'aria-label': 'Value', 'data-cv': '1', autocomplete: 'off', spellcheck: 'false' }); v.value = value;
-  k.addEventListener('input', () => { v.type = SECRET.test(k.value) ? 'password' : 'text'; });
-  const row = el('div', { class: 'custom' }, k, v, el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove variable', onclick: () => { row.remove(); onFormChange(); } }, '×'));
-  return row;
-}
-function welcome() {
-  return el('div', { class: 'welcome' },
-    el('h3', {}, 'Welcome. Let\'s set up your first environment'),
-    el('p', { class: 'muted' }, 'This app runs your Dynamics 365 F&O test cases with an AI agent. Three things get you to a first run:'),
-    el('ol', {},
-      el('li', {}, el('b', {}, 'Create a profile'), ' with your sandbox address, a test account, and an AI model key.'),
-      el('li', {}, el('b', {}, 'Check setup'), ' to confirm everything connects.'),
-      el('li', {}, el('b', {}, 'Run'), ' the example test cases as a dry run first.')),
-    el('button', { class: 'btn primary', type: 'button', onclick: () => openNew() }, '+ Create your first profile'));
-}
-function renderEditor() {
-  const ed = $('editor'); ed.replaceChildren();
-  if (!current) { ed.append(state.profiles.length ? el('p', { class: 'empty' }, 'Pick a profile on the left, or create a new one.') : welcome()); snapshot = ''; return; }
-  // The AI model settings now live in the AI models list; an old profile that still holds some shows them as other variables.
-  const known = new Set([...profileFields().map((f) => f.key), 'AI_MODEL']);
-  const values = new Map(current.entries.map((e) => [e.key, e.value]));
-  const isActive = state.active === current.name;
-  ed.append(el('div', { class: 'actions', style: 'margin-bottom:1rem' },
-    el('h3', {}, current.name), isActive ? el('span', { class: 'pill' }, 'In use') : null, el('span', { class: 'spacer' }),
-    isActive ? null : el('button', { class: 'btn primary', type: 'button', onclick: () => use(current.name).catch(fail) }, 'Use this profile'),
-    el('button', { class: 'btn', type: 'button', id: 'checkBtn', onclick: () => checkSetup().catch(fail) }, 'Check setup'),
-    el('button', { class: 'btn', type: 'button', onclick: () => openNew(current.name) }, 'Duplicate'),
-    el('button', { class: 'btn', type: 'button', onclick: () => openRename() }, 'Rename'),
-    el('button', { class: 'btn danger', type: 'button', onclick: () => remove().catch(fail) }, 'Delete')));
-  ed.append(el('p', { class: 'muted small', style: 'margin:-.4rem 0 .8rem' }, 'Profile ID ', el('code', {}, current.id || ''), ' stays the same if you rename it. Reports are saved in reports/' + (current.id || '') + '.'));
-  ed.append(el('ul', { class: 'checklist', id: 'checklist', 'aria-label': 'Ready to run?' }), el('div', { id: 'checkOut' }));
-
-  const form = el('form', { id: 'form', novalidate: true });
-  for (const g of [...new Set(state.catalog.map((f) => f.group))]) {
-    if (g === 'AI model') {
-      const pick = el('select', { id: 'f_AI_MODEL', 'data-key': 'AI_MODEL' }, el('option', { value: '' }, 'Choose an AI model…'), state.models.map((m) => el('option', { value: m.id }, m.name)));
-      pick.value = values.get('AI_MODEL') || '';
-      form.append(el('fieldset', { class: 'group' }, el('legend', {}, 'AI model for runs'), el('p', { class: 'gdesc' }, 'The model that reads each test case and drives the browser.'),
-        el('div', { class: 'field' }, el('label', { for: 'f_AI_MODEL' }, 'AI model', el('span', { class: 'req', title: 'Needed before a run', 'aria-label': 'required' }, '*')), pick,
-          el('div', { class: 'help' }, 'Keys and addresses are set up once under AI models and shared by all profiles.'), el('div', { class: 'ferr', role: 'alert', hidden: true })),
-        el('button', { class: 'btn', type: 'button', onclick: () => leaveOk().then((ok) => ok && showTab('models')).catch(fail) }, 'Manage AI models')));
-      continue;
-    }
-    const fs = el('fieldset', { class: 'group' }, el('legend', {}, g), state.groups[g] ? el('p', { class: 'gdesc' }, state.groups[g]) : null);
-    const specs = state.catalog.filter((f) => f.group === g);
-    for (const spec of specs.filter((s) => !s.advanced)) fs.append(fieldInput(spec, values.get(spec.key)));
-    const adv = specs.filter((s) => s.advanced);
-    if (adv.length) {
-      const set = adv.filter((s) => values.get(s.key)).length;
-      const d = el('details', { class: 'more', open: set > 0 }, el('summary', {}, 'More settings'));
-      for (const spec of adv) d.append(fieldInput(spec, values.get(spec.key)));
-      fs.append(d);
-    }
-    if (g === 'Azure DevOps') {
-      fs.append(el('div', { class: 'field' },
-        el('label', {}, 'Microsoft account'),
-        el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', id: 'adoLoginBtn', onclick: () => devopsLogin().catch(fail) }, 'Sign in to Azure DevOps')),
-        el('div', { class: 'help' }, 'Signs in with your work account, so no token is needed. Needs the Azure CLI on this computer (one-time install: winget install -e --id Microsoft.AzureCLI).'),
-        el('div', { class: 'help', id: 'adoLoginOut' })));
-    }
-    form.append(fs);
-  }
-  const customs = el('div', { id: 'customs' });
-  const extra = current.entries.filter((e) => !known.has(e.key));
-  for (const e of extra) customs.append(customRow(e.key, e.value));
-  form.append(el('fieldset', { class: 'group' }, el('legend', {}, 'Other variables'),
-    el('p', { class: 'gdesc' }, 'Any other setting from .env.example, by its variable name.'),
-    el('details', { class: 'more', open: extra.length > 0 }, el('summary', {}, extra.length ? extra.length + ' variable(s)' : 'Add a variable'), customs,
-      el('button', { class: 'btn', type: 'button', onclick: () => { customs.append(customRow('', '')); customs.lastChild.querySelector('input').focus(); } }, '+ Add variable'))));
-  form.append(el('div', { class: 'savebar' },
-    el('span', { class: 'state', id: 'saveState' }, 'All changes saved'), el('span', { class: 'spacer' }),
-    el('button', { class: 'btn', type: 'button', id: 'discardBtn', disabled: true, onclick: () => open(current.name, true).catch(fail) }, 'Discard changes'),
-    el('button', { class: 'btn primary', type: 'submit', id: 'saveBtn', disabled: true }, 'Save changes')));
-  form.addEventListener('submit', (ev) => { ev.preventDefault(); save().catch(fail); });
-  form.addEventListener('input', onFormChange);
-  form.addEventListener('change', onFormChange);
-  ed.append(form);
-  snapshot = JSON.stringify(collect());
-  onFormChange();
-}
-function applyProviders(root) {
-  const p = provider(root);
-  for (const f of document.querySelectorAll(root + ' .field[data-providers]')) f.hidden = !f.dataset.providers.split(' ').includes(p);
-  for (const d of document.querySelectorAll(root + ' details.more')) { const any = [...d.querySelectorAll('.field')].some((f) => !f.hidden); if (d.querySelector('.field')) d.hidden = !any; }
-}
-function onFormChange() {
-  const dirty = isDirty();
-  const s = $('saveState'); if (s) { s.textContent = dirty ? 'Unsaved changes' : 'All changes saved'; s.className = 'state' + (dirty ? ' dirty' : ''); }
-  if ($('saveBtn')) { $('saveBtn').disabled = !dirty; $('discardBtn').disabled = !dirty; }
-  renderChecklist();
-}
-function focusField(key) {
-  const i = document.querySelector('#form [data-key="' + key + '"], #tab-models [data-key="' + key + '"]'); if (!i) return;
-  const d = i.closest('details'); if (d) d.open = true;
-  i.scrollIntoView({ block: 'center', behavior: 'smooth' }); i.focus({ preventScroll: true });
-}
-/** What still stands between this profile and a run, from what is in the form right now. */
-function readiness() {
-  const has = (k) => formValue(k) !== '';
-  const items = [];
-  let urlOk = false;
-  try { urlOk = ['http:', 'https:'].includes(new URL(formValue('D365_BASE_URL')).protocol); } catch { /* missing or invalid */ }
-  items.push({ ok: urlOk, title: 'F&O address', todo: 'Enter your sandbox address.', done: formValue('D365_BASE_URL').replace(/^https?:\/\//, ''), key: 'D365_BASE_URL' });
-  const pw = has('D365_USERNAME') && has('D365_PASSWORD'), sess = has('D365_STORAGE_STATE'), app = has('D365_TENANT_ID') && has('D365_CLIENT_ID') && has('D365_CLIENT_SECRET');
-  items.push({ ok: pw || sess || app, title: 'Sign-in', todo: 'Add a username and password, or a saved session.', done: sess ? 'Saved session' : pw ? 'Username and password' : 'App registration', key: has('D365_USERNAME') ? 'D365_PASSWORD' : 'D365_USERNAME' });
-  const chosen = formValue('AI_MODEL');
-  items.push({ ok: Boolean(chosen && modelName(chosen)), title: 'AI model', todo: 'Choose an AI model for runs.', done: modelName(chosen), key: 'AI_MODEL' });
-  const active = state.active === current.name;
-  items.push({ ok: active, title: 'In use', todo: 'Runs use ' + (state.active ? '"' + state.active + '"' : 'the .env file') + ' until you choose "Use this profile".', done: 'Runs use this profile.', action: active ? null : () => use(current.name).catch(fail) });
-  return items;
-}
-function renderChecklist() {
-  const box = $('checklist'); if (!box || !current) return;
-  box.replaceChildren(...readiness().map((it) => el('li', { class: it.ok ? 'ok' : 'todo' },
-    el('span', { class: 'ico', 'aria-hidden': 'true' }, it.ok ? '✓' : '!'),
-    el('div', {}, el('b', {}, it.title), el('span', { class: 'd' }, it.ok ? it.done : it.todo), ' ',
-      it.ok ? null : el('button', { class: 'link small', type: 'button', onclick: it.action || (() => focusField(it.key)) }, it.action ? 'Use it' : 'Fix')))));
-}
-function collect(root = '#form') {
-  const entries = [];
-  for (const i of document.querySelectorAll(root + ' [data-key]')) if (i.value !== '') entries.push({ key: i.dataset.key, value: i.value.trim() === MASK ? MASK : i.value });
-  for (const row of document.querySelectorAll('#customs .custom')) {
-    const key = row.querySelector('[data-ck]').value.trim(); const value = row.querySelector('[data-cv]').value;
-    if (key) entries.push({ key, value });
-  }
-  return entries;
-}
-function validateForm() {
-  const bad = [...document.querySelectorAll('#form input[data-type]')].filter((i) => !checkField(i));
-  if (bad.length) { const key = bad[0].dataset.key; focusField(key); toast('Fix the highlighted field before saving.', true); return false; }
-  return true;
-}
-async function save(quiet) {
-  if (!validateForm()) return false;
-  await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries: collect() });
-  if (!quiet) toast('Saved');
-  await open(current.name, true);
-  state = await api('/api/state'); renderList();
-  await refreshUsing();
-  return true;
-}
-async function use(name) {
-  if (current && current.name === name && isDirty() && !(await save(true))) return;
-  await api('/api/active', 'POST', { name }); toast('Runs now use "' + name + '"'); await refresh(name);
-}
-async function remove() {
-  if (!(await ask('Delete "' + current.name + '"?', 'Its saved settings and secrets are removed from this computer. This cannot be undone.', 'Delete profile', true))) return;
-  await api('/api/profiles/' + encodeURIComponent(current.name), 'DELETE'); toast('Deleted'); current = null; await refresh();
-}
-/** Turns one line of the setup check into a status row. */
-function checkRow(line) {
-  const m = /^([^:]{2,40}):\s*(.*)$/.exec(line.trim());
-  const text = line.trim();
-  const bad = /NOT REACHABLE|MISSING|\(missing\)|FAILED|INVALID|EXPIRED|UNREADABLE|NOT INSTALLED|refused/i.test(text);
-  const warn = /^WARNING|WARNING:|not configured|unknown/i.test(text);
-  const optional = /^Azure DevOps|app registration: not configured|saved session/i.test(text) && !/EXPIRED|UNREADABLE/i.test(text);
-  const status = bad && !optional ? 'bad' : warn || (bad && optional) ? (optional ? 'info' : 'warn') : 'ok';
-  const ico = { ok: '✓', warn: '!', bad: '✕', info: '–' }[status];
-  return el('li', { class: 's-' + status }, el('span', { class: 'ico', 'aria-hidden': 'true' }, ico),
-    m ? el('div', {}, el('b', {}, m[1]), el('div', { class: 'v' }, m[2])) : el('div', { class: 'v' }, text.replace(/^WARNING:\s*/, '')));
-}
-async function checkSetup() {
-  if (isDirty() && !(await save(true))) return;
-  const out = $('checkOut'), btn = $('checkBtn');
-  btn.disabled = true;
-  out.replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'Checking the connections… this can take up to a minute.'));
-  let r;
-  try { r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/check', 'POST'); }
-  finally { const b = $('checkBtn'); if (b) b.disabled = false; }
-  const lines = (r.output || '').split('\n');
-  const at = lines.findIndex((l) => /^Issues:/.test(l.trim()));
-  const body = (at >= 0 ? lines.slice(0, at) : lines).filter((l) => l.trim() && !/^Configuration looks good/.test(l.trim()));
-  const issues = at >= 0 ? lines.slice(at + 1).map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean) : [];
-  const good = r.exitCode === 0;
-  const box = $('checkOut'); if (!box) return;
-  box.replaceChildren(el('div', { class: 'panel', style: 'background:var(--sunk)' },
-    el('div', { class: 'banner ' + (good ? 'good' : 'bad'), style: 'margin-bottom:.6rem' }, el('b', {}, good ? '✓ Setup looks good. You can run tests.' : issues.length + ' thing(s) to fix before a run')),
-    issues.length ? el('ul', { class: 'checks' }, issues.map((i) => el('li', { class: 's-bad' }, el('span', { class: 'ico', 'aria-hidden': 'true' }, '✕'), el('div', {}, i)))) : null,
-    el('ul', { class: 'checks' }, body.map(checkRow)),
-    el('div', { class: 'actions' },
-      good ? el('button', { class: 'btn primary', type: 'button', onclick: () => showTab('run') }, 'Go to Run →') : null,
-      el('button', { class: 'btn', type: 'button', onclick: () => $('checkOut').replaceChildren() }, 'Close'))));
-  box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-}
-async function devopsLogin() {
-  if (isDirty() && !(await save(true))) return;
-  const btn = $('adoLoginBtn'), out = $('adoLoginOut');
-  btn.disabled = true;
-  out.replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'A Microsoft sign-in page opened in your browser. Finish signing in there; this waits for you.'));
-  let r;
-  try { r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/devops-login', 'POST'); }
-  finally { const b = $('adoLoginBtn'); if (b) b.disabled = false; }
-  const box = $('adoLoginOut'); if (!box) return;
-  const lines = (r.output || '').split('\n').map((l) => l.replace(/^Error:\s*/, '').trim()).filter((l) => l && !/^Opening the Microsoft sign-in/.test(l));
-  const good = r.exitCode === 0;
-  box.replaceChildren(el('div', { class: 'banner ' + (good ? 'good' : 'bad') }, good ? '✓ Signed in to Azure DevOps. ' : 'Sign-in did not work. ', lines.slice(-3).join(' ')));
-}
-let renaming = false, dlgKind = 'profile';
-function setNewMode(rename, kind = 'profile') {
-  renaming = rename; dlgKind = kind;
-  const what = kind === 'model' ? 'AI model' : 'profile';
-  $('newTitle').textContent = (rename ? 'Rename ' : 'New ') + what;
-  $('newHint').textContent = rename ? (kind === 'model' ? 'Only the name changes. Profiles and Chat keep using it.' : 'Only the name changes. The profile keeps its settings and its report folder.') : kind === 'model' ? 'One connection to a model: provider, key and model name.' : 'A profile holds the settings for one environment.';
-  $('newOk').textContent = rename ? 'Rename' : 'Create';
-  $('newName').placeholder = kind === 'model' ? 'e.g. Claude via company gateway' : 'e.g. Sandbox UAT';
-  $('newFrom').hidden = $('newFromLabel').hidden = rename;
-}
-function openRename() {
-  setNewMode(true); $('newName').value = current.name; $('newErr').textContent = '';
-  $('newDlg').showModal(); $('newName').select();
-}
-function openNew(from) {
-  setNewMode(false);
-  $('newName').value = ''; $('newErr').textContent = '';
-  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'A blank profile'));
-  for (const p of state.profiles) sel.append(el('option', { value: p.name }, 'A copy of ' + p.name));
-  sel.value = from || '';
-  $('newDlg').showModal(); $('newName').focus();
-}
-$('newBtn').addEventListener('click', async () => { if (await leaveOk()) openNew(); });
-$('noneBtn').addEventListener('click', () => api('/api/active', 'POST', {}).then(() => { toast('Runs now use the .env file'); return refresh(); }).catch(fail));
-$('newCancel').addEventListener('click', () => $('newDlg').close());
-$('newForm').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const name = $('newName').value.trim(), copyFrom = $('newFrom').value;
-  try {
-    if (dlgKind === 'model') {
-      let id = curModel && curModel.id;
-      if (renaming) await api('/api/models/' + encodeURIComponent(id), 'PATCH', { name });
-      else id = (await api('/api/models', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [{ key: 'LLM_PROVIDER', value: 'anthropic' }] })).id;
-      $('newDlg').close(); curModel = null; toast(renaming ? 'Renamed to "' + name + '"' : 'Created "' + name + '"');
-      await refresh(); return await openModel(id, true);
-    }
-    if (renaming) {
-      await api('/api/profiles/' + encodeURIComponent(current.name), 'PATCH', { name });
-      $('newDlg').close(); current = null; toast('Renamed to "' + name + '"'); return await refresh(name);
-    }
-    await api('/api/profiles', 'POST', copyFrom ? { name, copyFrom } : { name, entries: [] });
-    $('newDlg').close(); current = null;
-    if (!state.active) await api('/api/active', 'POST', { name });
-    toast('Created "' + name + '"'); await refresh(name);
-  } catch (e) { $('newErr').textContent = e.message; }
-});
-$('using').addEventListener('click', () => showTab('profiles'));
-window.addEventListener('beforeunload', (ev) => { if (isDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
-
-// ── AI models ──
-let curModel = null, mSnapshot = '';
-const isModelDirty = () => Boolean(curModel) && Boolean($('mform')) && JSON.stringify(collect('#mform')) !== mSnapshot;
-async function leaveModelOk() {
-  return !isModelDirty() || ask('Discard unsaved changes?', 'You changed "' + curModel.name + '" and have not saved it.', 'Discard changes', true);
-}
-function usedByText(u) {
-  const parts = [...u.profiles.map((p) => 'profile ' + p), ...(u.chat ? ['Chat'] : [])];
-  return parts;
-}
-function renderModelList() {
-  const list = $('modelList'); list.replaceChildren();
-  if (!state.models.length) list.append(el('p', { class: 'empty' }, 'No AI model yet.'));
-  for (const m of state.models) {
-    const c = m.check;
-    list.append(el('button', { class: 'item', type: 'button', 'aria-current': curModel && curModel.id === m.id ? 'true' : 'false', onclick: () => openModel(m.id).catch(fail) },
-      el('span', {}, m.name, el('small', {}, m.providerLabel + (m.model ? ' · ' + m.model : ''))),
-      c ? el('span', { class: 'pill right ' + (c.ok ? '' : 'bad') }, c.ok ? 'Works' : 'Check failed') : null));
-  }
-}
-async function openModel(id, force) {
-  if (!force && curModel && curModel.id !== id && !(await leaveModelOk())) return;
-  const d = await api('/api/models/' + encodeURIComponent(id));
-  curModel = { id, name: d.name, entries: d.entries, usedBy: d.usedBy };
-  renderModelList(); renderModelEditor();
-}
-function renderModelEditor() {
-  const ed = $('modelEditor'); ed.replaceChildren();
-  if (!curModel) {
-    ed.append(state.models.length ? el('p', { class: 'empty' }, 'Pick an AI model on the left, or create a new one.')
-      : el('div', { class: 'welcome' }, el('h3', {}, 'Set up your first AI model'), el('p', { class: 'muted' }, 'The AI model reads each test case and drives the browser. Add it once; every profile and the chat can use it.'),
-        el('button', { class: 'btn primary', type: 'button', onclick: () => openNewModel() }, '+ New AI model')));
-    mSnapshot = ''; return;
-  }
-  const values = new Map(curModel.entries.map((e) => [e.key, e.value]));
-  const used = usedByText(curModel.usedBy);
-  const meta = state.models.find((m) => m.id === curModel.id) || {};
-  ed.append(el('div', { class: 'actions', style: 'margin-bottom:.6rem' }, el('h3', {}, curModel.name), el('span', { class: 'spacer' }),
-    el('button', { class: 'btn primary', type: 'button', id: 'mTestBtn', onclick: () => testModel().catch(fail) }, 'Test connection'),
-    el('button', { class: 'btn', type: 'button', onclick: () => openNewModel(curModel.id) }, 'Duplicate'),
-    el('button', { class: 'btn', type: 'button', onclick: () => { setNewMode(true, 'model'); $('newName').value = curModel.name; $('newErr').textContent = ''; $('newDlg').showModal(); $('newName').select(); } }, 'Rename'),
-    el('button', { class: 'btn danger', type: 'button', disabled: used.length > 0, title: used.length ? 'In use by ' + used.join(' and ') + '. Pick another AI model there first.' : '', onclick: () => removeModel().catch(fail) }, 'Delete')));
-  ed.append(el('p', { class: 'muted small', style: 'margin:0 0 .8rem' }, 'Used by: ', ...(used.length ? used.flatMap((u, i) => [i ? ', ' : '', el('b', {}, u)]) : ['nothing yet'])));
-  ed.append(el('div', { id: 'mCheck' }, meta.check ? el('div', { class: 'banner ' + (meta.check.ok ? 'good' : 'bad'), style: 'margin-bottom:.8rem' }, (meta.check.ok ? '✓ ' : '✕ ') + meta.check.detail) : null));
-  const form = el('form', { id: 'mform', novalidate: true });
-  const specs = modelFields();
-  const fs = el('fieldset', { class: 'group' }, el('legend', {}, 'Connection'));
-  for (const spec of specs.filter((x) => !x.advanced)) fs.append(fieldInput(spec, values.get(spec.key)));
-  const adv = specs.filter((x) => x.advanced);
-  if (adv.length) { const d = el('details', { class: 'more', open: adv.some((x) => values.get(x.key)) }, el('summary', {}, 'More settings')); for (const spec of adv) d.append(fieldInput(spec, values.get(spec.key))); fs.append(d); }
-  form.append(fs, el('div', { class: 'savebar' }, el('span', { class: 'state', id: 'mSaveState' }, 'All changes saved'), el('span', { class: 'spacer' }),
-    el('button', { class: 'btn', type: 'button', id: 'mDiscard', disabled: true, onclick: () => openModel(curModel.id, true).catch(fail) }, 'Discard changes'),
-    el('button', { class: 'btn primary', type: 'submit', id: 'mSave', disabled: true }, 'Save changes')));
-  form.addEventListener('submit', (ev) => { ev.preventDefault(); saveModel().catch(fail); });
-  form.addEventListener('input', onModelChange); form.addEventListener('change', onModelChange);
-  ed.append(form);
-  mSnapshot = JSON.stringify(collect('#mform'));
-  onModelChange();
-}
-function onModelChange() {
-  applyProviders('#mform');
-  const dirty = isModelDirty();
-  const s = $('mSaveState'); if (s) { s.textContent = dirty ? 'Unsaved changes' : 'All changes saved'; s.className = 'state' + (dirty ? ' dirty' : ''); }
-  if ($('mSave')) { $('mSave').disabled = !dirty; $('mDiscard').disabled = !dirty; }
-}
-async function saveModel(quiet) {
-  const bad = [...document.querySelectorAll('#mform input[data-type]')].filter((i) => !checkField(i));
-  if (bad.length) { toast('Fix the highlighted field before saving.', true); return false; }
-  await api('/api/models/' + encodeURIComponent(curModel.id), 'PUT', { name: curModel.name, entries: collect('#mform') });
-  if (!quiet) toast('Saved');
-  await refresh(); await openModel(curModel.id, true);
-  return true;
-}
-async function testModel() {
-  if (isModelDirty() && !(await saveModel(true))) return;
-  const btn = $('mTestBtn'); btn.disabled = true;
-  $('mCheck').replaceChildren(el('div', { class: 'banner info' }, el('span', { class: 'spin', 'aria-hidden': 'true' }), 'Asking the model…'));
-  try { await api('/api/models/' + encodeURIComponent(curModel.id) + '/check', 'POST'); }
-  finally { await refresh(); if (curModel) await openModel(curModel.id, true); }
-}
-async function removeModel() {
-  if (!(await ask('Delete "' + curModel.name + '"?', 'Its saved key is removed from this computer. This cannot be undone.', 'Delete AI model', true))) return;
-  await api('/api/models/' + encodeURIComponent(curModel.id), 'DELETE'); toast('Deleted'); curModel = null; await refresh();
-}
-function openNewModel(from) {
-  setNewMode(false, 'model'); $('newName').value = ''; $('newErr').textContent = '';
-  const sel = $('newFrom'); sel.replaceChildren(el('option', { value: '' }, 'A blank AI model'));
-  for (const m of state.models) sel.append(el('option', { value: m.id }, 'A copy of ' + m.name));
-  sel.value = from || '';
-  $('newDlg').showModal(); $('newName').focus();
-}
-$('modelNew').addEventListener('click', async () => { if (await leaveModelOk()) openNewModel(); });
-
-// ── Tabs ──
-const tabs = [...document.querySelectorAll('nav.tabs button')];
-tabs.forEach((b, i) => {
-  b.addEventListener('click', () => { if (b.dataset.tab === 'results') viewRun = null; showTab(b.dataset.tab); });
-  b.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
-    const next = tabs[(i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]; next.focus(); next.click();
-  });
-});
-function showTab(tab) {
-  for (const x of tabs) { const on = x.dataset.tab === tab; x.setAttribute('aria-selected', String(on)); x.tabIndex = on ? 0 : -1; }
-  document.querySelectorAll('.view').forEach((s) => s.classList.toggle('active', s.id === 'tab-' + tab));
-  if (tab === 'results') loadResults().catch(fail);
-  if (tab === 'history') loadHistory().catch(fail);
-  if (tab === 'models') { if (!curModel && state.models[0]) openModel(state.models[0].id, true).catch(fail); else renderModelEditor(); }
-  if (tab === 'cases' && !casesLoaded) loadCases().catch(fail);
-  if (tab === 'run') { renderRunBanner(); if (!runCasesLoaded) loadRunCases(); }
-  window.scrollTo({ top: 0 });
-}
-
-// ── Run ──
-const source = () => document.querySelector('input[name=source]:checked').value;
-let runCasesLoaded = false, runTotal = 0, running = false;
-function renderRunBanner() {
-  const box = $('runBanner'); if (!box) return;
-  if (!state.active) {
-    box.replaceChildren(el('div', { class: 'banner warn' }, el('span', {}, state.profiles.length ? 'No profile is in use, so the run reads the .env file in the project folder.' : 'Nothing is set up yet.'),
-      el('button', { class: 'btn', type: 'button', onclick: () => showTab('profiles') }, state.profiles.length ? 'Choose a profile' : 'Set up a profile')));
-  } else {
-    const m = state.activeModel;
-    box.replaceChildren(el('div', { class: 'banner info' }, el('span', {}, 'This run belongs to the profile ', el('b', {}, state.active), m ? [' and uses its AI model, ', el('b', {}, m.name), '.'] : [' and has no AI model yet.'],
-      activeUrl ? [' Environment: ', el('b', {}, activeUrl.replace(/^https?:\/\//, ''))] : null),
-      el('button', { class: 'link', type: 'button', onclick: () => showTab('profiles') }, 'Switch profile')));
-  }
-  const rm = $('runModel');
-  if (rm) {
-    const keep = rm.value;
-    rm.replaceChildren(el('option', { value: '' }, "The profile's model" + (state.activeModel ? ' (' + state.activeModel.name + ')' : '')), ...state.models.map((x) => el('option', { value: x.id }, x.name)));
-    rm.value = state.models.some((x) => x.id === keep) ? keep : '';
-  }
-}
-function syncSource() {
-  const s = source();
-  for (const f of document.querySelectorAll('#tab-run [data-src]')) f.hidden = f.dataset.src !== s;
-  if (s === 'local' && !runCasesLoaded) loadRunCases();
-  updateSel();
-}
-document.querySelectorAll('input[name=source]').forEach((r) => r.addEventListener('change', syncSource));
-let runCases = [];
-const runSel = new Set();
-function renderCaseChecks() {
-  const box = $('caseChecks'); box.replaceChildren();
-  for (const c of runCases) {
-    const cb = el('input', { type: 'checkbox', 'data-id': c.id }); cb.checked = runSel.has(c.id);
-    cb.addEventListener('change', () => { if (cb.checked) runSel.add(c.id); else runSel.delete(c.id); updateSel(); });
-    box.append(el('label', { class: 'check' }, cb, c.title, el('small', {}, c.id + (c.module ? ' · ' + c.module : '') + (c.priority ? ' · P' + c.priority : ''))));
-  }
-  updateSel();
-}
-function updateSel() {
-  const n = runCases.filter((c) => runSel.has(c.id)).length;
-  $('selCount').textContent = n + ' of ' + runCases.length + ' selected';
-  if (!running) { $('start').disabled = source() === 'local' && n === 0; $('start').textContent = source() === 'local' ? '▶ Run ' + n + ' case' + (n === 1 ? '' : 's') : '▶ Run'; }
-}
-$('selAll').addEventListener('click', () => { runCases.forEach((c) => runSel.add(c.id)); renderCaseChecks(); });
-$('selNone').addEventListener('click', () => { runSel.clear(); renderCaseChecks(); });
-async function loadRunCases(only) {
-  runCasesLoaded = true;
-  const help = $('caseHelp');
-  try {
-    const cases = await api('/api/cases?local=' + encodeURIComponent($('local').value));
-    const had = new Set(runCases.map((c) => c.id));
-    runCases = cases;
-    // Everything is ticked by default; a case that is new since the last look is ticked too.
-    if (only) { runSel.clear(); runSel.add(only); } else for (const c of cases) if (!had.has(c.id)) runSel.add(c.id);
-    for (const id of [...runSel]) if (!cases.some((c) => c.id === id)) runSel.delete(id);
-    help.textContent = cases.length ? '' : 'No test cases in this folder yet. Create one on the Test cases tab.';
-  } catch (e) {
-    runCases = []; runSel.clear();
-    help.textContent = 'Could not read that folder: ' + (e.message || e);
-  }
-  renderCaseChecks();
-}
-let localTimer;
-$('local').addEventListener('input', () => { clearTimeout(localTimer); localTimer = setTimeout(() => loadRunCases(), 500); });
-$('start').addEventListener('click', async () => {
-  const s = source();
-  const picked = runCases.filter((c) => runSel.has(c.id)).map((c) => c.id);
-  const body = { source: s, local: $('local').value, plan: $('plan').value, suite: $('suite').value, caseId: s === 'local' ? '' : $('caseIdText').value.trim(),
-    // All cases ticked means no filter, so cases added later are not left out of a saved habit.
-    cases: s === 'local' && picked.length < runCases.length ? picked : [],
-    dryRun: $('dryRun').checked, upload: $('upload').checked, retries: $('retries').value, tags: $('tags').value, modules: $('modules').value, sortByPriority: $('sortPrio').checked, maxPriority: $('maxPrio').value, model: $('runModel').value };
-  runTotal = s === 'local' ? picked.length : 0;
-  if (!body.dryRun && !(await ask('Start a real run?', 'The agent will click and type in ' + (activeUrl ? activeUrl.replace(/^https?:\/\//, '') : 'the configured environment') + ' and may create or change data. Use a dry run to try it safely first.', 'Start run'))) return;
-  try {
-    $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; $('toResults').hidden = true;
-    const res = await api('/api/run', 'POST', body);
-    if (res.error) { $('log').textContent = res.error; return toast(res.error, true); }
-    showStatus(res.run);
-  } catch (e) { $('log').textContent = String(e.message || e); fail(e); }
-});
-$('stop').addEventListener('click', async () => {
-  if (!(await ask('Stop this run?', 'The case that is running is marked interrupted, and the report is still written for the cases that finished.', 'Stop run', true))) return;
-  $('stop').disabled = true; $('runStatus').textContent = 'Stopping… saving the report';
-  api('/api/run/stop', 'POST', {}).catch(fail);
-});
-$('copyLog').addEventListener('click', () => navigator.clipboard.writeText($('log').textContent).then(() => toast('Log copied'), () => toast('Could not copy the log', true)));
-$('toResults').addEventListener('click', () => { viewRun = null; showTab('results'); });
-let progress = { started: 0, done: 0, counts: {}, current: '' };
-function showProgress() {
-  const p = progress, box = $('progress');
-  if (!p.started) { box.textContent = running ? 'Starting… the first run also downloads the test browser, which can take a few minutes.' : ''; return; }
-  const tally = ['passed', 'failed', 'blocked', 'skipped'].filter((k) => p.counts[k]).map((k) => p.counts[k] + ' ' + k).join(', ');
-  box.textContent = (running ? 'Case ' + p.started + (runTotal ? ' of ' + runTotal : '') + ': ' + p.current : p.done + ' case(s) finished') + (tally ? ' · so far: ' + tally : '') + (running ? ' · Profile switching is locked until the run ends.' : '');
-}
-function showStatus(r) {
-  running = Boolean(r) && r.status === 'running';
-  $('start').disabled = running; $('stop').disabled = !running;
-  if (!running && typeof updateSel === 'function') updateSel();
-  const s = $('runStatus'); s.className = r ? r.status : '';
-  s.replaceChildren(...(!r ? [] : running ? [el('span', { class: 'spin', 'aria-hidden': 'true' }), ' Running'] : [r.status === 'passed' ? '✓ Finished' : r.status === 'stopped' ? 'Stopped' : r.kind === 'upload' ? 'Upload failed' : 'Finished, with problems']));
-  showProgress();
-  if (r && !running) {
-    $('toResults').hidden = r.kind !== 'run';
-    viewRun = null; loadResults().catch(() => {}); loadHistory().catch(() => {});
-  }
-}
-function appendLog(line) {
-  const log = $('log');
-  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
-  log.append(line + '\n');
-  if (stick) log.scrollTop = log.scrollHeight;
-  let m;
-  if ((m = /^▶ Running \[([^\]]+)\] (.*)$/.exec(line))) { progress.started++; progress.current = m[2]; showProgress(); }
-  else if ((m = /^\s+→ (passed|failed|blocked|skipped)\b/.exec(line))) { progress.done++; progress.counts[m[1]] = (progress.counts[m[1]] || 0) + 1; showProgress(); }
-}
-async function initRun() {
-  try {
-    const r = await api('/api/run');
-    if (r) { $('log').textContent = ''; r.lines.forEach(appendLog); showStatus(r); }
-  } catch { /* no run yet */ }
-  const es = new EventSource('/api/run/events');
-  es.addEventListener('line', (e) => appendLog(JSON.parse(e.data).line));
-  es.addEventListener('status', (e) => showStatus(JSON.parse(e.data)));
-}
-
-// ── Results ──
-let viewRun = null, lastResults = [], runsCache = [];
-const modeText = (r) => r.mode === 'dry-run' ? 'Dry run' : r.mode === 'live' ? 'Live run' : '';
-const runSummary = (r) => r.totals ? r.totals.passed + ' of ' + r.totals.total + ' passed' : r.status === 'stopped' ? 'Stopped, no results' : 'No results';
-const isMine = (r) => !state.active || r.profile === state.active || (state.activeId && r.profileId === state.activeId);
-const shownRuns = (box) => runsCache.filter((r) => !$(box).checked || isMine(r));
-async function loadRuns() {
-  runsCache = await api('/api/history');
-  for (const t of ['resMineText', 'histMineText']) $(t).textContent = state.active ? 'Only "' + state.active + '"' : 'Only the profile in use';
-  for (const c of ['resMine', 'histMine']) $(c).disabled = !state.active;
-}
-async function loadResults() {
-  await loadRuns();
-  const list = shownRuns('resMine');
-  if (viewRun && !runsCache.some((r) => r.id === viewRun)) viewRun = null;
-  const id = viewRun || (list[0] && list[0].id) || null;
-  const rl = $('resultRuns'); rl.replaceChildren();
-  if (!list.length) rl.append(el('p', { class: 'empty' }, state.active && $('resMine').checked ? 'No runs of this profile yet.' : 'No runs yet.'));
-  for (const r of list) rl.append(el('button', { class: 'item', type: 'button', 'aria-current': r.id === id ? 'true' : 'false', onclick: () => { viewRun = r.id; loadResults().catch(fail); } },
-    el('span', {}, new Date(r.startedAt).toLocaleString(), el('small', {}, [r.profile || '.env file', modeText(r), runSummary(r)].filter(Boolean).join(' · ')))));
-  const box = $('results');
-  const meta = runsCache.find((r) => r.id === id);
-  $('resultsTitle').textContent = meta ? 'Run of ' + new Date(meta.startedAt).toLocaleString() : 'No run selected';
-  $('resultMeta').textContent = meta ? ['Profile ' + (meta.profile || '.env file'), modeText(meta), meta.model ? 'AI model ' + meta.model : '', meta.origin === 'cli' ? 'started in the terminal' : ''].filter(Boolean).join(' · ') : '';
-  const q = id ? '?run=' + encodeURIComponent(id) : '';
-  $('reportLink').href = '/report' + q; $('jsonLink').href = '/download/results.json' + q; $('junitLink').href = '/download/results.junit.xml' + q;
-  const up = $('resultUpload'); up.replaceChildren();
-  if (meta && meta.totals) up.append(meta.upload && meta.upload.url ? el('a', { class: 'btn', href: meta.upload.url, target: '_blank', rel: 'noopener' }, 'Uploaded: run #' + meta.upload.runId + ' ↗') : el('button', { class: 'btn primary', type: 'button', onclick: () => uploadRun(meta.id).catch(fail) }, meta.upload ? 'Upload again' : 'Upload to Azure DevOps'));
-  if (!id) { lastResults = []; return renderResults(); }
-  try { lastResults = (await api('/api/results' + q)) || []; } catch (e) { lastResults = []; box.replaceChildren(el('p', { class: 'empty' }, String(e.message || e))); return; }
-  renderResults();
-}
-function renderResults() {
-  const box = $('results'), results = lastResults;
-  if (!results.length) { box.replaceChildren(el('div', { class: 'empty' }, el('p', {}, 'No results yet.'), el('button', { class: 'btn primary', type: 'button', onclick: () => showTab('run') }, 'Go to Run'))); return; }
-  const count = (o) => results.filter((r) => r.outcome === o).length;
-  const tiles = el('div', { class: 'tiles' }, el('div', { class: 'tile' }, el('b', {}, String(results.length)), el('span', {}, 'cases')),
-    ...['passed', 'failed', 'blocked', 'skipped'].map((o) => el('div', { class: 'tile ' + (count(o) ? o : '') }, el('b', {}, String(count(o))), el('span', {}, o))));
-  const shown = $('onlyBad').checked ? results.filter((r) => r.outcome !== 'passed') : results;
-  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Case', 'Outcome', 'Why and what to do', 'Tries', 'Time'].map((h) => el('th', { scope: 'col' }, h)))));
-  const tb = el('tbody'); table.append(tb);
-  for (const r of shown) {
-    const why = el('div');
-    if (r.failureCategory) why.append(el('span', { class: 'cat' }, r.failureCategory.replace(/_/g, ' ')), el('div', { class: 'hint' }, state.categoryHints[r.failureCategory] || ''));
-    if (r.errorMessage) why.append(el('div', {}, r.errorMessage));
-    for (const p of r.policyBlocks || []) why.append(el('div', { class: 'blocked small' }, 'Refused by a safety rule: ' + p));
-    if ((r.steps || []).length) {
-      why.append(el('details', { open: r.outcome !== 'passed' && r.steps.length <= 6 }, el('summary', {}, r.steps.length + ' step(s)'),
-        el('ul', { class: 'steplist' }, r.steps.map((s) => el('li', {}, el('span', { class: s.status }, (s.status === 'passed' ? '✓' : s.status === 'skipped' ? '–' : '✕') + ' Step ' + s.index + ' ' + s.status + (s.verified === false ? ' (not checked)' : '') + (s.observed || s.errorMessage ? ': ' : '')), s.observed || s.errorMessage || '')))));
-    }
-    tb.append(el('tr', {},
-      el('td', {}, el('b', {}, r.title), el('div', { class: 'muted small' }, r.testCaseId)),
-      el('td', {}, el('span', { class: 'badge ' + r.outcome }, r.interrupted ? 'interrupted' : r.outcome)),
-      el('td', {}, why), el('td', {}, String(r.attemptCount || 1)), el('td', { style: 'white-space:nowrap' }, (r.durationMs / 1000).toFixed(1) + ' s')));
-  }
-  box.replaceChildren(tiles, shown.length ? el('div', { class: 'tablewrap' }, table) : el('p', { class: 'empty' }, 'Every case passed.'));
-}
-$('onlyBad').addEventListener('change', renderResults);
-$('resMine').addEventListener('change', () => loadResults().catch(fail));
-
-// ── History ──
-async function loadHistory() {
-  await loadRuns();
-  const box = $('history');
-  const runs = shownRuns('histMine');
-  if (!runs.length) { box.replaceChildren(el('p', { class: 'empty' }, runsCache.length ? 'No runs of this profile yet. Untick the filter to see all runs.' : 'No runs yet. Every run, from the app or the terminal, is kept with its reports.')); return; }
-  const table = el('table', {}, el('thead', {}, el('tr', {}, ...['Started', 'Profile', 'Cases', 'Result', 'Mode', 'Azure DevOps', 'Actions'].map((h) => el('th', { scope: 'col' }, h)))));
-  const tb = el('tbody'); table.append(tb);
-  for (const r of runs) {
-    const t = r.totals;
-    const outcome = t ? el('span', { class: 'totals' }, el('span', { class: 'passed' }, t.passed + ' passed'), t.failed ? el('span', { class: 'failed' }, t.failed + ' failed') : null, t.blocked ? el('span', { class: 'blocked' }, t.blocked + ' blocked') : null, t.skipped ? el('span', { class: 'skipped' }, t.skipped + ' skipped') : null)
-      : el('span', { class: 'muted' }, r.status === 'stopped' ? 'Stopped, no results' : 'No results');
-    const q = '?run=' + encodeURIComponent(r.id);
-    const devops = r.upload ? (r.upload.url ? el('a', { href: r.upload.url, target: '_blank', rel: 'noopener' }, 'Run #' + r.upload.runId + ' ↗') : 'Uploaded') : el('span', { class: 'muted' }, '–');
-    tb.append(el('tr', {},
-      el('td', { style: 'white-space:nowrap' }, new Date(r.startedAt).toLocaleString()),
-      el('td', {}, r.profile || '.env file'),
-      el('td', {}, t ? String(t.total) : '–'),
-      el('td', {}, outcome),
-      el('td', {}, modeText(r) || '–'), el('td', {}, devops),
-      el('td', {}, el('div', { class: 'row' },
-        t ? el('button', { class: 'btn', type: 'button', onclick: () => { viewRun = r.id; showTab('results'); } }, 'View') : null,
-        t ? el('a', { class: 'btn', href: '/report' + q, target: '_blank', rel: 'noopener' }, 'Report ↗') : null,
-        t ? el('button', { class: 'btn', type: 'button', onclick: () => uploadRun(r.id).catch(fail) }, r.upload ? 'Upload again' : 'Upload') : null,
-        el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Delete this run', title: 'Delete this run', onclick: () => deleteRun(r.id).catch(fail) }, '×')))));
-  }
-  box.replaceChildren(el('div', { class: 'tablewrap' }, table));
-}
-async function uploadRun(id) {
-  const r = runsCache.find((x) => x.id === id);
-  if (!(await ask('Upload to Azure DevOps?', 'This run is published as a new test run, using the profile it belongs to (' + ((r && r.profile) || 'the profile in use') + '), not the profile in use now. Cases that were interrupted are left out.', 'Upload'))) return;
-  const res = await api('/api/history/' + encodeURIComponent(id) + '/upload', 'POST', { plan: $('uploadPlan').value });
-  if (res.error) return toast(res.error, true);
-  $('log').textContent = ''; progress = { started: 0, done: 0, counts: {}, current: '' }; showStatus(res.run); showTab('run');
-}
-async function deleteRun(id) {
-  if (!(await ask('Delete this run?', 'Run ' + id + ' and its reports are removed from this computer.', 'Delete run', true))) return;
-  await api('/api/history/' + encodeURIComponent(id), 'DELETE'); toast('Deleted'); await loadHistory();
-}
-$('refreshHistory').addEventListener('click', () => loadHistory().catch(fail));
-$('histMine').addEventListener('change', () => loadHistory().catch(fail));
-
-// ── Test cases ──
-let casesLoaded = false, cases = [], editing = null; // editing: { file|null, tc }
-const caseDir = () => $('caseDir').value.trim();
-async function loadCases(select) {
-  casesLoaded = true;
-  cases = await api('/api/testcases?dir=' + encodeURIComponent(caseDir()));
-  renderCaseList();
-  if (select) await openCase(select);
-  else if (!editing) renderCaseEditor();
-}
-function renderCaseList() {
-  const list = $('caseList'); list.replaceChildren();
-  if (!cases.length) list.append(el('p', { class: 'empty' }, 'No test cases in this folder yet.'));
-  for (const c of cases) list.append(el('button', { class: 'item', type: 'button', 'aria-current': editing && editing.file === c.file ? 'true' : 'false', onclick: () => openCase(c.file).catch(fail) },
-    el('span', {}, c.title, el('small', {}, c.error || (c.id + ' · ' + c.steps + ' step(s)' + (c.module ? ' · ' + c.module : ''))))));
-}
-async function openCase(file) {
-  editing = { file, tc: await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(file)) };
-  renderCaseList(); renderCaseEditor();
-}
-function stepRow(step) {
-  const a = el('textarea', { rows: '2', placeholder: 'What to do, e.g. Open Accounts payable > Vendors > All vendors', 'aria-label': 'Action', 'data-sa': '1' }); a.value = step.action || '';
-  const x = el('textarea', { rows: '2', placeholder: 'What you should see (optional, but it is what gets checked)', 'aria-label': 'Expected result', 'data-se': '1' }); x.value = step.expected || '';
-  const row = el('div', { class: 'step' }, el('span', { class: 'num' }), a, x, el('div', { class: 'row' },
-    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move step up', title: 'Move up', onclick: () => { if (row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling); renumber(); } }, '↑'),
-    el('button', { class: 'btn', type: 'button', 'aria-label': 'Move step down', title: 'Move down', onclick: () => { if (row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row); renumber(); } }, '↓'),
-    el('button', { class: 'btn danger', type: 'button', 'aria-label': 'Remove step', title: 'Remove', onclick: () => { row.remove(); renumber(); } }, '×')));
-  return row;
-}
-function renumber() { document.querySelectorAll('#steps .step .num').forEach((n, i) => { n.textContent = (i + 1) + '.'; }); }
-function input(id, label, value, opts = {}) {
-  const i = el(opts.area ? 'textarea' : 'input', { id, type: 'text', placeholder: opts.placeholder || '', autocomplete: 'off' }); i.value = value == null ? '' : value;
-  return el('div', { class: 'field' }, el('label', { for: id }, label, opts.required ? el('span', { class: 'req', 'aria-label': 'required' }, '*') : null), i, opts.help ? el('div', { class: 'help' }, opts.help) : null);
-}
-function renderCaseEditor() {
-  const ed = $('caseEditor'); ed.replaceChildren();
-  if (!editing) { ed.append(el('div', { class: 'empty' }, el('p', {}, 'Pick a test case to edit, or create a new one.'), el('p', { class: 'small' }, 'Steps are written in plain language. The agent reads them and drives F&O the way a tester would.'))); return; }
-  const tc = editing.tc;
-  ed.append(el('div', { class: 'actions', style: 'margin-bottom:1rem' }, el('h3', {}, editing.file ? tc.title : 'New test case'), el('span', { class: 'spacer' }),
-    editing.file ? el('button', { class: 'btn primary', type: 'button', onclick: () => runCase(tc.id) }, '▶ Run this case') : null,
-    editing.file ? el('button', { class: 'btn', type: 'button', onclick: () => { editing = { file: null, tc: { ...tc, id: tc.id + '-COPY', title: tc.title + ' (copy)' } }; renderCaseList(); renderCaseEditor(); } }, 'Duplicate') : null,
-    editing.file ? el('button', { class: 'btn danger', type: 'button', onclick: () => deleteCase().catch(fail) }, 'Delete') : null));
-  const form = el('form', { id: 'caseForm' },
-    input('tcTitle', 'Title', tc.title, { required: true, placeholder: 'Create a vendor' }),
-    el('fieldset', { class: 'group' }, el('legend', {}, 'Steps'), el('p', { class: 'gdesc' }, 'One action per step. Add what you expect to see, so the agent can check it.'),
-      el('div', { class: 'steps', id: 'steps' }, (tc.steps || []).map(stepRow)),
-      el('button', { class: 'btn', type: 'button', onclick: () => { $('steps').append(stepRow({})); renumber(); $('steps').lastChild.querySelector('textarea').focus(); } }, '+ Add step')),
-    el('fieldset', { class: 'group' }, el('legend', {}, 'Details'),
-      input('tcModule', 'Module', tc.module, { placeholder: 'Accounts payable' }),
-      input('tcEntity', 'Legal entity', tc.legalEntity, { placeholder: 'Default from the profile', help: 'Navigation to another company is refused during the run.' }),
-      input('tcPre', 'Preconditions', tc.preconditions, { area: true, placeholder: 'Data or setup that must already exist' }),
-      el('details', { class: 'more' }, el('summary', {}, 'More details'),
-        input('tcId', 'Id', tc.id, { placeholder: 'TC-VENDOR-001', help: editing.file ? 'Saved in ' + editing.file : 'Leave empty to derive it from the title.' }),
-        input('tcPriority', 'Priority (1 to 4)', tc.priority, { help: '1 is the most urgent.' }),
-        input('tcTags', 'Tags', (tc.tags || []).join(', '), { placeholder: 'smoke, vendor' }))),
-    el('div', { class: 'err', id: 'caseErr', role: 'alert' }),
-    el('div', { class: 'savebar' }, el('span', { class: 'spacer' }), el('button', { class: 'btn primary', type: 'submit' }, 'Save test case')));
-  form.addEventListener('submit', (ev) => { ev.preventDefault(); saveCase().catch((e) => { $('caseErr').textContent = e.message; }); });
-  ed.append(form); renumber();
-}
-async function saveCase() {
-  const steps = [...document.querySelectorAll('#steps .step')].map((r) => ({ action: r.querySelector('[data-sa]').value, expected: r.querySelector('[data-se]').value })).filter((s) => s.action.trim() || s.expected.trim());
-  const testCase = { id: $('tcId').value.trim(), title: $('tcTitle').value, module: $('tcModule').value, legalEntity: $('tcEntity').value, priority: $('tcPriority').value.trim(),
-    tags: $('tcTags').value.split(',').map((t) => t.trim()).filter(Boolean), preconditions: $('tcPre').value, steps };
-  const q = '?dir=' + encodeURIComponent(caseDir()) + (editing.file ? '&file=' + encodeURIComponent(editing.file) : '');
-  const res = await api('/api/testcases' + q, 'PUT', { testCase });
-  toast('Saved'); editing = null; runCasesLoaded = false; await loadCases(res.file);
-}
-async function deleteCase() {
-  if (!(await ask('Delete this test case?', '"' + editing.tc.title + '" (' + editing.file + ') is removed from the folder.', 'Delete test case', true))) return;
-  await api('/api/testcases?dir=' + encodeURIComponent(caseDir()) + '&file=' + encodeURIComponent(editing.file), 'DELETE');
-  toast('Deleted'); editing = null; runCasesLoaded = false; await loadCases();
-}
-async function runCase(id) {
-  document.querySelector('input[name=source][value=local]').checked = true;
-  $('local').value = caseDir();
-  syncSource();
-  await loadRunCases(id);
-  showTab('run');
-}
-$('caseDirLoad').addEventListener('click', () => { editing = null; loadCases().catch(fail); });
-$('caseDir').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('caseDirLoad').click(); });
-$('caseNew').addEventListener('click', () => { editing = { file: null, tc: { id: '', title: '', steps: [{ action: 'Sign in to D365 F&O and open the default dashboard', expected: 'The dashboard is shown' }], tags: [] } }; renderCaseList(); renderCaseEditor(); $('tcTitle').focus(); });
-
-refresh().catch(fail);
-initRun();
-</script>
-</body>
+      const el = (tag, props = {}, ...children) => {
+        const node = document.createElement(tag);
+        for (const [key, value] of Object.entries(props)) {
+          if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+          else if (key === 'class') node.className = value;
+          else if (['value', 'checked', 'disabled', 'hidden'].includes(key)) node[key] = value;
+          else if (value !== undefined) node.setAttribute(key, value);
+        }
+        for (const child of children.flat())
+          if (child !== undefined && child !== null)
+            node.append(child.nodeType ? child : document.createTextNode(String(child)));
+        return node;
+      };
+      let state = { profiles: [], active: null, catalog: [] },
+        current = null,
+        aiEntries = [],
+        cases = [],
+        selected = new Set(),
+        editing = null;
+      let profileSnapshot = '[]',
+        aiSnapshot = '[]',
+        editorDirty = false,
+        currentTab = 'cases',
+        currentRun = null,
+        selectedRun = '';
+      function notice(message, bad = false) {
+        $('notice').textContent = message;
+        $('notice').className = bad ? 'bad' : 'good';
+        $('notice').hidden = false;
+      }
+      const fail = (error) => notice(error.message || String(error), true);
+      async function api(path, method = 'GET', body) {
+        let res;
+        try {
+          res = await fetch(path, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'd365fo-ui' },
+            body: body === undefined ? undefined : JSON.stringify(body),
+          });
+        } catch {
+          throw new Error(
+            'The local app could not be reached. Keep your entries open and check that the app is still running.',
+          );
+        }
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
+        return data;
+      }
+      function values(root) {
+        return [...$(root).querySelectorAll('[data-key]')].map((i) => ({ key: i.dataset.key, value: i.value }));
+      }
+      function dirty() {
+        return (
+          editorDirty ||
+          JSON.stringify(values('profileFields')) !== profileSnapshot ||
+          JSON.stringify(values('aiFields')) !== aiSnapshot
+        );
+      }
+      function updateDirty() {
+        $('saveProfile').disabled = !current || JSON.stringify(values('profileFields')) === profileSnapshot;
+        $('saveAi').disabled = JSON.stringify(values('aiFields')) === aiSnapshot;
+      }
+      function field(spec, value) {
+        const id = 'f_' + spec.key,
+          props = { id, 'data-key': spec.key, value: value || '' };
+        const input = spec.options
+          ? el(
+              'select',
+              props,
+              spec.options.map((o) =>
+                el(
+                  'option',
+                  { value: o },
+                  { '': 'Default', 'azure-cli': 'Microsoft account', pat: 'Personal access token' }[o] || o,
+                ),
+              ),
+            )
+          : el('input', {
+              ...props,
+              type: spec.secret ? 'password' : spec.type === 'url' ? 'url' : 'text',
+              placeholder: spec.placeholder || '',
+              autocomplete: spec.secret ? 'new-password' : 'off',
+            });
+        input.value = value || '';
+        return el(
+          'div',
+          { class: 'field' },
+          el('label', { for: id }, spec.label),
+          input,
+          spec.help ? el('small', { class: 'help' }, spec.help) : null,
+        );
+      }
+      function renderFields(root, entries, groups) {
+        const box = $(root);
+        box.replaceChildren();
+        const map = new Map(entries.map((e) => [e.key, e.value]));
+        for (const group of groups) {
+          const fields = state.catalog.filter((s) => s.group === group);
+          if (root === 'profileFields') box.append(el('h2', {}, group));
+          for (const spec of fields.filter((s) => !s.advanced)) box.append(field(spec, map.get(spec.key)));
+          const advanced = el('details', {}, el('summary', {}, 'Advanced'));
+          for (const spec of fields.filter((s) => s.advanced)) advanced.append(field(spec, map.get(spec.key)));
+          box.append(advanced);
+        }
+      }
+      async function refreshState() {
+        state = await api('/api/state');
+        $('environment').textContent = state.active ? `Environment: ${state.active}` : 'No environment selected';
+        const picked = current?.name || state.active;
+        $('profilePicker').replaceChildren(
+          el('option', { value: '' }, 'Choose an environment'),
+          ...state.profiles.map((p) => el('option', { value: p.name }, p.name + (p.active ? ' · in use' : ''))),
+        );
+        $('profilePicker').value = picked || '';
+      }
+      async function openProfile(name) {
+        current = name ? await api('/api/profiles/' + encodeURIComponent(name)) : null;
+        renderFields('profileFields', current?.entries || [], ['Dynamics 365 F&O', 'Azure DevOps']);
+        $('profileForm').hidden = !current;
+        profileSnapshot = JSON.stringify(values('profileFields'));
+        updateDirty();
+      }
+      async function refresh() {
+        await refreshState();
+        await openProfile(current?.name || state.active || state.profiles[0]?.name || '');
+        aiEntries = (await api('/api/ai')).entries;
+        renderFields('aiFields', aiEntries, ['AI model']);
+        aiSnapshot = JSON.stringify(values('aiFields'));
+        updateDirty();
+      }
+      async function saveProfile() {
+        if (!current) throw new Error('Choose or create an environment first.');
+        const form = values('profileFields'),
+          submitted = JSON.stringify(form);
+        const keys = new Set(form.map((e) => e.key));
+        const entries = [...current.entries.filter((e) => !keys.has(e.key)), ...form];
+        $('saveProfile').disabled = true;
+        try {
+          await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries });
+        } catch (e) {
+          updateDirty();
+          $('profileStatus').textContent = 'Not saved';
+          throw e;
+        }
+        current.entries = entries;
+        profileSnapshot = submitted;
+        updateDirty();
+        $('profileStatus').textContent = 'Saved';
+        try {
+          await refreshState();
+          notice('Environment saved.');
+        } catch {
+          notice('Environment saved, but its status could not reload. Your entries are preserved.', true);
+        }
+      }
+      async function saveAi() {
+        const entries = values('aiFields'),
+          submitted = JSON.stringify(entries);
+        $('saveAi').disabled = true;
+        try {
+          await api('/api/ai', 'PUT', { entries });
+        } catch (e) {
+          updateDirty();
+          $('aiStatus').textContent = 'Not saved';
+          throw e;
+        }
+        aiEntries = entries;
+        aiSnapshot = submitted;
+        updateDirty();
+        $('aiStatus').textContent = 'Saved';
+        notice('AI connection saved for Chat and all test runs.');
+      }
+      async function showTab(id) {
+        if (!['cases', 'results', 'settings'].includes(id)) return;
+        for (const tab of ['cases', 'results', 'settings']) $('tab-' + tab).hidden = tab !== id;
+        currentTab = id;
+        if (id === 'results') await loadResults().catch(fail);
+      }
+      for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => showTab(b.dataset.tab);
+      $('profileForm').onsubmit = (e) => {
+        e.preventDefault();
+        saveProfile().catch(fail);
+      };
+      $('aiForm').onsubmit = (e) => {
+        e.preventDefault();
+        saveAi().catch(fail);
+      };
+      $('profileForm').oninput = $('aiForm').oninput = updateDirty;
+      $('profileForm').onchange = $('aiForm').onchange = updateDirty;
+      $('profilePicker').onchange = async () => {
+        const name = $('profilePicker').value;
+        if (
+          JSON.stringify(values('profileFields')) !== profileSnapshot &&
+          !(await confirmAction('Discard the unsaved environment edits?'))
+        ) {
+          $('profilePicker').value = current?.name || '';
+          return;
+        }
+        await openProfile(name).catch(fail);
+      };
+      $('newProfile').onclick = async () => {
+        if (dirty() && !(await confirmAction('Save or copy your edits before continuing. Discard these edits?')))
+          return;
+        const name = await promptText('Environment name');
+        if (!name) return;
+        try {
+          await api('/api/profiles', 'POST', { name, entries: [] });
+          await refreshState();
+          await openProfile(name);
+          $('profilePicker').value = name;
+        } catch (e) {
+          fail(e);
+        }
+      };
+      $('renameProfile').onclick = async () => {
+        if (!current) return;
+        const name = await promptText('New environment name', current.name);
+        if (!name) return;
+        try {
+          if (!(await confirmAction('Rename this environment? Unsaved edits stay in the form.'))) return;
+          await api('/api/profiles/' + encodeURIComponent(current.name), 'PATCH', { name });
+          current.name = name;
+          await refreshState();
+        } catch (e) {
+          fail(e);
+        }
+      };
+      $('useProfile').onclick = async () => {
+        try {
+          if (!current) throw new Error('Choose an environment first.');
+          if (JSON.stringify(values('profileFields')) !== profileSnapshot) await saveProfile();
+          await api('/api/active', 'POST', { name: current.name });
+          await refreshState();
+          notice('Using ' + current.name);
+        } catch (e) {
+          fail(e);
+        }
+      };
+      async function profileCommand(command) {
+        if (!current) throw new Error('Choose an environment first.');
+        if (JSON.stringify(values('profileFields')) !== profileSnapshot) await saveProfile();
+        const button = command === 'check' ? $('checkSetup') : $('devopsLogin');
+        button.disabled = true;
+        $('setupOutput').textContent =
+          command === 'check' ? 'Checking…' : 'Finish the Microsoft sign-in in your browser…';
+        try {
+          const r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/' + command, 'POST');
+          $('setupOutput').textContent = r.output || 'No output.';
+          if (r.exitCode !== 0) notice('The check needs attention; see its output.', true);
+        } finally {
+          button.disabled = false;
+        }
+      }
+      $('checkSetup').onclick = () => profileCommand('check').catch(fail);
+      $('devopsLogin').onclick = () => profileCommand('devops-login').catch(fail);
+      $('checkAi').onclick = async () => {
+        try {
+          if (JSON.stringify(values('aiFields')) !== aiSnapshot) await saveAi();
+          $('checkAi').disabled = true;
+          const r = await api('/api/ai/check', 'POST');
+          $('aiStatus').textContent = r.detail;
+          $('aiStatus').className = r.ok ? 'good' : 'bad';
+        } catch (e) {
+          fail(e);
+        } finally {
+          $('checkAi').disabled = false;
+        }
+      };
+      function sourceQuery() {
+        if ($('source').value === 'devops')
+          return new URLSearchParams({ plan: $('plan').value.trim(), suite: $('suite').value.trim() });
+        return new URLSearchParams({ local: $('caseDir').value.trim() });
+      }
+      async function loadCases() {
+        if (editorDirty && !(await confirmAction('Discard unsaved test-case edits?'))) return;
+        cases = await api('/api/cases?' + sourceQuery());
+        selected = new Set(cases.filter((c) => !c.error).map((c) => c.id));
+        editing = null;
+        editorDirty = false;
+        $('caseEditor').hidden = true;
+        renderCases();
+      }
+      function renderCases() {
+        $('caseList').replaceChildren(
+          ...(cases.length
+            ? cases.map((c) =>
+                el(
+                  'div',
+                  { class: 'case' },
+                  el('input', {
+                    type: 'checkbox',
+                    checked: selected.has(c.id),
+                    disabled: !!c.error,
+                    'aria-label': 'Select ' + c.id,
+                    onchange: (e) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)),
+                  }),
+                  el('button', { class: 'link', onclick: () => openCase(c).catch(fail) }, `${c.id} · ${c.title}`),
+                  el(
+                    'span',
+                    { class: 'badge' },
+                    c.error || `${Array.isArray(c.steps) ? c.steps.length : c.steps} steps`,
+                  ),
+                ),
+              )
+            : [el('p', {}, 'No cases found.')]),
+        );
+      }
+      $('source').onchange = () => {
+        $('localSource').hidden = $('source').value !== 'local';
+        $('devopsSource').hidden = $('source').value !== 'devops';
+        $('newCase').hidden = $('source').value !== 'local';
+        cases = [];
+        selected.clear();
+        renderCases();
+      };
+      for (const id of ['caseDir', 'plan', 'suite'])
+        $(id).oninput = () => {
+          cases = [];
+          selected.clear();
+          renderCases();
+        };
+      $('loadCases').onclick = () => loadCases().catch(fail);
+      $('selectAll').onclick = () => {
+        selected = new Set(cases.filter((c) => !c.error).map((c) => c.id));
+        renderCases();
+      };
+      async function openCase(c) {
+        if (editorDirty && !(await confirmAction('Discard unsaved test-case edits?'))) return;
+        const remote = $('source').value === 'devops';
+        const loaded = remote
+          ? c
+          : await api('/api/testcases?' + new URLSearchParams({ dir: $('caseDir').value, file: c.file }));
+        editing = { file: c.file, dir: $('caseDir').value, draft: loaded, remote };
+        renderEditor();
+      }
+      function renderEditor() {
+        const box = $('caseEditor');
+        box.hidden = false;
+        box.replaceChildren();
+        editorDirty = false;
+        const { draft, remote } = editing;
+        box.append(el('h2', {}, remote ? 'Azure DevOps case' : 'Edit test case'));
+        const id = el('input', { id: 'caseId', value: draft.id || '', disabled: remote, 'aria-label': 'Case ID' }),
+          title = el('input', {
+            id: 'caseTitle',
+            value: draft.title || '',
+            disabled: remote,
+            'aria-label': 'Case title',
+          });
+        box.append(el('div', { class: 'row' }, id, title));
+        const stepBox = el('div', { id: 'steps' });
+        box.append(stepBox);
+        function stepRow(s) {
+          const row = el(
+            'div',
+            { class: 'step' },
+            el('textarea', {
+              'data-action': '',
+              placeholder: 'Action',
+              'aria-label': 'Step action',
+              value: s.action || '',
+              disabled: remote,
+            }),
+            el('textarea', {
+              'data-expected': '',
+              placeholder: 'Expected result',
+              'aria-label': 'Expected result',
+              value: s.expected || '',
+              disabled: remote,
+            }),
+          );
+          if (!remote)
+            row.append(
+              el(
+                'div',
+                { class: 'actions' },
+                el(
+                  'button',
+                  {
+                    type: 'button',
+                    onclick: () => {
+                      if (row.previousElementSibling) stepBox.insertBefore(row, row.previousElementSibling);
+                      editorDirty = true;
+                    },
+                  },
+                  'Move up',
+                ),
+                el(
+                  'button',
+                  {
+                    type: 'button',
+                    onclick: () => {
+                      if (row.nextElementSibling) stepBox.insertBefore(row.nextElementSibling, row);
+                      editorDirty = true;
+                    },
+                  },
+                  'Move down',
+                ),
+                el(
+                  'button',
+                  {
+                    type: 'button',
+                    onclick: () => {
+                      row.remove();
+                      editorDirty = true;
+                    },
+                  },
+                  'Remove step',
+                ),
+              ),
+            );
+          return row;
+        }
+        for (const s of draft.steps || []) stepBox.append(stepRow(s));
+        if (!remote)
+          box.append(
+            el(
+              'div',
+              { class: 'actions' },
+              el(
+                'button',
+                {
+                  onclick: () => {
+                    stepBox.append(stepRow({}));
+                    editorDirty = true;
+                  },
+                },
+                'Add step',
+              ),
+              el('button', { class: 'primary', id: 'saveCase', onclick: () => saveCase().catch(fail) }, 'Save case'),
+              el(
+                'button',
+                {
+                  onclick: async () => {
+                    const name = await promptText('New case ID', draft.id + '-COPY');
+                    if (!name) return;
+                    editing.file = undefined;
+                    id.value = name;
+                    editorDirty = true;
+                    await saveCase().catch(fail);
+                  },
+                },
+                'Duplicate',
+              ),
+              el(
+                'button',
+                {
+                  onclick: async () => {
+                    if (!editing.file || !(await confirmAction('Delete this test-case file?'))) return;
+                    try {
+                      await api(
+                        '/api/testcases?' + new URLSearchParams({ dir: editing.dir, file: editing.file }),
+                        'DELETE',
+                      );
+                      editorDirty = false;
+                      await loadCases();
+                    } catch (e) {
+                      fail(e);
+                    }
+                  },
+                },
+                'Delete',
+              ),
+            ),
+          );
+        box.oninput = () => (editorDirty = true);
+      }
+      async function saveCase() {
+        const testCase = {
+          ...editing.draft,
+          id: $('caseId').value,
+          title: $('caseTitle').value,
+          steps: [...$('steps').children].map((row) => ({
+            action: row.querySelector('[data-action]').value,
+            expected: row.querySelector('[data-expected]').value,
+          })),
+        };
+        const q = new URLSearchParams({ dir: editing.dir });
+        if (editing.file) q.set('file', editing.file);
+        const oldId = editing.draft.id;
+        const saved = await api('/api/testcases?' + q, 'PUT', { testCase });
+        editing.file = saved.file;
+        editing.draft = testCase;
+        editorDirty = false;
+        notice('Test case saved.');
+        if ($('source').value === 'local' && $('caseDir').value === editing.dir) {
+          cases = await api('/api/cases?' + sourceQuery());
+          if (selected.delete(oldId)) selected.add(testCase.id);
+          renderCases();
+        }
+      }
+      $('newCase').onclick = async () => {
+        if (editorDirty && !(await confirmAction('Discard unsaved edits?'))) return;
+        editing = {
+          dir: $('caseDir').value,
+          draft: { id: '', title: '', steps: [{ action: '', expected: '' }] },
+          remote: false,
+        };
+        renderEditor();
+      };
+      $('runSelected').onclick = async () => {
+        try {
+          if (!state.active) throw new Error('Choose an environment in Settings first.');
+          if (!selected.size) throw new Error('Select at least one test case.');
+          if (editorDirty) throw new Error('Save your test-case edits before running.');
+          const diagnostic = $('dryRun').checked;
+          if (
+            !(await confirmAction(
+              `${diagnostic ? 'Diagnostic only' : 'Run tests'} on ${state.active}: ${[...selected].join(', ')}?`,
+            ))
+          )
+            return;
+          const body = {
+            source: $('source').value,
+            cases: [...selected],
+            dryRun: diagnostic,
+            ...Object.fromEntries(sourceQuery()),
+          };
+          const r = await api('/api/run', 'POST', body);
+          if (r.error) throw new Error(r.error);
+          await refreshRun();
+        } catch (e) {
+          fail(e);
+        }
+      };
+      async function refreshRun() {
+        currentRun = await api('/api/run');
+        $('runPanel').hidden = !currentRun;
+        if (!currentRun) return;
+        $('runStatus').textContent =
+          `${currentRun.kind === 'upload' ? 'Upload' : 'Run'} · ${currentRun.status} · ${currentRun.profile || 'No environment'}`;
+        $('stopRun').disabled = currentRun.status !== 'running';
+        $('runLog').textContent = (currentRun.lines || []).join('\n');
+      }
+      $('stopRun').onclick = () => api('/api/run/stop', 'POST').then(refreshRun).catch(fail);
+      $('openRunResults').onclick = () => showTab('results');
+      async function loadResults() {
+        const history = await api('/api/history');
+        $('runPicker').replaceChildren(
+          el('option', { value: '' }, 'Latest results in active environment'),
+          ...history.map((r) =>
+            el(
+              'option',
+              { value: r.id },
+              `${new Date(r.startedAt).toLocaleString()} · ${r.profile || 'No environment'} · ${r.mode || 'live'} · ${r.status}`,
+            ),
+          ),
+        );
+        if (history.some((r) => r.id === selectedRun)) $('runPicker').value = selectedRun;
+        else selectedRun = '';
+        await renderResults(history.find((r) => r.id === selectedRun));
+      }
+      async function renderResults(meta) {
+        selectedRun = $('runPicker').value;
+        const rows = await api('/api/results' + (selectedRun ? '?run=' + encodeURIComponent(selectedRun) : '')),
+          box = $('resultDetail');
+        box.replaceChildren();
+        if (!rows?.length) {
+          box.append(el('p', {}, 'No test results for this run. Check the run log for setup errors.'));
+          return;
+        }
+        const counts = {};
+        for (const r of rows) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
+        box.append(
+          el(
+            'h2',
+            {},
+            Object.entries(counts)
+              .map(([k, v]) => `${v} ${k}`)
+              .join(' · '),
+          ),
+        );
+        const q = selectedRun ? '?run=' + encodeURIComponent(selectedRun) : '';
+        box.append(
+          el(
+            'div',
+            { class: 'actions' },
+            el('a', { href: '/report' + q, target: '_blank', rel: 'noopener' }, 'HTML report'),
+            el('a', { href: '/download/results.json' + q }, 'JSON'),
+            el('a', { href: '/download/results.junit.xml' + q }, 'JUnit'),
+          ),
+        );
+        if (selectedRun)
+          box.append(
+            el(
+              'div',
+              { class: 'actions' },
+              el(
+                'button',
+                {
+                  onclick: async () => {
+                    if (!(await confirmAction(`Upload run ${selectedRun} using its saved environment?`))) return;
+                    const plan = await promptText(
+                      'Azure DevOps plan ID',
+                      meta?.args?.[meta.args.indexOf('--plan') + 1] || '',
+                    );
+                    if (!plan) return;
+                    try {
+                      await api('/api/history/' + selectedRun + '/upload', 'POST', { plan });
+                      await refreshRun();
+                    } catch (e) {
+                      fail(e);
+                    }
+                  },
+                },
+                'Upload to Azure DevOps',
+              ),
+            ),
+          );
+        for (const r of rows) {
+          const details = el(
+            'details',
+            {},
+            el(
+              'summary',
+              { class: r.outcome === 'passed' ? 'good' : 'bad' },
+              `${r.testCaseId} · ${r.title} · ${r.outcome}`,
+            ),
+          );
+          if (r.errorMessage) details.append(el('p', { class: 'bad' }, r.errorMessage));
+          for (const s of r.steps || [])
+            details.append(el('p', {}, `${s.index}. ${s.status}: ${s.observed || s.errorMessage || ''}`));
+          box.append(details);
+        }
+      }
+      $('runPicker').onchange = () => {
+        selectedRun = $('runPicker').value;
+        loadResults().catch(fail);
+      };
+      $('refreshResults').onclick = () => loadResults().catch(fail);
+      window.addEventListener('beforeunload', (e) => {
+        if (dirty()) {
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      });
+      const events = new EventSource('/api/run/events');
+      events.addEventListener('line', () => refreshRun().catch(() => {}));
+      events.addEventListener('status', () => {
+        refreshRun().catch(() => {});
+        if (currentTab === 'results') loadResults().catch(() => {});
+      });
+      setInterval(() => refreshRun().catch(() => {}), 2500);
+      refresh()
+        .then(() => {
+          if (!state.active || !state.aiConfigured) showTab('settings');
+        })
+        .catch(fail);
+      refreshRun().catch(() => {});
+    </script>
+  </body>
 </html>

@@ -4,8 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { parseConfig } from '../config/index.js';
-import { chatConnection, DISABLED_FEATURES, EXCLUDED_PACKAGES, INSTALL_VARIANT, install, isInstalled, layout, OPENWEBUI_VERSION, overridesFile, serveEnv, syncChatModel, syncToolServer, toolConnection } from './openwebui.js';
+import { DISABLED_FEATURES, EXCLUDED_PACKAGES, INSTALL_VARIANT, install, isInstalled, layout, OPENWEBUI_VERSION, overridesFile, serveEnv, syncChatModel, syncToolServer, toolConnection } from './openwebui.js';
 
 describe('desktop Open WebUI', () => {
   it('installs a pinned Open WebUI with uv into the app folder, and remembers the version', async () => {
@@ -40,7 +39,11 @@ describe('desktop Open WebUI', () => {
     const lines = overridesFile().trim().split('\n');
     assert.equal(lines.length, EXCLUDED_PACKAGES.length);
     assert.ok(lines.every((l) => l.endsWith("; sys_platform == 'never'")));
-    const env = serveEnv({ dataDir: '/d', toolUrl: 'u', toolKey: 'k' }, {});
+    const env = serveEnv({ dataDir: '/d', toolUrl: 'u', toolKey: 'k' }, { ANTHROPIC_API_KEY: 'private', D365_PASSWORD: 'private', HTTPS_PROXY: 'http://company-proxy' });
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(env.D365_PASSWORD, undefined);
+    assert.equal(env.HTTPS_PROXY, 'http://company-proxy');
+    assert.equal(env.ENABLE_PERSISTENT_CONFIG, 'False');
     assert.equal(env.USE_SLIM_DOCKER, 'true');
     for (const f of DISABLED_FEATURES) assert.equal(env[f], 'False', f);
     assert.notEqual(env.ENABLE_OPENAI_API, 'False', 'the chat model connection stays on');
@@ -64,12 +67,7 @@ describe('desktop Open WebUI', () => {
     assert.equal(serveEnv({ dataDir: '/d', toolUrl: 'u', toolKey: 'k' }, {}).OPENAI_API_KEY, undefined);
   });
 
-  it('takes the chat model from profiles that speak an OpenAI-style API', () => {
-    assert.deepEqual(chatConnection(parseConfig({ LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'a' })), { url: 'https://api.anthropic.com/v1', key: 'a' });
-    assert.deepEqual(chatConnection(parseConfig({ LLM_PROVIDER: 'openai-compatible', OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1/', OPENAI_COMPATIBLE_MODEL: 'm' })), { url: 'http://localhost:11434/v1', key: '' });
-    assert.equal(chatConnection(parseConfig({ LLM_PROVIDER: 'github-copilot' })), undefined);
-    assert.equal(chatConnection(parseConfig({ LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'a', ANTHROPIC_BASE_URL: 'https://gw' })), undefined);
-  });
+
 });
 
 describe('tool server sync', () => {

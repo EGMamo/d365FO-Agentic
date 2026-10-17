@@ -74,8 +74,7 @@ describe('orchestrator tracing', () => {
     const out = traceOutputDir({ REPORT_DIR: dir });
     const called: string[] = [];
     const cfg = {
-      LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: true, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 5, AGENT_RELOOP_MAX_RETRIES: 0, AGENT_RELOOP_RETRY_ON: [],
-      AGENT_RELOOP_COOLDOWN_MS: 0, REPORT_DIR: dir, D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF', PW_TRACE: 'on-failure', AGENT_TOOL_TIMEOUT_MS: 5000,
+      LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: true, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 5, REPORT_DIR: dir, D365_BASE_URL: 'https://x', D365_COMPANY: 'USMF', PW_TRACE: 'on-failure', AGENT_TOOL_TIMEOUT_MS: 5000,
     } as unknown as AppConfig;
     const turns = [turn('finish_test', { outcome }, 'f')];
     const mcp = {

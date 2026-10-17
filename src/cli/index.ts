@@ -1,36 +1,22 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from 'commander';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { activeModel, ignoredModelHint, loadConfig, validateForRun } from '../config/index.js';
+import { resolve } from 'node:path';
+import { activeModel, loadConfig, validateForRun } from '../config/index.js';
 import { dotenvFileProblems } from '../config/dotenv-check.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { azdoAuthMode, azLogin, azTokenProblem } from '../devops/auth.js';
-import { KnowledgeBase } from '../knowledge/kb.js';
-import {
-  CopilotSessionAuth,
-  DEFAULT_AUTH_FILE,
-  loginWithDeviceFlow,
-  saveGitHubToken,
-} from '../llm/github-copilot.js';
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
-import { activeSessionFile, checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
-import { REPLAY_FILE, ReplayStore } from '../replay/store.js';
-import { exportSpecs } from '../replay/export.js';
-import { loadLocalTestCases } from '../testing/loader.js';
+import { checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
-import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, checkModelEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
-import { createLlmProvider, isLoopbackUrl } from '../llm/index.js';
-import { generateTestCases } from '../testing/generate.js';
-import { TestCaseFiles } from '../testing/store.js';
-import { D365ODataClient, hasAppRegistration } from '../d365fo/entra.js';
+import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
 import { environmentForChild, modelSelection, overriddenKeys, profileSelection } from '../config/load-env.js';
 import { RunHistory } from '../ui/history.js';
-import { agentHome, toolTokenFile } from '../profiles/paths.js';
-import { DEFAULT_PORT, findRunningUi, isLoopback, loadOrCreateToken, loadOrCreateToolToken, startUiServer } from '../ui/server.js';
+import { agentHome } from '../profiles/paths.js';
+import { DEFAULT_PORT, findRunningUi, loadOrCreateToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
 
 const program = new Command();
@@ -38,8 +24,7 @@ program
   .name('d365fo-agent')
   .description('Portable AI agent for D365 F&O regression and unit testing')
   .version('0.1.0')
-  .option('--profile <name>', 'Use a saved settings profile (its name or its permanent id) instead of the .env file')
-  .option('--model <name>', "Use this AI model setup (its name or id, from the app's AI models list) for this run instead of the profile's");
+  .option('--profile <name>', 'Use an environment profile (name or permanent id)');
 
 program
   .command('doctor')
@@ -54,8 +39,6 @@ program
       console.log(`  WARNING: ${overriddenKeys.join(', ')} ${overriddenKeys.length === 1 ? 'is' : 'are'} also set in this computer's environment, and that value is used instead of the one in ${profileSelection.name ? 'the profile' : '.env'}.`);
     }
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
-    const modelHint = ignoredModelHint(cfg);
-    if (modelHint) console.log(`  WARNING: ${modelHint}`);
     if (cfg.LLM_PROVIDER === 'anthropic') {
       const custom = normalizeAnthropicBaseUrl(cfg.ANTHROPIC_BASE_URL);
       if (!custom) {
@@ -74,37 +57,11 @@ program
           console.log(`Claude API URL: reachable at ${custom} (${ep.detail})`);
           if (ep.models.length && !ep.models.includes(cfg.LLM_MODEL)) console.log(`  WARNING: model '${cfg.LLM_MODEL}' is not in the server's list: ${ep.models.slice(0, 8).join(', ')}`);
         }
-        if (/^http:\/\//i.test(custom) && !isLoopbackUrl(custom)) console.log('  WARNING: this address is plain http, so the key and the page content sent to the model are not encrypted. Use https.');
-      }
-    }
-    if (cfg.LLM_PROVIDER === 'openai-compatible') {
-      const url = cfg.OPENAI_COMPATIBLE_BASE_URL;
-      const ep = await checkModelEndpoint(url, cfg.OPENAI_COMPATIBLE_API_KEY);
-      if (!ep.reachable) {
-        console.log(`LLM endpoint: NOT REACHABLE at ${url} (${ep.error})`);
-        issues.push(`Cannot reach the LLM endpoint at ${url}. Start the server (Ollama: open the app or run \`ollama serve\`; LM Studio: start its local server).`);
-      } else {
-        console.log(`LLM endpoint: reachable at ${url} (${ep.models.length} model(s) listed${ep.error ? `; ${ep.error}` : ''})`);
-        const model = cfg.OPENAI_COMPATIBLE_MODEL;
-        if (model && ep.models.length && !ep.models.includes(model)) {
-          console.log(`  WARNING: model '${model}' is not in the server's list: ${ep.models.slice(0, 8).join(', ')}`);
-        }
-      }
-      if (isLoopbackUrl(url)) {
-        console.log('  Local models: the agent needs a context window of at least 32k tokens (Ollama: OLLAMA_CONTEXT_LENGTH=32768 or more; check with `ollama ps`).');
-        if (cfg.LLM_MAX_TOKENS < 8192) console.log('  Thinking models spend output tokens on reasoning: consider LLM_MAX_TOKENS=8192 or more.');
       }
     }
     console.log(`D365 base URL: ${cfg.D365_BASE_URL ?? '(missing)'} [${describeEnvironment(cfg)}${cfg.AGENT_ALLOW_PRODUCTION ? '; production runs allowed' : ''}]`);
     console.log(`Guardrails: navigation limited to ${allowedHosts(cfg).join(', ')}; ${cfg.AGENT_ALLOWED_TOOLS_EXTRA.length} extra tool grant(s)`);
     console.log(`D365 credentials: username ${cfg.D365_USERNAME ? 'set' : 'MISSING'}, password ${cfg.D365_PASSWORD ? 'set' : 'MISSING'}`);
-    if (hasAppRegistration(cfg) && cfg.D365_BASE_URL) {
-      const app = await new D365ODataClient(cfg).check();
-      console.log(`D365 app registration: ${app.ok ? 'OK' : 'FAILED'} - ${app.detail}`);
-      if (!app.ok) issues.push(`Entra app registration: ${app.detail}`);
-    } else {
-      console.log('D365 app registration: not configured (optional)');
-    }
     const session = await checkSession(cfg);
     console.log(`D365 saved session: ${session.state === 'off' ? session.detail : `${session.state.toUpperCase()} - ${session.detail}`}`);
     if (session.state === 'expired' || session.state === 'unreadable') {
@@ -145,30 +102,6 @@ program
     } else {
       console.log('\nConfiguration looks good.');
     }
-  });
-
-program
-  .command('copilot-login')
-  .description('Sign in to GitHub Copilot (device flow) and save the token for LLM_PROVIDER=github-copilot')
-  .action(async () => {
-    const cfg = loadConfig();
-    const http = {
-      timeoutMs: cfg.LLM_HTTP_TIMEOUT_MS,
-      maxRetries: cfg.LLM_HTTP_MAX_RETRIES,
-      retryBaseMs: cfg.LLM_HTTP_RETRY_BASE_MS,
-    };
-    const token = await loginWithDeviceFlow({
-      http,
-      onPrompt: ({ userCode, verificationUri }) => {
-        console.log(`\nOpen ${verificationUri} and enter the code: ${userCode}`);
-        console.log('Waiting for authorization...');
-      },
-    });
-    // Prove the account can actually get a Copilot session before saving anything.
-    await new CopilotSessionAuth(token, http).get();
-    await saveGitHubToken(token);
-    console.log(`\nSigned in. Token saved to ${DEFAULT_AUTH_FILE}`);
-    console.log('Set LLM_PROVIDER=github-copilot (and optionally GITHUB_COPILOT_MODEL) to use it.');
   });
 
 program
@@ -240,9 +173,6 @@ program
   .option('--dry-run', 'Skip state-changing browser actions (click/type/fill/...); navigation and snapshots still run')
   .option('--upload', 'Upload results to Azure DevOps after the run')
   .option('--probe-session', 'Before running tests, verify the saved D365 session with one HTTP probe and fail fast if it is expired')
-  .option('--reloop-max-retries <n>', 'Retries per case after first attempt', intArg)
-  .option('--reloop-retry-on <csv>', 'Outcomes to retry (comma-separated)', 'failed,blocked')
-  .option('--reloop-cooldown-ms <ms>', 'Delay between retries in milliseconds', intArg)
   .action(async (opts: {
     plan?: string;
     suite?: string;
@@ -256,28 +186,11 @@ program
     dryRun?: boolean;
     upload?: boolean;
     probeSession?: boolean;
-    reloopMaxRetries?: number;
-    reloopRetryOn?: string;
-    reloopCooldownMs?: number;
   }) => {
     const cfg = loadConfig();
     const runStartedAt = new Date().toISOString();
     const warnings: string[] = [];
     if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
-    if (opts.reloopMaxRetries !== undefined && !Number.isNaN(opts.reloopMaxRetries)) {
-      cfg.AGENT_RELOOP_MAX_RETRIES = Math.max(0, opts.reloopMaxRetries);
-    }
-    if (opts.reloopCooldownMs !== undefined && !Number.isNaN(opts.reloopCooldownMs)) {
-      cfg.AGENT_RELOOP_COOLDOWN_MS = Math.max(0, opts.reloopCooldownMs);
-    }
-    if (opts.reloopRetryOn) {
-      cfg.AGENT_RELOOP_RETRY_ON = opts.reloopRetryOn
-        .split(',')
-        .map((x) => x.trim().toLowerCase())
-        .filter((x): x is (typeof cfg.AGENT_RELOOP_RETRY_ON)[number] =>
-          ['passed', 'failed', 'skipped', 'blocked'].includes(x),
-        );
-    }
     const failOn = parseOutcomes(opts.failOn);
     if (failOn === null) {
       console.error('config: --fail-on takes a comma-separated list of passed, failed, skipped, blocked');
@@ -292,8 +205,6 @@ program
       process.exit(1);
     }
     console.log(`LLM: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})${modelSelection.name ? ` from AI model "${modelSelection.name}"` : ''}`);
-    const modelHint = ignoredModelHint(cfg);
-    if (modelHint) console.warn(`warning: ${modelHint}`);
 
     if (opts.probeSession) {
       const probe = await probeSession(cfg);
@@ -332,9 +243,6 @@ program
         signal: interrupt.signal,
         dryRun: cfg.AGENT_DRY_RUN,
         upload: opts.upload,
-        reloopMaxRetries: cfg.AGENT_RELOOP_MAX_RETRIES,
-        reloopRetryOn: cfg.AGENT_RELOOP_RETRY_ON,
-        reloopCooldownMs: cfg.AGENT_RELOOP_COOLDOWN_MS,
       });
     } finally {
       process.off('SIGINT', onStop);
@@ -416,105 +324,6 @@ program
     console.log(`Uploaded run #${runId}: ${url}`);
   });
 
-program
-  .command('generate')
-  .description('Draft local test cases from a plain-language description with the configured LLM')
-  .argument('<description...>', 'What to test, e.g. "create a vendor and post an invoice for it"')
-  .option('--dir <dir>', 'Folder (inside the current folder) to save the cases in', 'test-cases')
-  .option('--count <n>', 'How many cases to draft (1-10)', intArg, 1)
-  .option('--module <name>', 'D365 F&O module, e.g. "Accounts payable"')
-  .option('--legal-entity <code>', 'Company to test in, e.g. USMF')
-  .option('--dry-run', 'Print the drafts instead of saving them')
-  .action(async (words: string[], opts: { dir: string; count: number; module?: string; legalEntity?: string; dryRun?: boolean }) => {
-    const cfg = loadConfig();
-    const description = words.join(' ');
-    const files = new TestCaseFiles(process.cwd());
-    const existing = await files.list(opts.dir);
-    const kb = new KnowledgeBase(cfg.KB_DIR);
-    await kb.load();
-    const llm = createLlmProvider(cfg);
-    console.log(`Drafting with ${llm.name} (${activeModel(cfg)})…`);
-    const res = await generateTestCases(llm, description, {
-      count: Number.isNaN(opts.count) ? 1 : opts.count,
-      ...(opts.module ? { module: opts.module } : {}),
-      ...(opts.legalEntity ? { legalEntity: opts.legalEntity } : {}),
-      knowledge: kb.retrieve(description, [], 6, opts.module),
-      existingIds: existing.map((c) => c.id),
-    });
-    for (const r of res.rejected) console.error(`! ${r}`);
-    const wanted = Math.min(10, Math.max(1, opts.count));
-    if (res.cases.length && res.cases.length < wanted) console.error(`! Only ${res.cases.length} of ${wanted} test cases were drafted; run generate again for more.`);
-    if (!res.cases.length) {
-      console.error('No test case was drafted.');
-      process.exitCode = 1;
-      return;
-    }
-    const savedIds: string[] = [];
-    for (const tc of res.cases) {
-      if (opts.dryRun) {
-        console.log(JSON.stringify(tc, null, 2));
-        continue;
-      }
-      try {
-        const saved = await files.save(opts.dir, tc);
-        savedIds.push(tc.id);
-        console.log(`Saved ${join(opts.dir, saved.file)}: ${tc.title} (${tc.steps.length} steps)`);
-      } catch (e) {
-        console.error(`! Could not save ${tc.id} (${tc.title}): ${(e as Error).message}`);
-        process.exitCode = 1;
-      }
-    }
-    if (savedIds.length) console.log(`Review the steps, then run them with: d365fo-agent run --local ${opts.dir} --case ${savedIds.join(',')}`);
-  });
-
-program
-  .command('learn')
-  .description('Inspect or maintain the local knowledge base (default: dump it as JSON)')
-  .option('--output <file>', 'Write to file instead of stdout')
-  .option('--stats', 'Show counts by kind and module, and how many known-good paths have gone stale')
-  .option('--search <query>', 'Show the entries the agent would retrieve for this text, with scores')
-  .option('--module <name>', 'Module hint for --search')
-  .option('--tag <tags>', 'Tags for --search, as on the test case (comma-separated, repeatable)', collect, [] as string[])
-  .option('--top <n>', 'With --search: how many entries to show (default 5, what a run retrieves)', intArg)
-  .option('--prune', 'Remove unreliable entries and stale known-good paths')
-  .option('--min-failures <n>', 'With --prune: remove entries that failed at least this often and more often than they succeeded (default 3)', intArg)
-  .option('--max-age-days <n>', 'With --prune: also remove never-confirmed entries older than this', intArg)
-  .action(async (opts: { output?: string; stats?: boolean; search?: string; module?: string; tag: string[]; top?: number; prune?: boolean; minFailures?: number; maxAgeDays?: number }) => {
-    const cfg = loadConfig();
-    const kb = new KnowledgeBase(cfg.KB_DIR);
-    await kb.load();
-    if (opts.prune) {
-      const removed = kb.prune({
-        ...(opts.minFailures !== undefined && !Number.isNaN(opts.minFailures) ? { minFailures: opts.minFailures } : {}),
-        ...(opts.maxAgeDays !== undefined && !Number.isNaN(opts.maxAgeDays) ? { maxAgeDays: opts.maxAgeDays } : {}),
-      });
-      if (removed.length) await kb.save();
-      console.log(`Removed ${removed.length} entr${removed.length === 1 ? 'y' : 'ies'}.`);
-      for (const e of removed) console.log(`  - [${e.kind}] ${e.summary} (${e.successCount}✓ ${e.failureCount}✗)`);
-    }
-    if (opts.stats) {
-      const s = kb.stats();
-      console.log(`Knowledge base: ${s.total} entr${s.total === 1 ? 'y' : 'ies'} in ${cfg.KB_DIR}`);
-      console.log(`  by kind:   ${Object.entries(s.byKind).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
-      console.log(`  by module: ${Object.entries(s.byModule).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}`);
-      console.log(`  known-good paths: ${s.knownPaths} (${s.staleKnownPaths} stale)`);
-    }
-    if (opts.search !== undefined) {
-      const tags = opts.tag.flatMap((t) => t.split(',')).map((t) => t.trim()).filter(Boolean);
-      const hits = kb.search(opts.search, tags, Math.max(1, opts.top ?? 5), opts.module);
-      if (!hits.length) console.log('No matching entries.');
-      for (const h of hits) console.log(`${h.score.toFixed(2).padStart(6)}  [${h.entry.kind}] ${h.entry.summary}${h.entry.module ? ` (${h.entry.module})` : ''}`);
-    }
-    if (opts.prune || opts.stats || opts.search !== undefined) return;
-    const data = JSON.stringify(kb.all(), null, 2);
-    if (opts.output) {
-      await writeFile(resolve(opts.output), data);
-      console.log(`Wrote ${opts.output}`);
-    } else {
-      console.log(data);
-    }
-  });
-
 /** Whole-number option. Commander passes the previous value as a second argument, so `Number.parseInt` cannot be used directly. */
 function intArg(value: string): number {
   if (!/^-?\d+$/.test(value.trim())) throw new InvalidArgumentError('Expected a whole number.');
@@ -539,34 +348,11 @@ async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: strin
 }
 
 program
-  .command('export-tests')
-  .description('Write the recorded passing runs as Playwright tests, to run with `npx playwright test` (no AI needed)')
-  .option('--out <dir>', 'Folder to write the tests to', 'playwright-tests')
-  .option('--case <ids>', 'Only these test-case ids (comma-separated)')
-  .option('--local <dir>', 'Local test cases, to name each step in the test report', 'examples/testcases')
-  .action(async (opts: { out: string; case?: string; local: string }) => {
-    const cfg = loadConfig();
-    const only = opts.case?.split(',').map((s) => s.trim()).filter(Boolean);
-    const scripts = (await new ReplayStore(cfg.KB_DIR).all()).filter((s) => !only?.length || only.includes(s.testCaseId));
-    if (!scripts.length) {
-      console.log(`No recorded runs in ${join(cfg.KB_DIR, REPLAY_FILE)}${only?.length ? ' for those cases' : ''}. A case is recorded when a real (not dry) run of it passes.`);
-      return;
-    }
-    const cases = new Map((await loadLocalTestCases(opts.local).catch(() => [] as TestCase[])).map((tc) => [tc.id, tc]));
-    const out = resolve(opts.out);
-    const res = await exportSpecs(scripts, out, { storageState: activeSessionFile(cfg), actionTimeoutMs: cfg.PW_ACTION_TIMEOUT_MS ?? 15000, cases });
-    console.log(`Wrote ${res.written.length} test${res.written.length === 1 ? '' : 's'} to ${out}`);
-    for (const s of res.skipped) console.log(`  skipped ${s.testCaseId}: ${s.reason}`);
-    if (res.written.length) console.log(`Run them: cd ${JSON.stringify(out)} && npm install && npx playwright test`);
-  });
-
-program
   .command('ui')
   .description('Start the local settings web app and open it in your browser')
   .option('--port <n>', `Port to listen on (default ${DEFAULT_PORT})`, intArg)
   .option('--no-open', 'Do not open the browser')
-  .option('--host <address>', 'Address to listen on (default 127.0.0.1). Use 0.0.0.0 only so Open WebUI in Docker on Linux can reach the tool server; the app itself still answers this computer only')
-  .action(async (opts: { port?: number; open: boolean; host?: string }) => {
+  .action(async (opts: { port?: number; open: boolean;  }) => {
     const home = agentHome();
     const existing = await findRunningUi(home, await loadOrCreateToken(home));
     if (existing) {
@@ -574,32 +360,13 @@ program
       if (opts.open) await openBrowser(existing);
       return;
     }
-    const ui = await startUiServer({ home, port: opts.port, host: opts.host, childEnv: environmentForChild });
+    const ui = await startUiServer({ home, port: opts.port, childEnv: environmentForChild });
     console.log(`Settings app running at ${ui.url} (this computer only). Press Ctrl+C to stop.`);
     console.log(`Profiles are stored in ${home}`);
-    console.log(`Open WebUI tool server: ${ui.url}tools (run "d365fo-agent openwebui" for the key and setup steps)`);
-    if (opts.host && !isLoopback(opts.host)) console.log(`Listening on ${opts.host}: only the bearer-protected /tools routes answer other addresses.`);
     if (opts.open && !(await openBrowser(ui.openUrl))) console.log(`Could not open a browser. Open this address yourself: ${ui.openUrl}`);
     const stop = (): void => void ui.close().then(() => process.exit(0));
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
-  });
-
-program
-  .command('openwebui')
-  .description('Show the Open WebUI tool-server address and key for the settings app')
-  .option('--port <n>', `Port the settings app uses (default ${DEFAULT_PORT})`, intArg)
-  .action(async (opts: { port?: number }) => {
-    const home = agentHome();
-    const key = await loadOrCreateToolToken(home);
-    const running = await findRunningUi(home, await loadOrCreateToken(home));
-    const port = running ? new URL(running).port : String(opts.port ?? DEFAULT_PORT);
-    if (!running) console.log('The settings app is not running. Start it with "npm run ui" or the desktop app first.\n');
-    console.log('Add this in Open WebUI as an OpenAPI tool server (Bearer auth):\n');
-    console.log(`  URL, Open WebUI opened in this computer's browser (Settings > Tools):  http://localhost:${port}/tools`);
-    console.log(`  URL, Open WebUI in Docker (Admin Settings > External Tools):          http://host.docker.internal:${port}/tools`);
-    console.log(`  Key:  ${key}\n`);
-    console.log(`To issue a new key, delete ${toolTokenFile(home)} and restart the settings app. See docs/openwebui.md.`);
   });
 
 program.parseAsync(process.argv).catch((e) => {

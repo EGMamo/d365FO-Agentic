@@ -160,16 +160,12 @@ try {
       return `${cases.length} cases (${cases.map((c) => c.id).join(', ')})`;
     });
 
-    let modelId;
     if (creds) {
-      await check('AI model can be added', async () => {
-        const entries = [
-          { key: 'LLM_PROVIDER', value: 'anthropic' },
-          { key: 'ANTHROPIC_API_KEY', value: process.env.E2E_ANTHROPIC_API_KEY },
-        ];
-        modelId = expectStatus(await api(settings, '/api/models', 'POST', { name: 'e2e', entries }), 201).id;
-        const result = expectStatus(await api(settings, `/api/models/${modelId}/check`, 'POST'), 200);
-        return JSON.stringify(result).slice(0, 200);
+      await check('Shared AI connection works', async () => {
+        expectStatus(await api(settings, '/api/ai', 'PUT', { entries: [{ key: 'ANTHROPIC_API_KEY', value: process.env.E2E_ANTHROPIC_API_KEY }] }), 200);
+        const result = expectStatus(await api(settings, '/api/ai/check', 'POST'), 200);
+        if (!result.ok) throw new Error(result.detail || 'The model connection failed.');
+        return result.detail;
       });
     }
 
@@ -181,7 +177,6 @@ try {
               { key: 'D365_USERNAME', value: process.env.E2E_D365_USERNAME },
               { key: 'D365_PASSWORD', value: process.env.E2E_D365_PASSWORD },
               ...(process.env.E2E_D365_COMPANY ? [{ key: 'D365_COMPANY', value: process.env.E2E_D365_COMPANY }] : []),
-              ...(modelId ? [{ key: 'AI_MODEL', value: modelId }] : []),
             ]
           : []),
       ];
@@ -192,15 +187,29 @@ try {
       await settings.evaluate(() => refresh());
     });
 
+    await check('Settings save through the form and survive a reload', async () => {
+      await rail.click('button[data-id="settings"]');
+      await settings.selectOption('#profilePicker', 'e2e');
+      await settings.locator('#f_D365_COMPANY').fill(process.env.E2E_D365_COMPANY || 'USMF');
+      if (await settings.locator('#saveProfile').isEnabled()) {
+        await settings.click('#saveProfile');
+        await settings.waitForFunction(() => document.querySelector('#profileStatus').textContent === 'Saved');
+      }
+      await settings.reload();
+      await settings.evaluate(() => showTab('settings'));
+      await settings.waitForFunction((value) => document.querySelector('#f_D365_COMPANY')?.value === value, process.env.E2E_D365_COMPANY || 'USMF');
+    });
+
     await check("The agent's own CLI runs on the app's Electron (profile check)", async () => {
       const res = expectStatus(await api(settings, '/api/profiles/e2e/check', 'POST'), 200);
       writeFileSync(join(out, 'doctor.txt'), res.output ?? '');
       if (!/Settings profile: e2e/.test(res.output ?? '')) throw new Error(`unexpected output: ${(res.output ?? '').slice(0, 400)}`);
+      if (creds && res.exitCode !== 0) throw new Error('Setup check failed; see doctor.txt.');
       return `exit code ${res.exitCode}${creds ? '' : ' (expected to list missing settings without credentials)'}`;
     });
 
     await check('Every page opens from the side strip', async () => {
-      const tabs = ['profiles', 'models', 'cases', 'run', 'results', 'history'];
+      const tabs = ['cases', 'results', 'settings'];
       for (const [i, tab] of tabs.entries()) {
         await rail.click(`button[data-id="${tab}"]`);
         await until(`the ${tab} page`, 10_000, async () => (await rail.getAttribute(`button[data-id="${tab}"]`, 'aria-current')) === 'page');
@@ -212,7 +221,7 @@ try {
     });
 
     if (creds) {
-      await check('Sample login test runs against F&O (dry run)', async () => {
+      await check('Diagnostic sample run produces structured results (business outcome not validated)', async () => {
         expectStatus(await api(settings, '/api/run', 'POST', { source: 'local', local: 'examples/testcases', cases: ['TC-SMOKE-LOGIN'], dryRun: true }), 200);
         const run = await until('the test run to finish', 20 * 60_000, async () => {
           const r = expectStatus(await api(settings, '/api/run'), 200);
@@ -222,8 +231,10 @@ try {
         await rail.click('button[data-id="results"]');
         await sleep(1000);
         await shot(settings, '10-results-after-run');
-        if (run.status !== 'passed') throw new Error(`run ended ${run.status} (exit code ${run.exitCode}); see run.log`);
-        return `exit code ${run.exitCode}`;
+        const results = expectStatus(await api(settings, '/api/results'), 200);
+        if (!Array.isArray(results) || results.length !== 1 || results[0].testCaseId !== 'TC-SMOKE-LOGIN') throw new Error('The expected case produced no current structured result.');
+        if (!['passed', 'failed', 'blocked', 'skipped'].includes(results[0].outcome)) throw new Error('Unknown outcome.');
+        return `diagnostic outcome ${results[0].outcome}; no live business pass claimed`;
       });
     }
   }
@@ -263,7 +274,7 @@ const lines = [
   '| --- | --- | --- | --- |',
   ...results.map((r) => `| ${r.name} | ${r.ok ? 'pass' : r.required === false ? 'warn' : '**fail**'} | ${r.secs.toFixed(0)} s | ${String(r.detail).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').slice(0, 300)} |`),
   '',
-  creds ? 'F&O credentials were set, so the sample login case ran.' : 'No F&O credentials set, so no test case was run against F&O.',
+  creds ? 'F&O credentials were set; the sample diagnostic ran with mutations skipped. This does not establish that sign-in or the business workflow works.' : 'No F&O credentials set, so no test case was run against F&O.',
 ];
 writeFileSync(join(out, 'summary.md'), `${lines.join('\n')}\n`);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);

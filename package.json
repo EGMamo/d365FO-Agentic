@@ -1,7 +1,7 @@
 {
   "name": "d365fo-agentic",
   "version": "0.1.0",
-  "description": "Portable AI agent for end-to-end regression and unit testing of Dynamics 365 Finance & Operations. Uses Playwright MCP, Microsoft Learn MCP, and Azure DevOps.",
+  "description": "Desktop D365 Finance & Operations test assistant with Open WebUI and Claude.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -15,7 +15,6 @@
     "start": "node dist/cli/index.js",
     "agent": "node dist/cli/index.js",
     "ui": "npm run build && node dist/cli/index.js ui",
-    "openwebui": "npm run build && node dist/cli/index.js openwebui",
     "lint": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "test": "npm run build && node scripts/run-tests.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
