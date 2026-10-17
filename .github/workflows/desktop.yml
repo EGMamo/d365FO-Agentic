@@ -1,6 +1,6 @@
 name: desktop
 
-# Builds the desktop installers (macOS .dmg, Windows .exe) and keeps them as workflow artifacts.
+# Builds the desktop installers (macOS .dmg, Windows .exe). Tag and manual runs keep them as workflow artifacts.
 # Unsigned until signing secrets are added; see desktop/README.md.
 on:
   workflow_dispatch:
@@ -57,11 +57,13 @@ jobs:
         working-directory: desktop
         run: ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron app/node_modules/@playwright/mcp/cli.js --version
 
+      # Pull requests only check that the installer builds; tag and manual builds keep it.
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: installer-${{ matrix.os }}
           path: ${{ matrix.files }}
           if-no-files-found: error
-          # Installers count against the account's Actions storage: keep pull request builds for 3 days, tag builds for 30.
-          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 30 || 3 }}
+          # Installers count against the account's Actions storage: keep manual builds for 7 days, tag builds for 30.
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 30 || 7 }}
           compression-level: 0
