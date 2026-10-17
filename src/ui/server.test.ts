@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -298,10 +298,19 @@ describe('Open WebUI tool server', () => {
     "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
     "  mkdirSync(dir, { recursive: true });",
-    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', failureCategory: 'assertion', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
     "  console.log('ran ' + args.join(' '));",
+    "  console.log('Running 2 test case(s).');",
     "} else if (args[0] === 'upload') {",
     "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",
+    "} else if (args[0] === 'generate') {",
+    "  const at = args.indexOf('--');",
+    "  if (args[at + 1] === 'nothing') { console.log(JSON.stringify({ saved: [], rejected: ['Draft 1: steps are missing'] })); process.exit(1); }",
+    "  console.log(JSON.stringify({ saved: args.includes('--dry-run') ? [] : [{ file: 'tc-ap-001.json', id: 'TC-AP-001', title: args[at + 1], steps: 2 }], ...(args.includes('--dry-run') ? { drafts: [{ id: 'TC-AP-001', title: args[at + 1], steps: [] }] } : {}), rejected: [], args, cwd: process.cwd() }));",
+    "} else if (args[0] === 'plans') {",
+    "  const plan = args.includes('--plan') ? args[args.indexOf('--plan') + 1] : undefined;",
+    "  if (plan === '404') { console.error(new Error('Azure DevOps 404 Not Found: no such plan')); process.exit(1); }",
+    "  console.log(JSON.stringify(plan ? { plan, suites: [{ id: '11', name: 'Root' }, { id: '12', name: 'AP', parentId: '11' }] } : { plans: [{ id: '10', name: 'Regression', rootSuiteId: '11' }] }));",
     "}",
   ].join('\n');
 
@@ -346,10 +355,14 @@ describe('Open WebUI tool server', () => {
     const viaDocker = await raw('/tools/profiles', { host: `host.docker.internal:${tui.port}`, authorization: `Bearer ${tui.toolToken}` });
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
-    assert.deepEqual(ops.sort(), ['check_setup', 'get_results', 'get_run', 'list_learned_pages', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile']);
+    assert.deepEqual(ops.sort(), [
+      'check_setup', 'delete_test_case', 'draft_test_cases', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_learned_pages', 'list_profiles', 'list_runs',
+      'list_test_cases', 'read_test_case', 'save_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile',
+    ]);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
     assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
+    assert.match(String(pre.headers.get('access-control-allow-methods')), /DELETE/, 'Open WebUI can call delete_test_case from the browser');
   });
 
   it('refuses tool calls without the right key, and the browser cookie token is not accepted', async () => {
@@ -396,19 +409,60 @@ describe('Open WebUI tool server', () => {
     assert.deepEqual(((await (await tcall('/testcases?dir=cases')).json()) as any[]).map((c) => c.title), ['Post invoice']);
     assert.equal(((await (await tcall(`/testcases/file?dir=cases&file=${file}`)).json()) as any).steps.length, 1);
     assert.equal((await tcall('/testcases?dir=../..')).status, 400);
+    assert.equal((await tcall('/testcases/file?dir=cases', { method: 'DELETE' })).status, 400, 'the file name is required');
+    assert.equal((await tcall('/testcases/file?dir=cases&file=../x.json', { method: 'DELETE' })).status, 400);
+    const del = await tcall(`/testcases/file?dir=cases&file=${file}`, { method: 'DELETE' });
+    assert.deepEqual(await del.json(), { deleted: file, dir: 'cases' });
+    assert.deepEqual(await (await tcall('/testcases?dir=cases')).json(), []);
+    assert.equal((await tcall(`/testcases/file?dir=cases&file=${file}`, { method: 'DELETE' })).status, 404);
+  });
+
+  it('drafts test cases with the profile in use, in the project folder', async () => {
+    const draft = (body: unknown, dir = 'cases') => tcall(`/testcases/draft?dir=${dir}`, { method: 'POST', body: JSON.stringify(body) });
+    assert.equal((await draft({})).status, 400);
+    assert.equal((await draft({ description: 'x', count: 11 })).status, 400);
+    assert.equal((await draft({ description: 'x', module: 'a\nb' })).status, 400);
+    assert.equal((await draft({ description: 'x' }, '../..')).status, 400);
+    const r = await draft({ description: '--create a vendor', count: 2, module: 'Accounts payable', legalEntity: 'USMF' });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as any;
+    assert.deepEqual(body.saved, [{ file: 'tc-ap-001.json', id: 'TC-AP-001', title: '--create a vendor', steps: 2 }], 'a description that looks like an option is passed as text');
+    assert.deepEqual(body.args, ['generate', '--dir', 'cases', '--count', '2', '--json', '--module', 'Accounts payable', '--legal-entity', 'USMF', '--', '--create a vendor']);
+    assert.equal(body.cwd, await realpath(dir), 'drafts are saved inside the project');
+    const shown = (await (await draft({ description: 'post invoice', save: false })).json()) as any;
+    assert.equal(shown.drafts.length, 1);
+    assert.ok(shown.args.includes('--dry-run'));
+    const none = await draft({ description: 'nothing' });
+    assert.equal(none.status, 422);
+    assert.deepEqual(((await none.json()) as any).rejected, ['Draft 1: steps are missing']);
+  });
+
+  it('lists Azure DevOps test plans and suites, and reports a refusal in one line', async () => {
+    assert.deepEqual(await (await tcall('/devops/plans')).json(), { plans: [{ id: '10', name: 'Regression', rootSuiteId: '11' }] });
+    assert.deepEqual(((await (await tcall('/devops/plans/10/suites')).json()) as any).suites.map((x: any) => x.id), ['11', '12']);
+    assert.equal((await tcall('/devops/plans/1%3Bx/suites')).status, 400);
+    const bad = await tcall('/devops/plans/404/suites');
+    assert.equal(bad.status, 502);
+    assert.equal(((await bad.json()) as any).error, 'Azure DevOps could not be read: Azure DevOps 404 Not Found: no such plan');
   });
 
   it('starts a run, waits for it, summarises results and uploads it from the history', async () => {
     assert.equal(((await (await tcall('/results')).json()) as any).error !== undefined, true);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '1;x' }) })).status, 400);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) })).status, 200);
-    let run: any;
-    for (let i = 0; i < 20 && !(run && run.status !== 'running'); i++) run = ((await (await tcall('/runs/current?waitSeconds=5&tail=5')).json()) as any).run;
+    // One call waits for the run to end and hands back its results, so the chat needs no second call.
+    const followed = (await (await tcall('/runs/current?waitSeconds=30&tail=5')).json()) as any;
+    const run = followed.run;
     assert.equal(run.status, 'passed');
     assert.ok(run.log.some((l: string) => /ran run --local cases --dry-run/.test(l)));
+    assert.equal(run.progress.total, 2);
+    assert.deepEqual(followed.results.totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
+    assert.match(followed.next, /finished and its results are included/);
     const results = (await (await tcall('/results')).json()) as any;
     assert.deepEqual(results.totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
-    assert.deepEqual([results.cases[1].reason, results.cases[1].failedStep], ['Save button missing', 2]);
+    assert.deepEqual([results.cases[1].reason, results.cases[1].failedStep, results.cases[1].category], ['Save button missing', 2, 'assertion']);
+    assert.match(results.cases[1].hint, /product defect/);
+    assert.deepEqual(results.triage.map((t: any) => [t.category, t.cases]), [['assertion', 1]]);
 
     let runs: any[] = [];
     for (let i = 0; i < 50 && !runs.length; i++) {

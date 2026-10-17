@@ -15,7 +15,7 @@ import { migrateProfileModels, ModelStore, PROFILE_MODEL_KEY } from '../profiles
 import { loadLocalTestCases } from '../testing/loader.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
-import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { cliError, cliJson, MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
 import { callTool, chatTools, chatTurn, parseHistory } from './chat.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
@@ -51,6 +51,8 @@ interface RunState {
   lines: string[];
   child?: ChildProcess;
   stopRequested?: boolean;
+  /** Set once the job has ended and its history entry is written, so its results can be read. */
+  settled?: boolean;
 }
 
 export interface UiServerOptions {
@@ -151,28 +153,47 @@ async function profileSecrets(store: ProfileStore, name: string): Promise<string
 
 /** Runs `doctor` against a profile and returns its output with that profile's secrets scrubbed. */
 function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
-  return runProfileCommand('doctor', 90_000, store, name, cliPath, baseEnv);
+  return runProfileCommand(['doctor'], 90_000, store, name, cliPath, baseEnv).then(({ exitCode, output }) => ({ exitCode, output }));
 }
 
-/** Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. */
-async function runProfileCommand(command: 'doctor' | 'devops-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
+/**
+ * Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. `stdout` is
+ * the standard output alone, for commands that print JSON there.
+ */
+async function runProfileCommand(
+  args: string[],
+  timeoutMs: number,
+  store: ProfileStore,
+  name: string,
+  cliPath: string,
+  baseEnv: NodeJS.ProcessEnv,
+  cwd?: string,
+): Promise<{ exitCode: number | null; output: string; stdout: string }> {
   const secrets = await profileSecrets(store, name);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliPath, command], {
-      env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      ...(cwd ? { cwd } : {}),
+      env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0', NO_COLOR: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
+    let stdout = '';
     const add = (b: Buffer): void => {
       if (output.length < 20_000) output += b.toString('utf8');
     };
-    child.stdout.on('data', add);
+    child.stdout.on('data', (b: Buffer) => {
+      if (stdout.length < 200_000) stdout += b.toString('utf8');
+      add(b);
+    });
     child.stderr.on('data', add);
     const timer = setTimeout(() => child.kill(), timeoutMs);
     const done = (exitCode: number | null): void => {
       clearTimeout(timer);
-      for (const s of secrets) output = output.split(s).join('***');
-      resolve({ exitCode, output: output.trim() });
+      for (const s of secrets) {
+        output = output.split(s).join('***');
+        stdout = stdout.split(s).join('***');
+      }
+      resolve({ exitCode, output: output.trim(), stdout: stdout.trim() });
     };
     child.on('error', (e) => {
       output += `Could not start the check: ${e.message}`;
@@ -203,6 +224,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   let run: RunState | undefined;
   let runSeq = 0;
   const listeners = new Set<ServerResponse>();
+  /** get_run calls waiting for the current job to settle. */
+  const settleWaiters = new Set<() => void>();
 
   const broadcast = (event: string, data: unknown): void => {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -348,6 +371,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         } catch (e) {
           console.error(`[ui] could not update the run history: ${(e as Error).message}`);
         }
+        state.settled = true;
+        for (const wake of [...settleWaiters]) wake();
         broadcast('status', publicRun(state));
       };
       void finish();
@@ -440,14 +465,57 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   /** Bearer tokens carry no ambient browser credentials, so any origin may call (Open WebUI user tool servers call from the browser). */
-  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600' };
+  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Max-Age': '600' };
   const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' });
   const intParam = (url: URL, name: string, def: number, max: number): number => {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
   };
-  const runView = (tail: number) =>
-    run ? { ...publicRun(run), ...(run.kind === 'run' ? { progress: runProgress(run.lines) } : {}), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` } : null;
+  /** Waits until the job settles, `ms` pass or the caller goes away, whichever comes first. */
+  const waitToSettle = (state: RunState, ms: number, res: ServerResponse): Promise<void> =>
+    state.settled || ms <= 0
+      ? Promise.resolve()
+      : new Promise((resolve) => {
+          const wake = (): void => {
+            clearTimeout(timer);
+            settleWaiters.delete(wake);
+            res.off('close', wake);
+            resolve();
+          };
+          const timer = setTimeout(wake, ms);
+          settleWaiters.add(wake);
+          res.on('close', wake);
+        });
+  /** The results a finished run saved to the history, for get_run to hand back without another call. */
+  async function settledResults(state: RunState): Promise<TestResult[] | undefined> {
+    if (state.kind !== 'run' || !state.settled) return undefined;
+    const saved = state.lines.map((l) => /^Saved to run history as ([\w-]+)\.$/.exec(l)).find(Boolean);
+    const raw = saved ? await reportFile('results.json', saved[1]) : undefined;
+    return raw ? (JSON.parse(raw) as TestResult[]) : undefined;
+  }
+  async function runView(tail: number): Promise<Record<string, unknown>> {
+    if (!run) return { run: null, next: nextStep(null) };
+    const progress = run.kind === 'run' ? runProgress(run.lines) : undefined;
+    const results = await settledResults(run);
+    return {
+      run: { ...publicRun(run), ...(progress ? { progress } : {}), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` },
+      ...(results ? { results: summarizeResults(results) } : {}),
+      // Between the end of the command and its history entry the job still counts as running.
+      next: nextStep({ kind: run.kind, status: run.settled ? run.status : 'running' }, progress, Boolean(results)),
+    };
+  }
+  /** The profile a tool call acts for, or a reply saying there is none. */
+  async function activeOr400(res: ServerResponse): Promise<string | undefined> {
+    const active = await store.getActive();
+    if (!active) tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
+    return active;
+  }
+  const shortText = (v: unknown, max: number): string | undefined | null => {
+    if (v === undefined || v === null || v === '') return undefined;
+    if (typeof v !== 'string') return null;
+    const t = v.trim();
+    return t.length > max || /[\r\n]/.test(t) ? null : t || undefined;
+  };
 
   /** The Open WebUI tool server: the same actions as the app, for a chat model. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
@@ -477,15 +545,54 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (method === 'GET' && path === '/testcases') return tsend(res, 200, await caseFiles.list(dir));
       if (method === 'GET') return tsend(res, 200, await caseFiles.read(dir, file));
       if (method === 'PUT' && path === '/testcases') return tsend(res, 200, await caseFiles.save(dir, (await readJson(req)).testCase, file || undefined));
+      if (method === 'DELETE' && path === '/testcases/file') {
+        if (!file) return tsend(res, 400, { error: 'Give the file name, as listed by list_test_cases.' });
+        await caseFiles.delete(dir, file);
+        return tsend(res, 200, { deleted: file, dir });
+      }
+    }
+    if (method === 'POST' && path === '/testcases/draft') {
+      const dir = url.searchParams.get('dir') ?? '';
+      await caseFiles.list(dir); // 400 for a folder outside the project
+      const body = await readJson(req);
+      const description = typeof body.description === 'string' ? body.description.trim() : '';
+      if (!description) return tsend(res, 400, { error: 'Describe what the test cases should test.' });
+      if (description.length > 4000) return tsend(res, 400, { error: 'The description is too long (4000 characters at most).' });
+      const count = body.count === undefined ? 1 : Number(body.count);
+      if (!Number.isInteger(count) || count < 1 || count > 10) return tsend(res, 400, { error: 'count must be 1-10.' });
+      const module = shortText(body.module, 100);
+      const legalEntity = shortText(body.legalEntity, 20);
+      if (module === null || legalEntity === null) return tsend(res, 400, { error: 'module and legalEntity must be short single-line text.' });
+      const active = await activeOr400(res);
+      if (!active) return;
+      const args = ['generate', '--dir', dir, '--count', String(count), '--json'];
+      if (module) args.push('--module', module);
+      if (legalEntity) args.push('--legal-entity', legalEntity);
+      if (body.save === false) args.push('--dry-run');
+      args.push('--', description);
+      const out = await runProfileCommand(args, MAX_WAIT_SECONDS * 1000, store, active, cliPath, childEnv(), repoRoot);
+      const drafted = cliJson(out.stdout);
+      if (!drafted) return tsend(res, 502, { error: `No test case was drafted: ${cliError(out.output)}` });
+      const any = (drafted.saved as unknown[] | undefined)?.length || (drafted.drafts as unknown[] | undefined)?.length;
+      return tsend(res, any ? 200 : 422, { dir, ...drafted, ...(any ? {} : { error: 'No valid test case was drafted. Describe the steps more precisely and try again.' }) });
+    }
+    const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
+    if (method === 'GET' && plans) {
+      const plan = plans[1] ? decodeURIComponent(plans[1]) : undefined;
+      if (plan !== undefined && !ID.test(plan)) return tsend(res, 400, { error: 'Invalid plan id.' });
+      const active = await activeOr400(res);
+      if (!active) return;
+      const out = await runProfileCommand(['plans', '--json', ...(plan ? ['--plan', plan] : [])], 90_000, store, active, cliPath, childEnv(), repoRoot);
+      const listed = out.exitCode === 0 ? cliJson(out.stdout) : undefined;
+      return listed ? tsend(res, 200, listed) : tsend(res, 502, { error: `Azure DevOps could not be read: ${cliError(out.output)}` });
     }
     if (method === 'POST' && path === '/runs') {
       const result = await startRun(await readJson(req));
       return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
     }
     if (method === 'GET' && path === '/runs/current') {
-      const deadline = Date.now() + intParam(url, 'waitSeconds', 0, 120) * 1000;
-      while (run?.status === 'running' && Date.now() < deadline && !res.destroyed) await new Promise((r) => setTimeout(r, 500));
-      return tsend(res, 200, { run: runView(intParam(url, 'tail', 40, 400)) });
+      if (run) await waitToSettle(run, intParam(url, 'waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, res);
+      return tsend(res, 200, await runView(intParam(url, 'tail', 40, 400)));
     }
     if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
     if (method === 'GET' && path === '/results') {
@@ -495,8 +602,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       return tsend(res, 200, { run: runId ?? 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) });
     }
     if (method === 'POST' && path === '/setup/check') {
-      const active = await store.getActive();
-      if (!active) return tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
+      const active = await activeOr400(res);
+      if (!active) return;
       return tsend(res, 200, { profile: active, ...(await runDoctor(store, active, cliPath, childEnv())) });
     }
     if (method === 'GET' && path === '/knowledge/pages') {
@@ -578,7 +685,10 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         const name = decodeURIComponent(m[1]);
         if (m[2] === '/check' && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
         // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
-        if (m[2] === '/devops-login' && method === 'POST') return send(res, 200, await runProfileCommand('devops-login', 300_000, store, name, cliPath, childEnv()));
+        if (m[2] === '/devops-login' && method === 'POST') {
+          const { exitCode, output } = await runProfileCommand(['devops-login'], 300_000, store, name, cliPath, childEnv());
+          return send(res, 200, { exitCode, output });
+        }
         if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');

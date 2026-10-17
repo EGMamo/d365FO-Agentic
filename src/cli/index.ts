@@ -419,6 +419,26 @@ program
   });
 
 program
+  .command('plans')
+  .description('List the Azure DevOps test plans of the project, or the suites of one plan, with the ids `run --plan/--suite` take')
+  .option('--plan <id>', 'List the suites of this test plan instead')
+  .option('--json', 'Print JSON instead of a table')
+  .action(async (opts: { plan?: string; json?: boolean }) => {
+    const client = new AzureDevOpsClient(loadConfig());
+    if (opts.plan) {
+      const suites = await client.listSuites(opts.plan);
+      if (opts.json) return console.log(JSON.stringify({ plan: opts.plan, suites }));
+      if (!suites.length) return console.log(`Test plan ${opts.plan} has no suites.`);
+      for (const s of suites) console.log(`${s.id.padStart(8)}  ${s.name}${s.type ? ` (${s.type})` : ''}${s.parentId ? `  in ${s.parentId}` : ''}`);
+      return;
+    }
+    const plans = await client.listPlans();
+    if (opts.json) return console.log(JSON.stringify({ plans }));
+    if (!plans.length) return console.log('The project has no test plans.');
+    for (const p of plans) console.log(`${p.id.padStart(8)}  ${p.name}${p.state ? ` [${p.state}]` : ''}${p.rootSuiteId ? `  root suite ${p.rootSuiteId}` : ''}`);
+  });
+
+program
   .command('generate')
   .description('Draft local test cases from a plain-language description with the configured LLM')
   .argument('<description...>', 'What to test, e.g. "create a vendor and post an invoice for it"')
@@ -427,7 +447,8 @@ program
   .option('--module <name>', 'D365 F&O module, e.g. "Accounts payable"')
   .option('--legal-entity <code>', 'Company to test in, e.g. USMF')
   .option('--dry-run', 'Print the drafts instead of saving them')
-  .action(async (words: string[], opts: { dir: string; count: number; module?: string; legalEntity?: string; dryRun?: boolean }) => {
+  .option('--json', 'Print one JSON object with the saved files (or the drafts) and the rejected drafts, for the app')
+  .action(async (words: string[], opts: { dir: string; count: number; module?: string; legalEntity?: string; dryRun?: boolean; json?: boolean }) => {
     const cfg = loadConfig();
     const description = words.join(' ');
     const files = new TestCaseFiles(process.cwd());
@@ -435,7 +456,7 @@ program
     const kb = new KnowledgeBase(cfg.KB_DIR);
     await kb.load();
     const llm = createLlmProvider(cfg);
-    console.log(`Drafting with ${llm.name} (${activeModel(cfg)})…`);
+    if (!opts.json) console.log(`Drafting with ${llm.name} (${activeModel(cfg)})…`);
     const res = await generateTestCases(llm, description, {
       count: Number.isNaN(opts.count) ? 1 : opts.count,
       ...(opts.module ? { module: opts.module } : {}),
@@ -443,6 +464,22 @@ program
       knowledge: kb.retrieve(description, [], 6, opts.module),
       existingIds: existing.map((c) => c.id),
     });
+    if (opts.json) {
+      const out: { saved: Array<{ file: string; id: string; title: string; steps: number }>; drafts?: typeof res.cases; rejected: string[] } = { saved: [], rejected: [...res.rejected] };
+      if (opts.dryRun) out.drafts = res.cases;
+      else {
+        for (const tc of res.cases) {
+          try {
+            out.saved.push({ file: (await files.save(opts.dir, tc)).file, id: tc.id, title: tc.title, steps: tc.steps.length });
+          } catch (e) {
+            out.rejected.push(`Could not save ${tc.id} (${tc.title}): ${(e as Error).message}`);
+          }
+        }
+      }
+      console.log(JSON.stringify(out));
+      if (!res.cases.length) process.exitCode = 1;
+      return;
+    }
     for (const r of res.rejected) console.error(`! ${r}`);
     const wanted = Math.min(10, Math.max(1, opts.count));
     if (res.cases.length && res.cases.length < wanted) console.error(`! Only ${res.cases.length} of ${wanted} test cases were drafted; run generate again for more.`);

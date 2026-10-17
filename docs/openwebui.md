@@ -11,16 +11,29 @@ profile values.
 | Tool | What it does |
 | --- | --- |
 | `list_profiles`, `use_profile` | See the saved environments and choose the one runs use |
-| `list_test_cases`, `read_test_case`, `save_test_case` | Browse, read, create and edit local test cases in a project folder |
+| `list_test_cases`, `read_test_case`, `save_test_case`, `delete_test_case` | Browse, read, create, edit and delete local test cases in a project folder (the chat asks before it deletes) |
+| `draft_test_cases` | Draft new test cases from a plain-language description with the profile's AI model, like `generate`, and save them (or only show them) |
+| `list_devops_plans`, `list_devops_suites` | The Azure DevOps test plans of the profile in use and the suites of one plan, with the ids `start_run` takes |
 | `start_run` | Run a local folder or an Azure DevOps plan/suite, all cases or only some, dry run, retries, another AI model for this run only, optional upload |
-| `get_run`, `stop_run` | Follow the current run or upload (it can wait up to 120 s for it to finish) and see the end of its log, or stop it |
-| `get_results` | Totals and each case's outcome and failure reason, for the latest run or one from the history |
+| `get_run`, `stop_run` | Follow the current run or upload and see the end of its log, or stop it |
+| `get_results` | Totals, why cases did not pass (triage category and what to do), and each case's outcome, reason, category and hint, for the latest run or one from the history |
 | `list_runs`, `upload_run` | Earlier runs with their DevOps links, and upload any of them to Azure DevOps later |
 | `check_setup` | Run the setup check (`doctor`) on the profile in use and explain what is missing |
 | `list_learned_pages` | The F&O forms the agent has learned while running tests, with visits, known controls and notes |
 
-`get_run` also returns per-case progress (`finished`, `current`, and each case with its outcome so far), so the chat
-can say "2 of 5 done, now running TC-AP-003".
+### Following a long run
+
+`get_run` can wait up to 240 s (`waitSeconds`) and returns as soon as the run ends, so a short run needs one call.
+Each reply has:
+
+- `progress`: how many cases have finished out of how many, the case running now, each case with its outcome so far,
+  and `remainingSeconds`, estimated from the cases that have finished;
+- `results`: once a run has ended, the same summary `get_results` gives, so the chat can report without another call;
+- `next`: one sentence telling the model what to do now. While the job runs it asks for another `get_run` call, which
+  keeps weaker local models from stopping halfway through a long run.
+
+The wait stays under the 300 s after which Open WebUI and Node's `fetch` give up on a tool call. A run carries on
+when the chat stops following it; ask "how is the run going?" to pick it up again.
 
 Only one run or upload happens at a time, shared with the settings app: a run started from chat shows up live in
 the app's Run tab, and the other way round.

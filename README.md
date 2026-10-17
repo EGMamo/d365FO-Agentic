@@ -27,7 +27,7 @@ It maintains a **local knowledge base** so it can learn selectors, recipes, and 
 - Built-in chat in the settings app: ask in plain words, no Open WebUI or Docker needed.
 - **Replay without the AI.** A case that passed is recorded as Playwright code with the checks the agent made; the next run replays it in seconds with no model calls and only asks the AI when the replay fails. `export-tests` writes the recordings as Playwright tests you can run with `npx playwright test`.
 - **A skill for coding agents.** [`skills/d365fo-playwright-cli`](skills/README.md) teaches Claude Code, GitHub Copilot and other coding agents to test F&O with [playwright-cli](https://github.com/microsoft/playwright-cli), using what this app has learned.
-- CLI: `doctor`, `copilot-login`, `session-login`, `discover`, `run`, `report`, `upload`, `generate`, `learn`, `export-tests`, `ui`, `openwebui`, `studio`, `install-launcher`, `uninstall-launcher`.
+- CLI: `doctor`, `copilot-login`, `session-login`, `discover`, `run`, `report`, `upload`, `plans`, `generate`, `learn`, `export-tests`, `ui`, `openwebui`, `studio`, `install-launcher`, `uninstall-launcher`.
 - GitHub Actions workflow (`.github/workflows/agent-run.yml`) for on-demand runs of a local test-case folder, started by hand (`workflow_dispatch`); it keeps `reports/` and `knowledge/` as a build artifact.
 
 ## Get started: the desktop app
