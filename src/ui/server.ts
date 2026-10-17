@@ -15,7 +15,8 @@ import { AiSettings } from '../profiles/ai.js';
 import { discoverTestCases } from '../core/runner.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
-import { openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { AzureDevOpsClient } from '../devops/client.js';
 import { environmentForChild } from '../config/load-env.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
@@ -52,6 +53,8 @@ interface RunState {
   lines: string[];
   child?: ChildProcess;
   stopRequested?: boolean;
+  /** Set once the job has ended and its history entry is written, so its results can be read. */
+  settled?: boolean;
 }
 
 export interface UiServerOptions {
@@ -70,6 +73,8 @@ export interface UiServerOptions {
   childEnv?: () => NodeJS.ProcessEnv;
   /** Builds the chat model from the profile in use. Defaults to the provider the profile selects; tests pass a fake. */
   modelProvider?: (cfg: AppConfig) => LlmProvider;
+  /** Builds the Azure DevOps client for the profile in use (test plans and suites). Tests pass a fake. */
+  devopsClient?: (cfg: AppConfig) => Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -198,6 +203,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   let run: RunState | undefined;
   let runSeq = 0;
   const listeners = new Set<ServerResponse>();
+  /** get_run calls waiting for the current job to settle. */
+  const settleWaiters = new Set<() => void>();
 
   const broadcast = (event: string, data: unknown): void => {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -320,6 +327,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         } catch (e) {
           console.error(`[ui] could not update the run history: ${(e as Error).message}`);
         }
+        state.settled = true;
+        for (const wake of [...settleWaiters]) wake();
         broadcast('status', publicRun(state));
       };
       void finish();
@@ -374,15 +383,18 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return parseConfig({ ...Object.fromEntries((await ai.read(true)).map((e) => [e.key, e.value])), ...childEnv() });
   }
 
+  /** The agent's settings for the profile in use, as a run would read them. */
+  async function activeConfig(): Promise<AppConfig> {
+    const active = await store.getActive();
+    if (!active) throw new ProfileError('Choose an environment in Settings first.');
+    return parseConfig({ ...Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value])), ...childEnv() });
+  }
   async function casesFor(url: URL) {
     const plan = url.searchParams.get('plan');
     const suite = url.searchParams.get('suite');
     if (plan || suite) {
       if (!plan || !suite || !/^\d+$/.test(plan) || !/^\d+$/.test(suite)) throw new ProfileError('Give numeric plan and suite IDs.');
-      const active = await store.getActive();
-      if (!active) throw new ProfileError('Choose an environment in Settings first.');
-      const cfg = parseConfig({ ...Object.fromEntries((await store.read(active, true)).map((e) => [e.key, e.value])), ...childEnv() });
-      return discoverTestCases(cfg, { plan, suite });
+      return discoverTestCases(await activeConfig(), { plan, suite });
     }
     return caseFiles.list(url.searchParams.get('local') || url.searchParams.get('dir') || 'examples/testcases');
   }
@@ -400,8 +412,39 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
   };
-  const runView = (tail: number) =>
-    run ? { ...publicRun(run), ...(run.kind === 'run' ? { progress: runProgress(run.lines) } : {}), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` } : null;
+  /** Waits until the job settles, `ms` pass or the caller goes away, whichever comes first. */
+  const waitToSettle = (state: RunState, ms: number, res: ServerResponse): Promise<void> =>
+    state.settled || ms <= 0
+      ? Promise.resolve()
+      : new Promise((resolve) => {
+          const wake = (): void => {
+            clearTimeout(timer);
+            settleWaiters.delete(wake);
+            res.off('close', wake);
+            resolve();
+          };
+          const timer = setTimeout(wake, ms);
+          settleWaiters.add(wake);
+          res.on('close', wake);
+        });
+  /** The results a finished run saved to the history, for get_run to hand back without another call. */
+  async function settledResults(state: RunState): Promise<TestResult[] | undefined> {
+    if (state.kind !== 'run' || !state.settled) return undefined;
+    const saved = state.lines.map((l) => /^Saved to run history as ([\w-]+)\.$/.exec(l)).find(Boolean);
+    const raw = saved ? await reportFile('results.json', saved[1]) : undefined;
+    return raw ? (JSON.parse(raw) as TestResult[]) : undefined;
+  }
+  async function runView(tail: number): Promise<Record<string, unknown>> {
+    if (!run) return { run: null, next: nextStep(null) };
+    const progress = run.kind === 'run' ? runProgress(run.lines) : undefined;
+    const results = await settledResults(run);
+    return {
+      run: { ...publicRun(run), ...(progress ? { progress } : {}), log: tail ? run.lines.slice(-tail) : [], appUrl: `http://127.0.0.1:${port}/` },
+      ...(results ? { results: summarizeResults(results) } : {}),
+      // Between the end of the command and its history entry the job still counts as running.
+      next: nextStep({ kind: run.kind, status: run.settled ? run.status : 'running' }, progress, Boolean(results)),
+    };
+  }
 
   /** The Open WebUI tool server: the same actions as the app, for a chat model. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
@@ -437,9 +480,25 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
     }
     if (method === 'GET' && path === '/runs/current') {
-      const deadline = Date.now() + intParam(url, 'waitSeconds', 0, 120) * 1000;
-      while (run?.status === 'running' && Date.now() < deadline && !res.destroyed) await new Promise((r) => setTimeout(r, 500));
-      return tsend(res, 200, { run: runView(intParam(url, 'tail', 40, 400)) });
+      if (run) await waitToSettle(run, intParam(url, 'waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, res);
+      return tsend(res, 200, await runView(intParam(url, 'tail', 40, 400)));
+    }
+    const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
+    if (method === 'GET' && plans) {
+      const plan = plans[1] ? decodeURIComponent(plans[1]) : undefined;
+      if (plan !== undefined && !/^\d+$/.test(plan)) return tsend(res, 400, { error: 'Give a numeric plan ID.' });
+      let client: Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
+      try {
+        client = (opts.devopsClient ?? ((cfg: AppConfig) => new AzureDevOpsClient(cfg)))(await activeConfig());
+      } catch (e) {
+        if (e instanceof ProfileError) throw e;
+        return tsend(res, 400, { error: (e as Error).message });
+      }
+      try {
+        return tsend(res, 200, plan ? { plan, suites: await client.listSuites(plan) } : { plans: await client.listPlans() });
+      } catch (e) {
+        return tsend(res, 502, { error: `Azure DevOps could not be read: ${(e as Error).message.split('\n')[0].slice(0, 400)}` });
+      }
     }
     if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
     if (method === 'GET' && path === '/results') {

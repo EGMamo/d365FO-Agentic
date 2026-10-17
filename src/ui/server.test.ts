@@ -326,8 +326,9 @@ describe('Open WebUI tool server', () => {
     "try { const id = /^PROFILE_ID=(\\w+)/m.exec(readFileSync(process.env.D365FO_AGENT_HOME + '/profiles/' + process.env.D365FO_PROFILE + '.env', 'utf8'))?.[1]; if (id) dir = 'reports/' + id; } catch {}",
     "if (args[0] === 'run') {",
     "  mkdirSync(dir, { recursive: true });",
-    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
+    "  writeFileSync(dir + '/results.json', JSON.stringify([{ testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 5 }, { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', failureCategory: 'assertion', steps: [{ index: 2, status: 'failed', errorMessage: 'Save button missing', durationMs: 1 }], durationMs: 5 }]));",
     "  console.log('ran ' + args.join(' '));",
+    "  console.log('Running 2 test case(s).');",
     "} else if (args[0] === 'upload') {",
     "  console.log('Uploaded run #7: https://dev.azure.com/org/p/_testManagement/runs?runId=7');",
     "}",
@@ -350,7 +351,14 @@ describe('Open WebUI tool server', () => {
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'd365ui-tools-'));
     await writeFile(join(dir, 'cli.mjs'), FAKE_CLI);
-    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir });
+    const devopsClient = () => ({
+      listPlans: async () => [{ id: '10', name: 'Regression', rootSuiteId: '11' }],
+      listSuites: async (plan: string) => {
+        if (plan === '404') throw new Error('Azure DevOps 404 Not Found: no such plan\n{"details":1}');
+        return [{ id: '11', name: 'Root' }, { id: '12', name: 'AP', parentId: '11' }];
+      },
+    });
+    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, devopsClient });
     tcall = (path, init = {}) => {
       const { key = tui.toolToken, ...rest } = init;
       const headers: Record<string, string> = {};
@@ -374,7 +382,9 @@ describe('Open WebUI tool server', () => {
     const viaDocker = await raw('/tools/profiles', { host: `host.docker.internal:${tui.port}`, authorization: `Bearer ${tui.toolToken}` });
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
-    assert.deepEqual(ops.sort(), ['check_setup', 'get_results', 'get_run', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile']);
+    assert.deepEqual(ops.sort(), [
+      'check_setup', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile',
+    ]);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
     assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
@@ -419,17 +429,32 @@ describe('Open WebUI tool server', () => {
     assert.equal((await tcall('/testcases?dir=../..')).status, 400);
   });
 
+  it('lists Azure DevOps test plans and suites for the profile in use, and reports a refusal in one line', async () => {
+    assert.deepEqual(await (await tcall('/devops/plans')).json(), { plans: [{ id: '10', name: 'Regression', rootSuiteId: '11' }] });
+    assert.deepEqual(((await (await tcall('/devops/plans/10/suites')).json()) as any).suites.map((x: any) => x.id), ['11', '12']);
+    assert.equal((await tcall('/devops/plans/1%3Bx/suites')).status, 400);
+    const bad = await tcall('/devops/plans/404/suites');
+    assert.equal(bad.status, 502);
+    assert.equal(((await bad.json()) as any).error, 'Azure DevOps could not be read: Azure DevOps 404 Not Found: no such plan');
+  });
+
   it('starts a run, waits for it, summarises results and uploads it from the history', async () => {
     assert.equal(((await (await tcall('/results')).json()) as any).error !== undefined, true);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '1;x' }) })).status, 400);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) })).status, 200);
-    let run: any;
-    for (let i = 0; i < 20 && !(run && run.status !== 'running'); i++) run = ((await (await tcall('/runs/current?waitSeconds=5&tail=5')).json()) as any).run;
+    // One call waits for the run to end and hands back its results, so the chat needs no second call.
+    const followed = (await (await tcall('/runs/current?waitSeconds=30&tail=5')).json()) as any;
+    const run = followed.run;
     assert.equal(run.status, 'passed');
     assert.ok(run.log.some((l: string) => /ran run --local cases --dry-run/.test(l)));
+    assert.equal(run.progress.total, 2);
+    assert.deepEqual(followed.results.totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
+    assert.match(followed.next, /finished and its results are included/);
     const results = (await (await tcall('/results')).json()) as any;
     assert.deepEqual(results.totals, { total: 2, passed: 1, failed: 1, blocked: 0, skipped: 0 });
-    assert.deepEqual([results.cases[1].reason, results.cases[1].failedStep], ['Save button missing', 2]);
+    assert.deepEqual([results.cases[1].reason, results.cases[1].failedStep, results.cases[1].category], ['Save button missing', 2, 'assertion']);
+    assert.match(results.cases[1].hint, /product defect/);
+    assert.deepEqual(results.triage.map((t: any) => [t.category, t.cases]), [['assertion', 1]]);
 
     let runs: any[] = [];
     for (let i = 0; i < 50 && !runs.length; i++) {

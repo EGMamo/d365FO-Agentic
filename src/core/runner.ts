@@ -160,6 +160,7 @@ export async function runCases(
   signal?: AbortSignal,
 ): Promise<{ results: TestResult[]; aborted?: string }> {
   const results: TestResult[] = [];
+  log(`Running ${cases.length} test case(s).`);
   for (const [i, tc] of cases.entries()) {
     if (signal?.aborted) {
       const reason = 'Run interrupted';

@@ -13,6 +13,9 @@ import { AzureCliTokenSource, azdoAuthMode, type AzRunner } from './auth.js';
  * Note: kept intentionally simple. A future iteration may swap this for the
  * official Azure DevOps MCP server when `AZDO_USE_MCP=true`.
  */
+export interface DevOpsPlan { id: string; name: string; state?: string; areaPath?: string; iteration?: string; rootSuiteId?: string }
+export interface DevOpsSuite { id: string; name: string; type?: string; parentId?: string }
+
 export class AzureDevOpsClient {
   private orgUrl: string;
   private project: string;
@@ -57,6 +60,25 @@ export class AzureDevOpsClient {
   }
 
   private async request<T>(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string>; orgLevel?: boolean }): Promise<T> {
+    const res = await this.send(path, init);
+    if (res.status === 204) return undefined as T;
+    return (await res.json()) as T;
+  }
+
+  /** GETs every page of a list that Azure DevOps splits with the x-ms-continuationtoken header (at most `maxPages`). */
+  private async pages<T>(path: string, maxPages = 20): Promise<T[]> {
+    const all: T[] = [];
+    let token: string | null = null;
+    for (let i = 0; i < maxPages; i++) {
+      const res = await this.send(token ? `${path}&continuationToken=${encodeURIComponent(token)}` : path);
+      all.push(...(((await res.json()) as { value?: T[] }).value ?? []));
+      token = res.headers.get('x-ms-continuationtoken');
+      if (!token) break;
+    }
+    return all;
+  }
+
+  private async send(path: string, init?: { method?: string; body?: unknown; headers?: Record<string, string>; orgLevel?: boolean }): Promise<Response> {
     const headers: Record<string, string> = {
       authorization: await this.authHeader(),
       accept: 'application/json',
@@ -88,8 +110,23 @@ export class AzureDevOpsClient {
       const text = await res.text();
       throw new Error(`Azure DevOps ${res.status} ${res.statusText}: ${text}`);
     }
-    if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    return res;
+  }
+
+  /** The test plans of the project, newest first: what `run --plan` and the upload take. Read only. */
+  async listPlans(): Promise<DevOpsPlan[]> {
+    interface Plan { id: number; name: string; state?: string; areaPath?: string; iteration?: string; rootSuite?: { id: number } }
+    const plans = await this.pages<Plan>(`/_apis/testplan/plans?includePlanDetails=true&api-version=${this.apiVersion}`);
+    return plans
+      .map((p) => ({ id: String(p.id), name: p.name, ...(p.state ? { state: p.state } : {}), ...(p.areaPath ? { areaPath: p.areaPath } : {}), ...(p.iteration ? { iteration: p.iteration } : {}), ...(p.rootSuite ? { rootSuiteId: String(p.rootSuite.id) } : {}) }))
+      .sort((a, b) => Number(b.id) - Number(a.id));
+  }
+
+  /** The suites of one test plan, with the parent of each so the tree can be shown. Read only. */
+  async listSuites(planId: string): Promise<DevOpsSuite[]> {
+    interface Suite { id: number; name: string; suiteType?: string; parentSuite?: { id: number } }
+    const suites = await this.pages<Suite>(`/_apis/testplan/Plans/${encodeURIComponent(planId)}/suites?api-version=${this.apiVersion}`);
+    return suites.map((s) => ({ id: String(s.id), name: s.name, ...(s.suiteType ? { type: s.suiteType } : {}), ...(s.parentSuite ? { parentId: String(s.parentSuite.id) } : {}) }));
   }
 
   /**
