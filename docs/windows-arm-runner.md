@@ -92,9 +92,3 @@ is not used.
 
 The **Run workflow** button appears once the workflow is on the default branch. Before that, the workflow runs on its pull
 request once step 5 is done (push a commit or re-run the job).
-
-## 7. Run a single command on the computer
-
-The `vm-shell` workflow runs one PowerShell command on the runner and shows the output in the log and the run summary,
-for checking or fixing the computer without signing in to it: Actions > vm-shell > Run workflow, type the command (for
-example `Get-Service actions.runner.*; Get-PSDrive C`). Only people with write access to the repository can start it.
