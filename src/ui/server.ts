@@ -109,13 +109,24 @@ export const loadOrCreateToken = (home: string): Promise<string> => loadOrCreate
 /** The key Open WebUI sends to the tool routes. Delete the file and restart the app to issue a new one. */
 export const loadOrCreateToolToken = (home: string): Promise<string> => loadOrCreate(home, toolTokenFile(home));
 
-const same = (a: string, b: string): boolean => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const same = (a: string, b: string): boolean => {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+};
 
 function cookieValue(req: IncomingMessage): string {
   const header = req.headers.cookie ?? '';
   for (const part of header.split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === COOKIE) return decodeURIComponent(v.join('='));
+    if (k === COOKIE) {
+      try {
+        return decodeURIComponent(v.join('='));
+      } catch {
+        // Malformed credentials are unauthenticated, not server errors.
+        return '';
+      }
+    }
   }
   return '';
 }

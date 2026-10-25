@@ -38,8 +38,11 @@ jobs:
             package-lock.json
             desktop/package-lock.json
 
+      # Gate installer creation on checks, including tag-triggered builds.
       - run: npm ci
-      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
 
       - name: Install the desktop toolchain
         working-directory: desktop

@@ -57,7 +57,11 @@ jobs:
         run: node dist/cli/index.js doctor
 
       - name: Run tests
+        shell: bash
         env:
+          TEST_CASES_DIR: ${{ inputs.testCasesDir }}
+          DRY_RUN: ${{ inputs.dryRun }}
+          UPLOAD_RESULTS: ${{ inputs.upload }}
           LLM_PROVIDER: anthropic
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AZDO_ORG_URL: ${{ secrets.AZDO_ORG_URL }}
@@ -72,11 +76,11 @@ jobs:
           D365_PASSWORD: ${{ secrets.D365_PASSWORD }}
           PW_HEADLESS: 'true'
         run: |
-          node dist/cli/index.js run \
-            --local "${{ inputs.testCasesDir }}" \
-            ${{ inputs.dryRun && '--dry-run' || '' }} \
-            --fail-on failed,blocked \
-            ${{ inputs.upload && '--upload' || '' }}
+          # Keep workflow inputs as data, never interpolate them into shell source.
+          args=(run --local "${TEST_CASES_DIR:-examples/testcases}" --fail-on failed,blocked)
+          if [[ "$DRY_RUN" == 'true' ]]; then args+=(--dry-run); fi
+          if [[ "$UPLOAD_RESULTS" == 'true' ]]; then args+=(--upload); fi
+          node dist/cli/index.js "${args[@]}"
 
       - uses: actions/upload-artifact@v4
         if: always()

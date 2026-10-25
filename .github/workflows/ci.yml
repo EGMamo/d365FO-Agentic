@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
+        node: ['20', '22', '24']
     steps:
       - uses: actions/checkout@v4
 
@@ -38,9 +38,8 @@ jobs:
       - name: Build and test
         run: npm test
 
-  # Not on pull requests: a new advisory in an existing dependency should not fail an unrelated change.
+  # Check pull requests too, so vulnerable dependency changes cannot bypass this gate.
   audit:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -77,6 +77,20 @@ describe('settings web server', () => {
     assert.equal((await call('GET', '/api/state', { headers: { host: 'evil.example' } })).status, 403);
   });
 
+  it('rejects malformed and multibyte credentials without server errors', async () => {
+    const multibyte = 'é'.repeat(ui.token.length);
+    for (const value of ['%', '%E0%A4%A', encodeURIComponent(multibyte)]) {
+      assert.equal((await call('GET', '/api/state', {
+        auth: false, headers: { cookie: `d365fo_ui=${value}` },
+      })).status, 403);
+    }
+    assert.equal((await call('GET', `/?token=${encodeURIComponent(multibyte)}`, { auth: false })).status, 403);
+    assert.equal((await call('GET', '/model/v1/models', {
+      auth: false, headers: { authorization: `Bearer ${'é'.repeat(ui.toolToken.length)}` },
+    })).status, 401);
+    assert.equal((await call('GET', '/api/state')).status, 200);
+  });
+
   it('serves the page to a signed-in browser', async () => {
     const r = await call('GET', '/');
     assert.equal(r.status, 200);
