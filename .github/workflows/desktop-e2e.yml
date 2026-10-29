@@ -131,7 +131,7 @@ jobs:
         # A full Actions storage quota must not fail an otherwise passing check.
         continue-on-error: true
 
-      # Only manual runs keep the installer; pull requests rebuild it on every push.
+      # Only manual runs keep the installer: pull requests rebuild it on every push, and it counts against Actions storage.
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch' && (success() || failure())
         with:
