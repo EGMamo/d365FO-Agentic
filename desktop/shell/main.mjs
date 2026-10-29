@@ -4,7 +4,7 @@
 // cannot start, Tests, Results and Settings remain available.
 import { app, BaseWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron';
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -20,14 +20,12 @@ let win;
 let rail;
 let chatView;
 let settingsView;
-/** The strip above Open WebUI that picks the chat model. */
-
 let webuiUrl;
+/** Open WebUI restyled to match the app (see chat.css). */
+const chatCss = readFileSync(join(here, 'chat.css'), 'utf8');
 
 /** Which page is showing: chat, or a tab of the settings app. */
 let current = 'chat';
-/** Open WebUI is up, so Chat shows it; otherwise Chat is the settings app's own chat tab. */
-
 let profileInfo = { active: null, profiles: [], busy: false };
 let ui;
 let webui;
@@ -51,12 +49,13 @@ function uvPath() {
   return app.isPackaged ? join(process.resourcesPath, 'uv', exe) : exe;
 }
 
-function status(text, line) {
+function status(text, line, step) {
   if (text || line) console.log(`[app] ${text ?? line}`);
-  if (!chatView || chatView.webContents.isDestroyed()) return;
+  if (!chatView || chatView.webContents.isDestroyed() || webuiUrl) return;
   chatView.webContents
     .executeJavaScript(
-      `window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)})`,
+      `window.setStatus && setStatus(${JSON.stringify(text ?? null)}, ${JSON.stringify(line ?? null)});` +
+        (step ? `window.setStep && setStep(${JSON.stringify(step)});` : ''),
     )
     .catch(() => {});
 }
@@ -104,11 +103,9 @@ function pushState() {
 /** Reads the profile in use and whether a run is going, from the settings app's own page. */
 async function pollProfiles() {
   if (!settingsView || settingsView.webContents.isDestroyed()) return;
-  const info = await run(
-    settingsView,
-    `(async () => ({ active: state.active, profiles: state.profiles.map((p) => p.name), busy: (await (await fetch('/api/run')).json())?.status === 'running' }))()`,
-  );
+  const info = await run(settingsView, `window.appInfo ? appInfo() : null`);
   if (!info) return;
+  if (JSON.stringify(info) === JSON.stringify(profileInfo)) return;
   profileInfo = info;
   pushState();
 }
@@ -122,14 +119,14 @@ function profileMenu() {
     checked: name === active,
     enabled: !busy,
     click: async () => {
-      await run(settingsView, `use(${JSON.stringify(name)}).catch(fail)`);
+      await run(settingsView, `useEnvironment(${JSON.stringify(name)}).catch(fail)`);
       void pollProfiles();
     },
   }));
   if (!items.length) items.push({ label: 'No profiles yet', enabled: false });
   items.push({ type: 'separator' });
   if (busy) items.push({ label: 'A run is in progress; switching is off until it ends', enabled: false });
-  items.push({ label: 'Manage profiles…', click: () => void go('settings') });
+  items.push({ label: 'Manage environments…', click: () => void go('settings') });
   Menu.buildFromTemplate(items).popup({ window: win });
 }
 
@@ -178,6 +175,8 @@ async function startOpenWebUi() {
   if (!(await owui.isInstalled(paths))) {
     status(
       'Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.',
+      undefined,
+      'install',
     );
     await owui.install(paths, (line) => status(undefined, line));
   }
@@ -190,7 +189,7 @@ async function startOpenWebUi() {
     chat,
     model: 'd365fo-claude',
   });
-  status('Starting the chat…');
+  status('Starting the chat…', undefined, 'start');
   webui = owui.serve(paths, port, env, (line) => status(undefined, line));
   let failed;
   webui.on('error', (e) => (failed = e));
@@ -207,6 +206,7 @@ async function startOpenWebUi() {
   const url = `http://127.0.0.1:${port}`;
   const up = await waitFor(`${url}/health`, 240_000, () => failed);
   if (!up) throw failed ?? new Error('Open WebUI did not start in time.');
+  status('Connecting the chat to your tests…', undefined, 'connect');
   // Open WebUI keeps its first-start settings; the tool server address and key are refreshed every time.
   try {
     await owui.syncToolServer(url, owui.toolConnection({ toolUrl: `${ui.url}tools`, toolKey: ui.toolToken }));
@@ -236,7 +236,14 @@ async function main() {
   rail = new WebContentsView({
     webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
-  chatView = new WebContentsView();
+  chatView = new WebContentsView({
+    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
+  });
+  // Once Open WebUI loads, it gets the app's look; the splash page has its own.
+  chatView.webContents.on('dom-ready', () => {
+    if (webuiUrl && chatView.webContents.getURL().startsWith(webuiUrl))
+      chatView.webContents.insertCSS(chatCss).catch(() => undefined);
+  });
   win.contentView.addChildView(chatView);
   win.contentView.addChildView(rail);
   win.on('resize', layout);
@@ -261,7 +268,7 @@ async function main() {
   // The agent's own commands run on this app's Electron in Node mode, so nothing else needs to be installed.
   const { environmentForChild } = await lib('config/load-env.js');
   const childEnv = () => ({ ...environmentForChild(), ELECTRON_RUN_AS_NODE: '1' });
-  status('Starting the settings app…');
+  status('Starting the test app…', undefined, 'app');
   ui = await startUiServer({ home, root, childEnv });
 
   // The settings app loads right away, so profiles can be set up while the chat installs on first start.
@@ -273,7 +280,12 @@ async function main() {
   await settingsView.webContents.loadURL(ui.openUrl);
   await run(settingsView, `document.body.classList.add('embedded')`);
   void pollProfiles();
-  setInterval(() => void pollProfiles(), 2000).unref();
+  // The page reports changes itself (appChanged); a slow poll catches anything it missed.
+  settingsView.webContents.on('console-message', (...args) => {
+    const message = typeof args[0] === 'object' && args[0] ? args[0].message : args[2];
+    if (message === 'd365fo:app-changed') void pollProfiles();
+  });
+  setInterval(() => void pollProfiles(), 10_000).unref();
 
   try {
     const url = await startOpenWebUi();
@@ -282,7 +294,7 @@ async function main() {
     if (current === 'chat') await go('chat');
   } catch (e) {
     if (quitting) return;
-    status(`The chat could not start: ${e.message}`);
+    status(`The chat could not start: ${e.message}`, undefined, 'failed');
     await dialog.showMessageBox(win, {
       type: 'warning',
       message: 'Open WebUI could not start',

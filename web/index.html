@@ -4,1019 +4,162 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>D365FO Agent</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #f8fafc;
-        --panel: white;
-        --fg: #17212f;
-        --muted: #64748b;
-        --line: #dbe1e8;
-        --accent: #2563eb;
-        --bad: #b91c1c;
-        --good: #15803d;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #17181b;
-          --panel: #202226;
-          --fg: #eceef3;
-          --muted: #a0a7b4;
-          --line: #383c43;
-          --accent: #7eabff;
-          --bad: #ff9696;
-          --good: #87d9a0;
-        }
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font:
-          15px/1.5 system-ui,
-          sans-serif;
-      }
-      header {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-        padding: 16px 24px;
-        border-bottom: 1px solid var(--line);
-      }
-      header strong {
-        margin-right: auto;
-      }
-      nav {
-        display: flex;
-        gap: 8px;
-      }
-      .embedded nav {
-        display: none;
-      }
-      main {
-        max-width: 1100px;
-        margin: auto;
-        padding: 24px;
-      }
-      h1 {
-        font-size: 24px;
-        margin: 0 0 6px;
-      }
-      h2 {
-        font-size: 18px;
-      }
-      p {
-        color: var(--muted);
-      }
-      button,
-      input,
-      select,
-      textarea {
-        font: inherit;
-        color: inherit;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 9px 12px;
-      }
-      button {
-        cursor: pointer;
-      }
-      button:hover {
-        border-color: var(--accent);
-      }
-      button:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-      .primary {
-        background: var(--accent);
-        color: #fff;
-        border-color: transparent;
-      }
-      button:focus-visible,
-      a:focus-visible,
-      input:focus-visible,
-      select:focus-visible,
-      textarea:focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 2px;
-      }
-      a {
-        color: var(--accent);
-      }
-      .card {
-        padding: 20px;
-        margin: 18px 0;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: var(--panel);
-      }
-      .row {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      .row input,
-      .row select {
-        flex: 1;
-        min-width: 100px;
-      }
-      .field {
-        display: grid;
-        grid-template-columns: 180px 1fr;
-        gap: 12px;
-        align-items: center;
-        margin: 12px 0;
-      }
-      .help {
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .field small {
-        grid-column: 2;
-      }
-      .actions {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-top: 18px;
-        flex-wrap: wrap;
-      }
-      details {
-        margin: 16px 0;
-      }
-      summary {
-        cursor: pointer;
-        color: var(--muted);
-      }
-      textarea {
-        min-height: 85px;
-        resize: vertical;
-        width: 100%;
-      }
-      .step {
-        border-bottom: 1px solid var(--line);
-        padding: 12px 0;
-      }
-      .case {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 10px 0;
-        border-bottom: 1px solid var(--line);
-      }
-      .case input {
-        flex: none;
-      }
-      .link {
-        border: 0;
-        padding: 0;
-        text-align: left;
-        background: none;
-        color: var(--accent);
-      }
-      pre {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        max-height: 330px;
-        overflow: auto;
-        font:
-          13px/1.5 ui-monospace,
-          monospace;
-      }
-      .bad {
-        color: var(--bad);
-      }
-      .good {
-        color: var(--good);
-      }
-      [hidden] {
-        display: none !important;
-      }
-      #notice {
-        position: static;
-        margin: 0;
-        padding: 10px 24px;
-        background: var(--panel);
-        border-bottom: 1px solid var(--line);
-      }
-      #runPanel {
-        border-left: 4px solid var(--accent);
-      }
-      .badge {
-        font-size: 13px;
-        color: var(--muted);
-      }
-      @media (max-width: 650px) {
-        .field {
-          grid-template-columns: 1fr;
-          gap: 5px;
-        }
-        .field small {
-          grid-column: 1;
-        }
-        header {
-          flex-wrap: wrap;
-        }
-        main {
-          padding: 16px;
-        }
-      }
-    </style>
+    <link rel="icon" href="/icon.svg" />
+    <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
     <header>
-      <strong>D365FO Agent</strong><span id="environment" class="badge">No environment selected</span>
+      <span class="brand"><img src="/icon.svg" alt="" />D365FO Agent</span>
+      <span id="environment" class="chip">No environment</span>
       <nav aria-label="App">
         <button data-tab="cases">Tests</button><button data-tab="results">Results</button
         ><button data-tab="settings">Settings</button>
       </nav>
     </header>
-    <div id="notice" role="status" hidden></div>
-    <main>
-      <section id="runPanel" class="card" hidden aria-label="Current run">
+
+    <section id="runBar" hidden aria-label="Current run">
+      <div class="inner">
         <div class="row">
-          <strong id="runStatus"></strong><button id="stopRun">Stop</button
-          ><button id="openRunResults">View results</button>
+          <span id="runChip" class="chip running"></span>
+          <strong id="runTitle" class="grow"></strong>
+          <span id="runEta" class="muted"></span>
+          <button id="toggleLog" class="ghost" aria-expanded="false">Show log</button>
+          <button id="openRunResults">View results</button>
+          <button id="stopRun" class="danger">Stop</button>
+          <button id="dismissRun" class="ghost icon" aria-label="Hide" title="Hide">✕</button>
         </div>
-        <pre id="runLog"></pre>
-      </section>
+        <div class="progress" id="runProgress"><span></span></div>
+        <pre id="runLog" hidden aria-live="off"></pre>
+      </div>
+    </section>
+
+    <main>
+      <!-- Tests -->
       <section id="tab-cases">
-        <h1>Tests</h1>
-        <p>Select cases from a local folder or Azure DevOps, then run them in the active environment.</p>
+        <div class="page-head">
+          <div>
+            <h1>Tests</h1>
+            <p class="muted">Pick test cases and run them in the environment in use.</p>
+          </div>
+          <div class="segmented" role="group" aria-label="Case source">
+            <button data-source="local" aria-pressed="true">Local files</button
+            ><button data-source="devops" aria-pressed="false">Azure DevOps</button>
+          </div>
+        </div>
         <div class="card">
-          <div class="row">
-            <label for="source">Source</label
-            ><select id="source">
-              <option value="local">Local files</option>
-              <option value="devops">Azure DevOps</option></select
-            ><span id="localSource"
-              ><input id="caseDir" aria-label="Test-case folder" value="examples/testcases" /></span
-            ><span id="devopsSource" hidden
-              ><input id="plan" aria-label="Test plan ID" placeholder="Plan ID" inputmode="numeric" /><input
-                id="suite"
-                aria-label="Test suite ID"
-                placeholder="Suite ID"
-                inputmode="numeric" /></span
-            ><button id="loadCases">Load cases</button><button id="newCase">New case</button>
+          <div class="row" id="localSource">
+            <input id="caseDir" class="grow" aria-label="Test-case folder" value="examples/testcases" />
+            <button id="loadCases" class="primary">Load cases</button>
+            <button id="newCase">New case</button>
           </div>
-          <div id="caseList"><p>Load cases to begin.</p></div>
-          <div class="actions">
-            <button id="selectAll">Select all</button><button id="runSelected" class="primary">Run selected</button>
+          <div class="row" id="devopsSource" hidden>
+            <input id="plan" list="planList" placeholder="Test plan ID" aria-label="Test plan" inputmode="numeric" />
+            <datalist id="planList"></datalist>
+            <input id="suite" list="suiteList" placeholder="Suite ID" aria-label="Test suite" inputmode="numeric" />
+            <datalist id="suiteList"></datalist>
+            <button id="loadDevops" class="primary">Load cases</button>
+            <span id="devopsHint" class="help"></span>
           </div>
-          <details>
-            <summary>Advanced diagnostic</summary>
-            <label
-              ><input type="checkbox" id="dryRun" /> Skip clicks and typing. This does not validate the business
-              workflow.</label
+          <div class="row" id="caseTools" hidden style="margin-top: 14px">
+            <input id="caseSearch" type="search" class="grow" placeholder="Filter by ID or title" aria-label="Filter cases" />
+            <span id="caseCount" class="muted"></span>
+          </div>
+          <div id="caseList"></div>
+          <div class="sticky-actions row" id="runActions" hidden>
+            <span id="selectedCount" class="muted"></span>
+            <span class="spacer"></span>
+            <label class="help" title="Skips clicks and typing. It does not validate the business workflow."
+              ><input type="checkbox" id="dryRun" /> Diagnostic only</label
             >
-          </details>
+            <button id="runSelected" class="primary">Run</button>
+          </div>
         </div>
-        <div id="caseEditor" class="card" hidden></div>
       </section>
+
+      <!-- Results -->
       <section id="tab-results" hidden>
-        <h1>Results</h1>
-        <p>Current and previous runs, with the evidence behind each outcome.</p>
-        <div class="card">
-          <div class="row">
-            <select id="runPicker" aria-label="Choose a run"></select
-            ><button id="refreshResults">Refresh</button>
+        <div class="page-head">
+          <div>
+            <h1>Results</h1>
+            <p class="muted">Each run with the evidence behind every outcome.</p>
           </div>
-          <div id="resultDetail"></div>
+          <button id="refreshResults" class="ghost">Refresh</button>
+        </div>
+        <div class="results-layout">
+          <div class="card run-list" id="runList" aria-label="Runs"></div>
+          <div class="card" id="resultDetail"></div>
         </div>
       </section>
+
+      <!-- Settings -->
       <section id="tab-settings" hidden>
-        <h1>Settings</h1>
-        <p>Choose an environment and configure one Claude connection for chat and all tests.</p>
-        <div class="card">
-          <div class="row">
-            <label for="profilePicker">Environment</label
-            ><select id="profilePicker"></select
-            ><button id="newProfile">New</button><button id="renameProfile">Rename</button
-            ><button id="useProfile">Use this environment</button>
+        <div class="page-head">
+          <div>
+            <h1>Settings</h1>
+            <p class="muted">Your F&amp;O environments and the Claude connection used by chat and every run.</p>
           </div>
-          <form id="profileForm">
-            <div id="profileFields"></div>
-            <div class="actions">
-              <button class="primary" type="submit" id="saveProfile" disabled>Save environment</button
-              ><button type="button" id="checkSetup">Check setup</button
-              ><button type="button" id="devopsLogin">Sign in to Azure DevOps</button
-              ><span id="profileStatus" role="status"></span>
-            </div>
-          </form>
-          <pre id="setupOutput"></pre>
         </div>
         <div class="card">
-          <h2>Shared AI connection</h2>
-          <p>Claude handles both chat and test execution. Enter credentials here, never in chat.</p>
+          <div class="row">
+            <h2 class="grow" style="margin: 0">AI connection</h2>
+            <span id="aiBadge" class="ai-status"></span>
+          </div>
           <form id="aiForm">
             <div id="aiFields"></div>
             <div class="actions">
-              <button class="primary" type="submit" id="saveAi" disabled>Save AI connection</button
+              <button class="primary" type="submit" id="saveAi" disabled>Save</button
               ><button type="button" id="checkAi">Test connection</button><span id="aiStatus" role="status"></span>
             </div>
           </form>
         </div>
-        <p class="help">
-          Previous settings are backed up automatically before migration. Existing conversations and reports are
-          retained.
+        <h2>Environments</h2>
+        <div class="env-grid" id="envGrid"></div>
+        <div class="card" id="envEditor" hidden style="margin-top: 16px">
+          <div class="row">
+            <h2 class="grow" style="margin: 0" id="editorTitle"></h2>
+            <button type="button" class="ghost" id="closeEditor">Close</button>
+          </div>
+          <form id="profileForm">
+            <div id="profileFields"></div>
+            <div class="actions">
+              <button class="primary" type="submit" id="saveProfile" disabled>Save changes</button
+              ><button type="button" id="checkSetup">Check setup</button
+              ><span id="profileStatus" role="status" class="muted"></span>
+            </div>
+          </form>
+          <pre id="setupOutput"></pre>
+        </div>
+        <p class="help" style="margin-top: 18px">
+          Settings are stored in your user profile, outside the project. Secrets are never shown again after saving.
         </p>
       </section>
     </main>
+
+    <div id="drawerBackdrop" hidden></div>
+    <aside id="drawer" hidden aria-label="Test case" role="dialog" aria-modal="true"></aside>
+
     <dialog id="question">
       <form method="dialog">
         <p id="questionText"></p>
-        <input id="questionInput" aria-label="Answer" />
-        <div class="actions">
+        <input id="questionInput" aria-label="Answer" style="width: 100%" />
+        <div class="actions" style="justify-content: flex-end">
           <button value="cancel">Cancel</button><button class="primary" value="ok" id="questionOk">Continue</button>
         </div>
       </form>
     </dialog>
-    <script>
-      const $ = (id) => document.getElementById(id);
-      function question(message, initial) {
-        return new Promise((resolve) => {
-          const dialog = $('question'),
-            input = $('questionInput');
-          $('questionText').textContent = message;
-          input.hidden = initial === undefined;
-          input.value = initial || '';
-          dialog.returnValue = 'cancel';
-          dialog.addEventListener(
-            'close',
-            () =>
-              resolve(
-                dialog.returnValue === 'ok'
-                  ? initial === undefined
-                    ? true
-                    : input.value
-                  : initial === undefined
-                    ? false
-                    : null,
-              ),
-            { once: true },
-          );
-          dialog.showModal();
-          (input.hidden ? $('questionOk') : input).focus();
-        });
-      }
-      const confirmAction = (message) => question(message);
-      const promptText = (message, initial = '') => question(message, initial);
 
-      const el = (tag, props = {}, ...children) => {
-        const node = document.createElement(tag);
-        for (const [key, value] of Object.entries(props)) {
-          if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-          else if (key === 'class') node.className = value;
-          else if (['value', 'checked', 'disabled', 'hidden'].includes(key)) node[key] = value;
-          else if (value !== undefined) node.setAttribute(key, value);
-        }
-        for (const child of children.flat())
-          if (child !== undefined && child !== null)
-            node.append(child.nodeType ? child : document.createTextNode(String(child)));
-        return node;
-      };
-      let state = { profiles: [], active: null, catalog: [] },
-        current = null,
-        aiEntries = [],
-        cases = [],
-        selected = new Set(),
-        editing = null;
-      let profileSnapshot = '[]',
-        aiSnapshot = '[]',
-        editorDirty = false,
-        currentTab = 'cases',
-        currentRun = null,
-        selectedRun = '';
-      function notice(message, bad = false) {
-        $('notice').textContent = message;
-        $('notice').className = bad ? 'bad' : 'good';
-        $('notice').hidden = false;
-      }
-      const fail = (error) => notice(error.message || String(error), true);
-      async function api(path, method = 'GET', body) {
-        let res;
-        try {
-          res = await fetch(path, {
-            method,
-            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'd365fo-ui' },
-            body: body === undefined ? undefined : JSON.stringify(body),
-          });
-        } catch {
-          throw new Error(
-            'The local app could not be reached. Keep your entries open and check that the app is still running.',
-          );
-        }
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(data?.error || `Request failed (${res.status}).`);
-        return data;
-      }
-      function values(root) {
-        return [...$(root).querySelectorAll('[data-key]')].map((i) => ({ key: i.dataset.key, value: i.value }));
-      }
-      function dirty() {
-        return (
-          editorDirty ||
-          JSON.stringify(values('profileFields')) !== profileSnapshot ||
-          JSON.stringify(values('aiFields')) !== aiSnapshot
-        );
-      }
-      function updateDirty() {
-        $('saveProfile').disabled = !current || JSON.stringify(values('profileFields')) === profileSnapshot;
-        $('saveAi').disabled = JSON.stringify(values('aiFields')) === aiSnapshot;
-      }
-      function field(spec, value) {
-        const id = 'f_' + spec.key,
-          props = { id, 'data-key': spec.key, value: value || '' };
-        const input = spec.options
-          ? el(
-              'select',
-              props,
-              spec.options.map((o) =>
-                el(
-                  'option',
-                  { value: o },
-                  { '': 'Default', 'azure-cli': 'Microsoft account', pat: 'Personal access token' }[o] || o,
-                ),
-              ),
-            )
-          : el('input', {
-              ...props,
-              type: spec.secret ? 'password' : spec.type === 'url' ? 'url' : 'text',
-              placeholder: spec.placeholder || '',
-              autocomplete: spec.secret ? 'new-password' : 'off',
-            });
-        input.value = value || '';
-        return el(
-          'div',
-          { class: 'field' },
-          el('label', { for: id }, spec.label),
-          input,
-          spec.help ? el('small', { class: 'help' }, spec.help) : null,
-        );
-      }
-      function renderFields(root, entries, groups) {
-        const box = $(root);
-        box.replaceChildren();
-        const map = new Map(entries.map((e) => [e.key, e.value]));
-        for (const group of groups) {
-          const fields = state.catalog.filter((s) => s.group === group);
-          if (root === 'profileFields') box.append(el('h2', {}, group));
-          for (const spec of fields.filter((s) => !s.advanced)) box.append(field(spec, map.get(spec.key)));
-          const advanced = el('details', {}, el('summary', {}, 'Advanced'));
-          for (const spec of fields.filter((s) => s.advanced)) advanced.append(field(spec, map.get(spec.key)));
-          box.append(advanced);
-        }
-      }
-      async function refreshState() {
-        state = await api('/api/state');
-        $('environment').textContent = state.active ? `Environment: ${state.active}` : 'No environment selected';
-        const picked = current?.name || state.active;
-        $('profilePicker').replaceChildren(
-          el('option', { value: '' }, 'Choose an environment'),
-          ...state.profiles.map((p) => el('option', { value: p.name }, p.name + (p.active ? ' · in use' : ''))),
-        );
-        $('profilePicker').value = picked || '';
-      }
-      async function openProfile(name) {
-        current = name ? await api('/api/profiles/' + encodeURIComponent(name)) : null;
-        renderFields('profileFields', current?.entries || [], ['Dynamics 365 F&O', 'Azure DevOps']);
-        $('profileForm').hidden = !current;
-        profileSnapshot = JSON.stringify(values('profileFields'));
-        updateDirty();
-      }
-      async function refresh() {
-        await refreshState();
-        await openProfile(current?.name || state.active || state.profiles[0]?.name || '');
-        aiEntries = (await api('/api/ai')).entries;
-        renderFields('aiFields', aiEntries, ['AI model']);
-        aiSnapshot = JSON.stringify(values('aiFields'));
-        updateDirty();
-      }
-      async function saveProfile() {
-        if (!current) throw new Error('Choose or create an environment first.');
-        const form = values('profileFields'),
-          submitted = JSON.stringify(form);
-        const keys = new Set(form.map((e) => e.key));
-        const entries = [...current.entries.filter((e) => !keys.has(e.key)), ...form];
-        $('saveProfile').disabled = true;
-        try {
-          await api('/api/profiles/' + encodeURIComponent(current.name), 'PUT', { entries });
-        } catch (e) {
-          updateDirty();
-          $('profileStatus').textContent = 'Not saved';
-          throw e;
-        }
-        current.entries = entries;
-        profileSnapshot = submitted;
-        updateDirty();
-        $('profileStatus').textContent = 'Saved';
-        try {
-          await refreshState();
-          notice('Environment saved.');
-        } catch {
-          notice('Environment saved, but its status could not reload. Your entries are preserved.', true);
-        }
-      }
-      async function saveAi() {
-        const entries = values('aiFields'),
-          submitted = JSON.stringify(entries);
-        $('saveAi').disabled = true;
-        try {
-          await api('/api/ai', 'PUT', { entries });
-        } catch (e) {
-          updateDirty();
-          $('aiStatus').textContent = 'Not saved';
-          throw e;
-        }
-        aiEntries = entries;
-        aiSnapshot = submitted;
-        updateDirty();
-        $('aiStatus').textContent = 'Saved';
-        notice('AI connection saved for Chat and all test runs.');
-      }
-      async function showTab(id) {
-        if (!['cases', 'results', 'settings'].includes(id)) return;
-        for (const tab of ['cases', 'results', 'settings']) $('tab-' + tab).hidden = tab !== id;
-        currentTab = id;
-        if (id === 'results') await loadResults().catch(fail);
-      }
-      for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => showTab(b.dataset.tab);
-      $('profileForm').onsubmit = (e) => {
-        e.preventDefault();
-        saveProfile().catch(fail);
-      };
-      $('aiForm').onsubmit = (e) => {
-        e.preventDefault();
-        saveAi().catch(fail);
-      };
-      $('profileForm').oninput = $('aiForm').oninput = updateDirty;
-      $('profileForm').onchange = $('aiForm').onchange = updateDirty;
-      $('profilePicker').onchange = async () => {
-        const name = $('profilePicker').value;
-        if (
-          JSON.stringify(values('profileFields')) !== profileSnapshot &&
-          !(await confirmAction('Discard the unsaved environment edits?'))
-        ) {
-          $('profilePicker').value = current?.name || '';
-          return;
-        }
-        await openProfile(name).catch(fail);
-      };
-      $('newProfile').onclick = async () => {
-        if (dirty() && !(await confirmAction('Save or copy your edits before continuing. Discard these edits?')))
-          return;
-        const name = await promptText('Environment name');
-        if (!name) return;
-        try {
-          await api('/api/profiles', 'POST', { name, entries: [] });
-          await refreshState();
-          await openProfile(name);
-          $('profilePicker').value = name;
-        } catch (e) {
-          fail(e);
-        }
-      };
-      $('renameProfile').onclick = async () => {
-        if (!current) return;
-        const name = await promptText('New environment name', current.name);
-        if (!name) return;
-        try {
-          if (!(await confirmAction('Rename this environment? Unsaved edits stay in the form.'))) return;
-          await api('/api/profiles/' + encodeURIComponent(current.name), 'PATCH', { name });
-          current.name = name;
-          await refreshState();
-        } catch (e) {
-          fail(e);
-        }
-      };
-      $('useProfile').onclick = async () => {
-        try {
-          if (!current) throw new Error('Choose an environment first.');
-          if (JSON.stringify(values('profileFields')) !== profileSnapshot) await saveProfile();
-          await api('/api/active', 'POST', { name: current.name });
-          await refreshState();
-          notice('Using ' + current.name);
-        } catch (e) {
-          fail(e);
-        }
-      };
-      async function profileCommand(command) {
-        if (!current) throw new Error('Choose an environment first.');
-        if (JSON.stringify(values('profileFields')) !== profileSnapshot) await saveProfile();
-        const button = command === 'check' ? $('checkSetup') : $('devopsLogin');
-        button.disabled = true;
-        $('setupOutput').textContent =
-          command === 'check' ? 'Checking…' : 'Finish the Microsoft sign-in in your browser…';
-        try {
-          const r = await api('/api/profiles/' + encodeURIComponent(current.name) + '/' + command, 'POST');
-          $('setupOutput').textContent = r.output || 'No output.';
-          if (r.exitCode !== 0) notice('The check needs attention; see its output.', true);
-        } finally {
-          button.disabled = false;
-        }
-      }
-      $('checkSetup').onclick = () => profileCommand('check').catch(fail);
-      $('devopsLogin').onclick = () => profileCommand('devops-login').catch(fail);
-      $('checkAi').onclick = async () => {
-        try {
-          if (JSON.stringify(values('aiFields')) !== aiSnapshot) await saveAi();
-          $('checkAi').disabled = true;
-          const r = await api('/api/ai/check', 'POST');
-          $('aiStatus').textContent = r.detail;
-          $('aiStatus').className = r.ok ? 'good' : 'bad';
-        } catch (e) {
-          fail(e);
-        } finally {
-          $('checkAi').disabled = false;
-        }
-      };
-      function sourceQuery() {
-        if ($('source').value === 'devops')
-          return new URLSearchParams({ plan: $('plan').value.trim(), suite: $('suite').value.trim() });
-        return new URLSearchParams({ local: $('caseDir').value.trim() });
-      }
-      async function loadCases() {
-        if (editorDirty && !(await confirmAction('Discard unsaved test-case edits?'))) return;
-        cases = await api('/api/cases?' + sourceQuery());
-        selected = new Set(cases.filter((c) => !c.error).map((c) => c.id));
-        editing = null;
-        editorDirty = false;
-        $('caseEditor').hidden = true;
-        renderCases();
-      }
-      function renderCases() {
-        $('caseList').replaceChildren(
-          ...(cases.length
-            ? cases.map((c) =>
-                el(
-                  'div',
-                  { class: 'case' },
-                  el('input', {
-                    type: 'checkbox',
-                    checked: selected.has(c.id),
-                    disabled: !!c.error,
-                    'aria-label': 'Select ' + c.id,
-                    onchange: (e) => (e.target.checked ? selected.add(c.id) : selected.delete(c.id)),
-                  }),
-                  el('button', { class: 'link', onclick: () => openCase(c).catch(fail) }, `${c.id} · ${c.title}`),
-                  el(
-                    'span',
-                    { class: 'badge' },
-                    c.error || `${Array.isArray(c.steps) ? c.steps.length : c.steps} steps`,
-                  ),
-                ),
-              )
-            : [el('p', {}, 'No cases found.')]),
-        );
-      }
-      $('source').onchange = () => {
-        $('localSource').hidden = $('source').value !== 'local';
-        $('devopsSource').hidden = $('source').value !== 'devops';
-        $('newCase').hidden = $('source').value !== 'local';
-        cases = [];
-        selected.clear();
-        renderCases();
-      };
-      for (const id of ['caseDir', 'plan', 'suite'])
-        $(id).oninput = () => {
-          cases = [];
-          selected.clear();
-          renderCases();
-        };
-      $('loadCases').onclick = () => loadCases().catch(fail);
-      $('selectAll').onclick = () => {
-        selected = new Set(cases.filter((c) => !c.error).map((c) => c.id));
-        renderCases();
-      };
-      async function openCase(c) {
-        if (editorDirty && !(await confirmAction('Discard unsaved test-case edits?'))) return;
-        const remote = $('source').value === 'devops';
-        const loaded = remote
-          ? c
-          : await api('/api/testcases?' + new URLSearchParams({ dir: $('caseDir').value, file: c.file }));
-        editing = { file: c.file, dir: $('caseDir').value, draft: loaded, remote };
-        renderEditor();
-      }
-      function renderEditor() {
-        const box = $('caseEditor');
-        box.hidden = false;
-        box.replaceChildren();
-        editorDirty = false;
-        const { draft, remote } = editing;
-        box.append(el('h2', {}, remote ? 'Azure DevOps case' : 'Edit test case'));
-        const id = el('input', { id: 'caseId', value: draft.id || '', disabled: remote, 'aria-label': 'Case ID' }),
-          title = el('input', {
-            id: 'caseTitle',
-            value: draft.title || '',
-            disabled: remote,
-            'aria-label': 'Case title',
-          });
-        box.append(el('div', { class: 'row' }, id, title));
-        const stepBox = el('div', { id: 'steps' });
-        box.append(stepBox);
-        function stepRow(s) {
-          const row = el(
-            'div',
-            { class: 'step' },
-            el('textarea', {
-              'data-action': '',
-              placeholder: 'Action',
-              'aria-label': 'Step action',
-              value: s.action || '',
-              disabled: remote,
-            }),
-            el('textarea', {
-              'data-expected': '',
-              placeholder: 'Expected result',
-              'aria-label': 'Expected result',
-              value: s.expected || '',
-              disabled: remote,
-            }),
-          );
-          if (!remote)
-            row.append(
-              el(
-                'div',
-                { class: 'actions' },
-                el(
-                  'button',
-                  {
-                    type: 'button',
-                    onclick: () => {
-                      if (row.previousElementSibling) stepBox.insertBefore(row, row.previousElementSibling);
-                      editorDirty = true;
-                    },
-                  },
-                  'Move up',
-                ),
-                el(
-                  'button',
-                  {
-                    type: 'button',
-                    onclick: () => {
-                      if (row.nextElementSibling) stepBox.insertBefore(row.nextElementSibling, row);
-                      editorDirty = true;
-                    },
-                  },
-                  'Move down',
-                ),
-                el(
-                  'button',
-                  {
-                    type: 'button',
-                    onclick: () => {
-                      row.remove();
-                      editorDirty = true;
-                    },
-                  },
-                  'Remove step',
-                ),
-              ),
-            );
-          return row;
-        }
-        for (const s of draft.steps || []) stepBox.append(stepRow(s));
-        if (!remote)
-          box.append(
-            el(
-              'div',
-              { class: 'actions' },
-              el(
-                'button',
-                {
-                  onclick: () => {
-                    stepBox.append(stepRow({}));
-                    editorDirty = true;
-                  },
-                },
-                'Add step',
-              ),
-              el('button', { class: 'primary', id: 'saveCase', onclick: () => saveCase().catch(fail) }, 'Save case'),
-              el(
-                'button',
-                {
-                  onclick: async () => {
-                    const name = await promptText('New case ID', draft.id + '-COPY');
-                    if (!name) return;
-                    editing.file = undefined;
-                    id.value = name;
-                    editorDirty = true;
-                    await saveCase().catch(fail);
-                  },
-                },
-                'Duplicate',
-              ),
-              el(
-                'button',
-                {
-                  onclick: async () => {
-                    if (!editing.file || !(await confirmAction('Delete this test-case file?'))) return;
-                    try {
-                      await api(
-                        '/api/testcases?' + new URLSearchParams({ dir: editing.dir, file: editing.file }),
-                        'DELETE',
-                      );
-                      editorDirty = false;
-                      await loadCases();
-                    } catch (e) {
-                      fail(e);
-                    }
-                  },
-                },
-                'Delete',
-              ),
-            ),
-          );
-        box.oninput = () => (editorDirty = true);
-      }
-      async function saveCase() {
-        const testCase = {
-          ...editing.draft,
-          id: $('caseId').value,
-          title: $('caseTitle').value,
-          steps: [...$('steps').children].map((row) => ({
-            action: row.querySelector('[data-action]').value,
-            expected: row.querySelector('[data-expected]').value,
-          })),
-        };
-        const q = new URLSearchParams({ dir: editing.dir });
-        if (editing.file) q.set('file', editing.file);
-        const oldId = editing.draft.id;
-        const saved = await api('/api/testcases?' + q, 'PUT', { testCase });
-        editing.file = saved.file;
-        editing.draft = testCase;
-        editorDirty = false;
-        notice('Test case saved.');
-        if ($('source').value === 'local' && $('caseDir').value === editing.dir) {
-          cases = await api('/api/cases?' + sourceQuery());
-          if (selected.delete(oldId)) selected.add(testCase.id);
-          renderCases();
-        }
-      }
-      $('newCase').onclick = async () => {
-        if (editorDirty && !(await confirmAction('Discard unsaved edits?'))) return;
-        editing = {
-          dir: $('caseDir').value,
-          draft: { id: '', title: '', steps: [{ action: '', expected: '' }] },
-          remote: false,
-        };
-        renderEditor();
-      };
-      $('runSelected').onclick = async () => {
-        try {
-          if (!state.active) throw new Error('Choose an environment in Settings first.');
-          if (!selected.size) throw new Error('Select at least one test case.');
-          if (editorDirty) throw new Error('Save your test-case edits before running.');
-          const diagnostic = $('dryRun').checked;
-          if (
-            !(await confirmAction(
-              `${diagnostic ? 'Diagnostic only' : 'Run tests'} on ${state.active}: ${[...selected].join(', ')}?`,
-            ))
-          )
-            return;
-          const body = {
-            source: $('source').value,
-            cases: [...selected],
-            dryRun: diagnostic,
-            ...Object.fromEntries(sourceQuery()),
-          };
-          const r = await api('/api/run', 'POST', body);
-          if (r.error) throw new Error(r.error);
-          await refreshRun();
-        } catch (e) {
-          fail(e);
-        }
-      };
-      async function refreshRun() {
-        currentRun = await api('/api/run');
-        $('runPanel').hidden = !currentRun;
-        if (!currentRun) return;
-        $('runStatus').textContent =
-          `${currentRun.kind === 'upload' ? 'Upload' : 'Run'} · ${currentRun.status} · ${currentRun.profile || 'No environment'}`;
-        $('stopRun').disabled = currentRun.status !== 'running';
-        $('runLog').textContent = (currentRun.lines || []).join('\n');
-      }
-      $('stopRun').onclick = () => api('/api/run/stop', 'POST').then(refreshRun).catch(fail);
-      $('openRunResults').onclick = () => showTab('results');
-      async function loadResults() {
-        const history = await api('/api/history');
-        $('runPicker').replaceChildren(
-          el('option', { value: '' }, 'Latest results in active environment'),
-          ...history.map((r) =>
-            el(
-              'option',
-              { value: r.id },
-              `${new Date(r.startedAt).toLocaleString()} · ${r.profile || 'No environment'} · ${r.mode || 'live'} · ${r.status}`,
-            ),
-          ),
-        );
-        if (history.some((r) => r.id === selectedRun)) $('runPicker').value = selectedRun;
-        else selectedRun = '';
-        await renderResults(history.find((r) => r.id === selectedRun));
-      }
-      async function renderResults(meta) {
-        selectedRun = $('runPicker').value;
-        const rows = await api('/api/results' + (selectedRun ? '?run=' + encodeURIComponent(selectedRun) : '')),
-          box = $('resultDetail');
-        box.replaceChildren();
-        if (!rows?.length) {
-          box.append(el('p', {}, 'No test results for this run. Check the run log for setup errors.'));
-          return;
-        }
-        const counts = {};
-        for (const r of rows) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
-        box.append(
-          el(
-            'h2',
-            {},
-            Object.entries(counts)
-              .map(([k, v]) => `${v} ${k}`)
-              .join(' · '),
-          ),
-        );
-        const q = selectedRun ? '?run=' + encodeURIComponent(selectedRun) : '';
-        box.append(
-          el(
-            'div',
-            { class: 'actions' },
-            el('a', { href: '/report' + q, target: '_blank', rel: 'noopener' }, 'HTML report'),
-            el('a', { href: '/download/results.json' + q }, 'JSON'),
-            el('a', { href: '/download/results.junit.xml' + q }, 'JUnit'),
-          ),
-        );
-        if (selectedRun)
-          box.append(
-            el(
-              'div',
-              { class: 'actions' },
-              el(
-                'button',
-                {
-                  onclick: async () => {
-                    if (!(await confirmAction(`Upload run ${selectedRun} using its saved environment?`))) return;
-                    const plan = await promptText(
-                      'Azure DevOps plan ID',
-                      meta?.args?.[meta.args.indexOf('--plan') + 1] || '',
-                    );
-                    if (!plan) return;
-                    try {
-                      await api('/api/history/' + selectedRun + '/upload', 'POST', { plan });
-                      await refreshRun();
-                    } catch (e) {
-                      fail(e);
-                    }
-                  },
-                },
-                'Upload to Azure DevOps',
-              ),
-            ),
-          );
-        for (const r of rows) {
-          const details = el(
-            'details',
-            {},
-            el(
-              'summary',
-              { class: r.outcome === 'passed' ? 'good' : 'bad' },
-              `${r.testCaseId} · ${r.title} · ${r.outcome}`,
-            ),
-          );
-          if (r.errorMessage) details.append(el('p', { class: 'bad' }, r.errorMessage));
-          for (const s of r.steps || [])
-            details.append(el('p', {}, `${s.index}. ${s.status}: ${s.observed || s.errorMessage || ''}`));
-          box.append(details);
-        }
-      }
-      $('runPicker').onchange = () => {
-        selectedRun = $('runPicker').value;
-        loadResults().catch(fail);
-      };
-      $('refreshResults').onclick = () => loadResults().catch(fail);
-      window.addEventListener('beforeunload', (e) => {
-        if (dirty()) {
-          e.preventDefault();
-          e.returnValue = '';
-        }
-      });
-      const events = new EventSource('/api/run/events');
-      events.addEventListener('line', () => refreshRun().catch(() => {}));
-      events.addEventListener('status', () => {
-        refreshRun().catch(() => {});
-        if (currentTab === 'results') loadResults().catch(() => {});
-      });
-      setInterval(() => refreshRun().catch(() => {}), 2500);
-      refresh()
-        .then(() => {
-          if (!state.active || !state.aiConfigured) showTab('settings');
-        })
-        .catch(fail);
-      refreshRun().catch(() => {});
-    </script>
+    <dialog id="wizard" aria-labelledby="wizardTitle">
+      <h2 id="wizardTitle">Set up an environment</h2>
+      <div class="wizard-steps" id="wizardSteps"></div>
+      <div class="wizard-page" id="wizardPage"></div>
+      <div class="actions" style="justify-content: flex-end">
+        <button type="button" id="wizardCancel" class="ghost">Cancel</button>
+        <button type="button" id="wizardBack">Back</button>
+        <button type="button" id="wizardNext" class="primary">Next</button>
+      </div>
+    </dialog>
+
+    <div id="toasts" aria-live="polite"></div>
+    <script src="/app.js"></script>
   </body>
 </html>

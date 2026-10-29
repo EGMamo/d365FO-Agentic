@@ -137,6 +137,27 @@ export function openApiSpec(serverUrl: string): Record<string, unknown> {
           responses: ok('Runs'),
         },
       },
+      '/history/{id}/rerun': {
+        post: {
+          operationId: 'rerun_failed',
+          summary:
+            'Start a new run of only the failed and blocked cases of a run from the history, from the same source, in the environment in use, after the user confirms a real run. Then follow it with get_run.',
+          parameters: [{ name: 'id', in: 'path', required: true, description: 'Run id from list_runs.', schema: str }],
+          requestBody: { required: false, content: { 'application/json': { schema: obj({ dryRun: { ...bool, description: 'Diagnostic only.' } }) } } },
+          responses: ok('The run that started'),
+        },
+      },
+      '/history/{id}/compare': {
+        get: {
+          operationId: 'compare_runs',
+          summary: 'Compare a run with the previous run of the same environment: cases that were fixed, regressed, still fail, or are new.',
+          parameters: [
+            { name: 'id', in: 'path', required: true, description: 'Run id from list_runs.', schema: str },
+            query('with', 'Run id to compare against (optional; defaults to the previous run of the same environment).'),
+          ],
+          responses: ok('Comparison'),
+        },
+      },
       '/history/{id}/upload': {
         post: {
           operationId: 'upload_run',
@@ -241,3 +262,50 @@ export function summarizeResults(results: TestResult[]): Record<string, unknown>
   };
 }
 
+
+export interface RunComparison {
+  previous: string;
+  /** Did not pass before, passes now. */
+  fixed: string[];
+  /** Passed before, does not pass now. */
+  regressed: string[];
+  /** Did not pass either time. */
+  stillFailing: string[];
+  /** No comparable outcome in the previous run. */
+  added: string[];
+  unchanged: number;
+}
+
+/** How a run's outcomes changed against an earlier run. Skipped and interrupted cases establish no verdict. */
+export function compareResults(current: TestResult[], previous: TestResult[], previousId: string): RunComparison {
+  const before = new Map(previous.filter((r) => !r.interrupted && r.outcome !== 'skipped').map((r) => [r.testCaseId, r.outcome]));
+  const out: RunComparison = { previous: previousId, fixed: [], regressed: [], stillFailing: [], added: [], unchanged: 0 };
+  for (const r of current) {
+    if (r.interrupted || r.outcome === 'skipped') continue;
+    const was = before.get(r.testCaseId);
+    if (was === undefined) out.added.push(r.testCaseId);
+    else if (was !== 'passed' && r.outcome === 'passed') out.fixed.push(r.testCaseId);
+    else if (was === 'passed' && r.outcome !== 'passed') out.regressed.push(r.testCaseId);
+    else if (r.outcome !== 'passed') out.stillFailing.push(r.testCaseId);
+    else out.unchanged++;
+  }
+  return out;
+}
+
+/** The ids of the cases a run should repeat: the failed and blocked ones, interrupted cases included. */
+export function failedCaseIds(results: TestResult[]): string[] {
+  return [...new Set(results.filter((r) => r.interrupted || (r.outcome !== 'passed' && r.outcome !== 'skipped')).map((r) => r.testCaseId))];
+}
+
+/** The source a recorded run read its cases from, as start_run takes it, from the run's command-line arguments. */
+export function runSource(args: readonly string[]): { source: 'local'; local: string } | { source: 'devops'; plan?: string; suite?: string } | undefined {
+  const value = (flag: string): string | undefined => {
+    const i = args.indexOf(flag);
+    return i >= 0 && typeof args[i + 1] === 'string' && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
+  };
+  const local = value('--local');
+  if (local) return { source: 'local', local };
+  const plan = value('--plan');
+  const suite = value('--suite');
+  return plan || suite ? { source: 'devops', ...(plan ? { plan } : {}), ...(suite ? { suite } : {}) } : undefined;
+}

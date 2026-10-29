@@ -89,3 +89,6 @@ jobs:
           path: |
             reports/
             knowledge/
+          retention-days: 14
+        # A full Actions storage quota must not override the test outcome above.
+        continue-on-error: true

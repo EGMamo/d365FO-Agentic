@@ -189,7 +189,7 @@ try {
 
     await check('Settings save through the form and survive a reload', async () => {
       await rail.click('button[data-id="settings"]');
-      await settings.selectOption('#profilePicker', 'e2e');
+      await settings.click('[data-edit="e2e"]');
       await settings.locator('#f_D365_COMPANY').fill(process.env.E2E_D365_COMPANY || 'USMF');
       if (await settings.locator('#saveProfile').isEnabled()) {
         await settings.click('#saveProfile');
@@ -197,6 +197,7 @@ try {
       }
       await settings.reload();
       await settings.evaluate(() => showTab('settings'));
+      await settings.click('[data-edit="e2e"]');
       await settings.waitForFunction((value) => document.querySelector('#f_D365_COMPANY')?.value === value, process.env.E2E_D365_COMPANY || 'USMF');
     });
 

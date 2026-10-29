@@ -35,13 +35,13 @@ const envSchema = z.object({
   // A Claude-compatible endpoint other than api.anthropic.com: a company gateway, a proxy, or a model router.
   ANTHROPIC_BASE_URL: z
     .string()
-    .optional()
-    .transform((v) => v?.trim() || undefined),
+    .transform((v) => v.trim() || undefined)
+    .optional(),
   // Sent as `Authorization: Bearer` for gateways that expect a token in place of an Anthropic API key.
   ANTHROPIC_AUTH_TOKEN: z
     .string()
-    .optional()
-    .transform((v) => v?.trim() || undefined),
+    .transform((v) => v.trim() || undefined)
+    .optional(),
   AZDO_ORG_URL: z.string().optional(),
   AZDO_PROJECT: z.string().optional(),
   AZDO_PAT: z.string().optional(),
@@ -49,10 +49,10 @@ const envSchema = z.object({
   // Unset: the token when one is set, otherwise the Azure CLI sign-in.
   AZDO_AUTH: z
     .enum(['', 'pat', 'azure-cli'])
-    .optional()
-    .transform((v) => v || undefined),
+    .transform((v) => v || undefined)
+    .optional(),
   // Optional: the Entra tenant to get the Azure DevOps token for, when the account is in several.
-  AZDO_TENANT_ID: z.string().optional().transform((v) => v?.trim() || undefined),
+  AZDO_TENANT_ID: z.string().transform((v) => v.trim() || undefined).optional(),
   AZDO_TEST_PLAN_ID: z.string().optional(),
   AZDO_TEST_SUITE_ID: z.string().optional(),
   D365_BASE_URL: z.string().optional(),
@@ -67,8 +67,8 @@ const envSchema = z.object({
   // Optional: sign in with a saved browser session instead of a password. Created by `session-login`.
   D365_STORAGE_STATE: z
     .string()
-    .optional()
-    .transform((v) => v?.trim() || undefined),
+    .transform((v) => v.trim() || undefined)
+    .optional(),
   D365_SESSION_MAX_AGE_HOURS: z.coerce.number().positive().default(12),
 
   PW_HEADLESS: z

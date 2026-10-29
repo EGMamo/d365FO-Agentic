@@ -15,7 +15,7 @@ import { AiSettings } from '../profiles/ai.js';
 import { discoverTestCases } from '../core/runner.js';
 import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
-import { MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, summarizeResults, TOOLS_PREFIX } from './tools.js';
+import { compareResults, failedCaseIds, MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, runSource, summarizeResults, TOOLS_PREFIX } from './tools.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { environmentForChild } from '../config/load-env.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
@@ -38,6 +38,21 @@ const COOKIE = 'd365fo_ui';
 const MAX_BODY = 256 * 1024;
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 const MAX_LINES = 5000;
+/** Files of the app page besides index.html, with their content types. */
+const STATIC_ASSETS: Record<string, string> = {
+  'icon.svg': 'image/svg+xml',
+  'app.css': 'text/css; charset=utf-8',
+  'app.js': 'text/javascript; charset=utf-8',
+};
+const assetCache = new Map<string, Buffer>();
+/** The page's files are read once; set D365FO_UI_DEV=1 to re-read them on every request while editing. */
+async function asset(name: string): Promise<Buffer> {
+  const hit = process.env.D365FO_UI_DEV ? undefined : assetCache.get(name);
+  if (hit) return hit;
+  const body = await readFile(join(WEB_DIR, name));
+  assetCache.set(name, body);
+  return body;
+}
 const ID = /^[\w.-]{1,64}$/;
 
 interface RunState {
@@ -51,6 +66,8 @@ interface RunState {
   finishedAt?: string;
   exitCode?: number | null;
   lines: string[];
+  /** Absolute number of the first line kept in `lines` (older lines are dropped past MAX_LINES). */
+  base: number;
   child?: ChildProcess;
   stopRequested?: boolean;
   /** Set once the job has ended and its history entry is written, so its results can be read. */
@@ -172,10 +189,10 @@ function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: 
 }
 
 /** Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. */
-async function runProfileCommand(command: 'doctor' | 'devops-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; output: string }> {
+async function runProfileCommand(command: 'doctor' | 'devops-login' | 'session-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv, extra: string[] = []): Promise<{ exitCode: number | null; output: string }> {
   const secrets = await profileSecrets(store, name, baseEnv);
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliPath, command], {
+    const child = spawn(process.execPath, [cliPath, command, ...extra], {
       env: { ...baseEnv, D365FO_PROFILE: name, D365FO_AGENT_HOME: store.home, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -222,6 +239,21 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     for (const res of listeners) res.write(msg);
   };
   const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.status, args: r.args, profile: r.profile ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+  /** The run as the app page shows it: status, per-case progress and the log lines after `since` (absolute line number). */
+  const runForPage = (r: RunState, since?: number) => {
+    const total = r.base + r.lines.length;
+    const from = since === undefined || since < r.base || since > total ? r.base : since;
+    return {
+      ...publicRun(r),
+      ...(r.kind === 'run' ? { progress: runProgress(r.lines) } : {}),
+      settled: Boolean(r.settled),
+      savedAs: savedRunId(r),
+      lineCount: total,
+      from,
+      lines: r.lines.slice(from - r.base),
+    };
+  };
+  const savedRunId = (r: RunState): string | undefined => r.lines.map((l) => /^Saved to run history as ([\w-]+)\.$/.exec(l)).find(Boolean)?.[1];
 
   /** Starts the CLI as a child so a run reads the current profile, and streams its stdout/stderr back. */
   function runCli(args: string[], active?: string): ChildProcess {
@@ -295,14 +327,20 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const active = profile ?? (await store.getActive());
     if (active) await store.idOf(active); // older profiles get their id (and report folder) before the run reads the file
     const secrets = active ? await profileSecrets(store, active, childEnv()) : (await ai.read(true)).filter((e) => isSecretKey(e.key)).map((e) => e.value);
-    const state: RunState = { id: ++runSeq, kind, status: 'running', args, profile: active, startedAt: new Date().toISOString(), lines: [] };
+    const state: RunState = { id: ++runSeq, kind, status: 'running', args, profile: active, startedAt: new Date().toISOString(), lines: [], base: 0 };
     run = state;
     const push = (line: string): void => {
       let clean = line;
       for (const s of secrets) clean = clean.split(s).join('***');
       state.lines.push(clean);
-      if (state.lines.length > MAX_LINES) state.lines.splice(0, state.lines.length - MAX_LINES);
-      broadcast('line', { id: state.id, line: clean });
+      if (state.lines.length > MAX_LINES) {
+        const drop = state.lines.length - MAX_LINES;
+        state.lines.splice(0, drop);
+        state.base += drop;
+      }
+      broadcast('line', { id: state.id, line: clean, n: state.base + state.lines.length - 1 });
+      // Case boundaries change the progress the page shows; other lines only extend the log.
+      if (/^(?:▶ Running \[|→ |Running \d+ test case)/.test(clean.trim())) broadcast('progress', { id: state.id, progress: runProgress(state.lines) });
     };
     push(`$ d365fo-agent ${args.join(' ')}`);
     const child = runCli(args, active);
@@ -339,8 +377,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
           console.error(`[ui] could not update the run history: ${(e as Error).message}`);
         }
         state.settled = true;
+        history.invalidate();
         for (const wake of [...settleWaiters]) wake();
-        broadcast('status', publicRun(state));
+        broadcast('status', { ...publicRun(state), settled: true, savedAs: savedRunId(state) });
       };
       void finish();
     });
@@ -384,6 +423,112 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return dirs;
   }
   const history = new HistoryIndex(allReportDirs);
+
+  /** The last setup check of each profile, by profile id, so the environment cards can show it. */
+  const checksFile = join(opts.home, 'setup-checks.json');
+  async function readChecks(): Promise<Record<string, { ok: boolean; at: string }>> {
+    try {
+      return JSON.parse(await readFile(checksFile, 'utf8')) as Record<string, { ok: boolean; at: string }>;
+    } catch {
+      return {};
+    }
+  }
+  async function checkProfile(name: string): Promise<{ exitCode: number | null; output: string }> {
+    const result = await runDoctor(store, name, cliPath, childEnv());
+    try {
+      const checks = await readChecks();
+      checks[await store.idOf(name)] = { ok: result.exitCode === 0, at: new Date().toISOString() };
+      await writeFile(checksFile, JSON.stringify(checks, null, 2), { mode: 0o600 });
+    } catch (e) {
+      console.error(`[ui] could not save the setup check: ${(e as Error).message}`);
+    }
+    return result;
+  }
+
+  /** What an environment card shows: no secret values, only whether they are set. */
+  async function profileCards() {
+    const checks = await readChecks();
+    const out = [];
+    for (const p of await store.list()) {
+      try {
+        const map = new Map((await store.read(p.name, true)).map((e) => [e.key, e.value]));
+        const id = await store.idOf(p.name);
+        let host = '';
+        try {
+          host = map.get('D365_BASE_URL') ? new URL(map.get('D365_BASE_URL')!).host : '';
+        } catch {
+          host = map.get('D365_BASE_URL') ?? '';
+        }
+        out.push({
+          ...p,
+          id,
+          host,
+          company: map.get('D365_COMPANY') || '',
+          type: map.get('D365_ENVIRONMENT_TYPE') || '',
+          signIn: map.get('D365_STORAGE_STATE') ? 'session' : map.get('D365_USERNAME') && map.get('D365_PASSWORD') ? 'password' : 'none',
+          devops: Boolean(map.get('AZDO_ORG_URL') && map.get('AZDO_PROJECT')),
+          check: checks[id] ?? null,
+        });
+      } catch {
+        out.push({ ...p, id: '', host: '', company: '', type: '', signIn: 'none', devops: false, check: null });
+      }
+    }
+    return out;
+  }
+
+  /** Signs in to F&O in a visible browser (MFA included) and stores the session file on the profile. */
+  async function sessionLogin(name: string): Promise<{ exitCode: number | null; output: string; saved?: string }> {
+    const id = await store.idOf(name);
+    const file = join(opts.home, 'sessions', `${id}.json`);
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    const result = await runProfileCommand('session-login', 15 * 60_000, store, name, cliPath, childEnv(), ['--output', file]);
+    if (result.exitCode !== 0 || !existsSync(file)) return result;
+    const entries = (await store.read(name)).filter((e) => e.key !== 'D365_STORAGE_STATE');
+    await store.write(name, [...entries, { key: 'D365_STORAGE_STATE', value: file }], 'replace');
+    return { ...result, saved: file };
+  }
+
+  /** The Azure DevOps test plans of the profile in use, or the suites of one plan. */
+  async function devopsListing(rawPlan: string | undefined): Promise<{ status: number; body: unknown }> {
+    const plan = rawPlan ? decodeURIComponent(rawPlan) : undefined;
+    if (plan !== undefined && !/^\d+$/.test(plan)) return { status: 400, body: { error: 'Give a numeric plan ID.' } };
+    let client: Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
+    try {
+      client = (opts.devopsClient ?? ((cfg: AppConfig) => new AzureDevOpsClient(cfg)))(await activeConfig());
+    } catch (e) {
+      if (e instanceof ProfileError) throw e;
+      return { status: 400, body: { error: (e as Error).message } };
+    }
+    try {
+      return { status: 200, body: plan ? { plan, suites: await client.listSuites(plan) } : { plans: await client.listPlans() } };
+    } catch (e) {
+      return { status: 502, body: { error: `Azure DevOps could not be read: ${(e as Error).message.split('\n')[0].slice(0, 400)}` } };
+    }
+  }
+
+  /** Starts a run of the failed and blocked cases of a run from the history, from the source it read them from. */
+  async function rerunFailed(id: string, body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun>; cases?: string[] }> {
+    const meta = await history.meta(id);
+    if (!meta) return { error: 'No such run.' };
+    const raw = await reportFile('results.json', id);
+    if (!raw) return { error: 'That run has no results to repeat.' };
+    const cases = failedCaseIds(JSON.parse(raw) as TestResult[]);
+    if (!cases.length) return { error: 'Every case of that run passed; there is nothing to rerun.' };
+    const source = runSource(meta.args ?? []);
+    if (!source) return { error: 'The source of that run is not known. Load its cases in Tests and run them from there.' };
+    const started = await startRun({ ...source, cases, dryRun: body.dryRun === true });
+    return { ...started, cases };
+  }
+
+  async function compareRun(id: string, withId?: string | null): Promise<{ error?: string; status: number; comparison?: ReturnType<typeof compareResults> }> {
+    const raw = await reportFile('results.json', id);
+    if (!raw) return { status: 404, error: 'That run has no results.' };
+    const other = withId || (await history.previous(id))?.id;
+    if (!other) return { status: 404, error: 'No earlier run of the same environment to compare with.' };
+    const before = await reportFile('results.json', other);
+    if (!before) return { status: 404, error: 'The run to compare with has no results.' };
+    return { status: 200, comparison: compareResults(JSON.parse(raw) as TestResult[], JSON.parse(before) as TestResult[], other) };
+  }
 
   async function activeIdOf(): Promise<string | null> {
     const active = await store.getActive();
@@ -441,8 +586,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   /** The results a finished run saved to the history, for get_run to hand back without another call. */
   async function settledResults(state: RunState): Promise<TestResult[] | undefined> {
     if (state.kind !== 'run' || !state.settled) return undefined;
-    const saved = state.lines.map((l) => /^Saved to run history as ([\w-]+)\.$/.exec(l)).find(Boolean);
-    const raw = saved ? await reportFile('results.json', saved[1]) : undefined;
+    const saved = savedRunId(state);
+    const raw = saved ? await reportFile('results.json', saved) : undefined;
     return raw ? (JSON.parse(raw) as TestResult[]) : undefined;
   }
   async function runView(tail: number): Promise<Record<string, unknown>> {
@@ -496,20 +641,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
     const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
     if (method === 'GET' && plans) {
-      const plan = plans[1] ? decodeURIComponent(plans[1]) : undefined;
-      if (plan !== undefined && !/^\d+$/.test(plan)) return tsend(res, 400, { error: 'Give a numeric plan ID.' });
-      let client: Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
-      try {
-        client = (opts.devopsClient ?? ((cfg: AppConfig) => new AzureDevOpsClient(cfg)))(await activeConfig());
-      } catch (e) {
-        if (e instanceof ProfileError) throw e;
-        return tsend(res, 400, { error: (e as Error).message });
-      }
-      try {
-        return tsend(res, 200, plan ? { plan, suites: await client.listSuites(plan) } : { plans: await client.listPlans() });
-      } catch (e) {
-        return tsend(res, 502, { error: `Azure DevOps could not be read: ${(e as Error).message.split('\n')[0].slice(0, 400)}` });
-      }
+      const result = await devopsListing(plans[1]);
+      return tsend(res, result.status, result.body);
     }
     if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
     if (method === 'GET' && path === '/results') {
@@ -521,9 +654,19 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (method === 'POST' && path === '/setup/check') {
       const active = await store.getActive();
       if (!active) return tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
-      return tsend(res, 200, { profile: active, ...(await runDoctor(store, active, cliPath, childEnv())) });
+      return tsend(res, 200, { profile: active, ...(await checkProfile(active)) });
     }
     if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
+    const rr = /^\/history\/([\w-]+)\/rerun$/.exec(path);
+    if (method === 'POST' && rr) {
+      const result = await rerunFailed(rr[1], await readJson(req));
+      return tsend(res, result.busy ? 409 : result.error ? (result.error === 'No such run.' ? 404 : 400) : 200, result);
+    }
+    const cmp = /^\/history\/([\w-]+)\/compare$/.exec(path);
+    if (method === 'GET' && cmp) {
+      const result = await compareRun(cmp[1], url.searchParams.get('with'));
+      return tsend(res, result.status, result.comparison ? { run: cmp[1], ...result.comparison } : { error: result.error });
+    }
     const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
     if (method === 'POST' && up) {
       if (!(await history.meta(up[1]))) return tsend(res, 404, { error: 'No such run.' });
@@ -585,14 +728,15 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
 
     try {
       if (method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        return send(res, 200, await readFile(join(WEB_DIR, 'index.html'), 'utf8'));
+        return send(res, 200, (await asset('index.html')).toString('utf8'));
       }
-      if (method === 'GET' && url.pathname === '/icon.svg') {
-        res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
-        return void res.end(await readFile(join(WEB_DIR, 'icon.svg')));
+      const file = method === 'GET' ? STATIC_ASSETS[url.pathname.slice(1)] : undefined;
+      if (file) {
+        res.writeHead(200, { 'Content-Type': file, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+        return void res.end(await asset(url.pathname.slice(1)));
       }
       if (method === 'GET' && url.pathname === '/api/state') {
-        return send(res, 200, { profiles: await store.list(), aiConfigured: (await ai.read(true)).some((e) => ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(e.key) && e.value), active: (await store.getActive()) ?? null, activeId: await activeIdOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
+        return send(res, 200, { profiles: await profileCards(), aiConfigured: (await ai.read(true)).some((e) => ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(e.key) && e.value), active: (await store.getActive()) ?? null, activeId: await activeIdOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
@@ -607,10 +751,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         else await store.write(name, body.entries ?? [], 'create');
         return send(res, 201, { name });
       }
-      const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login)?$/.exec(url.pathname);
+      const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login|\/session-login)?$/.exec(url.pathname);
       if (m) {
         const name = decodeURIComponent(m[1]);
-        if (m[2] === '/check' && method === 'POST') return send(res, 200, await runDoctor(store, name, cliPath, childEnv()));
+        if (m[2] === '/check' && method === 'POST') return send(res, 200, await checkProfile(name));
+        if (m[2] === '/session-login' && method === 'POST') return send(res, 200, await sessionLogin(name));
         // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
         if (m[2] === '/devops-login' && method === 'POST') return send(res, 200, await runProfileCommand('devops-login', 300_000, store, name, cliPath, childEnv()));
         if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
@@ -642,6 +787,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return send(res, 200, await checkModelEndpoint(cfg, secrets, opts.modelProvider));
       }
       if (method === 'GET' && url.pathname === '/api/cases') return send(res, 200, await casesFor(url));
+      const dp = /^\/api\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(url.pathname);
+      if (method === 'GET' && dp) {
+        const result = await devopsListing(dp[1]);
+        return send(res, result.status, result.body);
+      }
       if (method === 'POST' && url.pathname === '/api/run') {
         const result = await startRun(await readJson(req));
         return send(res, result.busy ? 409 : result.error ? 400 : 200, result);
@@ -650,7 +800,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return send(res, 200, { stopped: stopRun() });
       }
       if (method === 'GET' && url.pathname === '/api/run') {
-        return send(res, 200, run ? { ...publicRun(run), lines: run.lines } : null);
+        const since = url.searchParams.has('since') ? intParam(url, 'since', 0, Number.MAX_SAFE_INTEGER) : undefined;
+        return send(res, 200, run ? runForPage(run, since) : null);
       }
       if (method === 'GET' && url.pathname === '/api/run/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -686,6 +837,15 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         return void res.end(body);
       }
       if (method === 'GET' && url.pathname === '/api/history') return send(res, 200, await history.list());
+      const hx = /^\/api\/history\/([\w-]+)\/(rerun|compare)$/.exec(url.pathname);
+      if (hx && hx[2] === 'rerun' && method === 'POST') {
+        const result = await rerunFailed(hx[1], await readJson(req));
+        return send(res, result.busy ? 409 : result.error ? (result.error === 'No such run.' ? 404 : 400) : 200, result);
+      }
+      if (hx && hx[2] === 'compare' && method === 'GET') {
+        const result = await compareRun(hx[1], url.searchParams.get('with'));
+        return send(res, result.status, result.comparison ?? { error: result.error });
+      }
       const hm = /^\/api\/history\/([\w-]+)(\/upload)?$/.exec(url.pathname);
       if (hm) {
         if (!(await history.meta(hm[1]))) return send(res, 404, { error: 'No such run.' });

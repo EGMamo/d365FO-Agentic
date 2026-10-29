@@ -112,3 +112,8 @@ export function slimSnapshot(text: string): string {
     return `\`\`\`yaml\n${kept.join('\n')}\`\`\``;
   });
 }
+
+/** The result without its page snapshot, for a snapshot that is outdated (the F&O loading screen) and replaced by a newer one. */
+export function withoutSnapshot(text: string): string {
+  return text.replace(/```yaml\n[\s\S]*?```/g, '(snapshot of the loading screen omitted)');
+}

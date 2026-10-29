@@ -127,10 +127,17 @@ jobs:
             ${{ env.E2E_OUT }}\*.txt
             ${{ env.E2E_OUT }}\*.md
           if-no-files-found: warn
+          retention-days: 7
+        # A full Actions storage quota must not fail an otherwise passing check.
+        continue-on-error: true
 
+      # Only manual runs keep the installer; pull requests rebuild it on every push.
       - uses: actions/upload-artifact@v4
-        if: success() || failure()
+        if: github.event_name == 'workflow_dispatch' && (success() || failure())
         with:
           name: installer-win-${{ env.ARCH }}
           path: desktop/release/D365FO Agent Setup*.exe
           if-no-files-found: ignore
+          retention-days: 3
+          compression-level: 0
+        continue-on-error: true

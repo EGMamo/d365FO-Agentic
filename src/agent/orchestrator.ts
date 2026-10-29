@@ -6,8 +6,8 @@ import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
 import type { McpManager, McpToolDescriptor } from '../mcp/manager.js';
 import { mergeMenuItems, PageMap, pageKey, type ControlAction } from '../knowledge/page-map.js';
-import { isFnoLoading, isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot } from '../mcp/playwright-response.js';
-import type { RunState, StepCause, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
+import { isFnoLoading, isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot, withoutSnapshot } from '../mcp/playwright-response.js';
+import type { CaseUsage, RunState, StepCause, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { classifyFailure } from '../testing/triage.js';
 import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { isMenuItemName, loadMenuItems, menuItemUrl, openMenuItemTool, OPEN_MENU_ITEM_TOOL_NAME, resolveMenuItem, type MenuItem } from '../d365fo/navigation.js';
@@ -136,6 +136,7 @@ interface AttemptResult {
   policyBlocks: string[];
   timeouts: string[];
   data: Record<string, string>;
+  usage: CaseUsage;
   errorMessage?: string;
 }
 
@@ -261,6 +262,7 @@ export class AgentOrchestrator {
     const maxTurns = turnBudget(this.cfg.AGENT_MAX_STEPS, tc.steps.length);
     let turns = 0;
     let finished = false;
+    const usage: CaseUsage = { turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, modelMs: 0 };
 
     try {
       for (let iter = 0; iter < maxTurns && !stopped && !signal?.aborted; iter++) {
@@ -273,11 +275,18 @@ export class AgentOrchestrator {
           overallError = overBudget.message;
           break;
         }
+        const askedAt = Date.now();
         const response = await this.llm.complete({
           system: baseSystemPrompt(this.cfg),
           messages,
           tools,
         });
+        usage.modelMs += Date.now() - askedAt;
+        usage.turns++;
+        usage.inputTokens += response.usage?.inputTokens ?? 0;
+        usage.outputTokens += response.usage?.outputTokens ?? 0;
+        usage.cacheReadTokens += response.usage?.cacheReadTokens ?? 0;
+        usage.cacheWriteTokens += response.usage?.cacheWriteTokens ?? 0;
         guard.recordUsage(response.usage);
         if (this.cfg.AGENT_VERBOSE && response.usage) {
           const u = response.usage;
@@ -407,6 +416,7 @@ export class AgentOrchestrator {
       policyBlocks,
       timeouts,
       data,
+      usage,
       ...(interrupted ? { interrupted: true } : {}),
     };
   }
@@ -590,7 +600,9 @@ export class AgentOrchestrator {
       const loaded = autoWait && !res.isError && toolName !== 'browser_wait_for' ? await this.waitPastSplash(text) : undefined;
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
       ctx.artifacts.push(...captured);
-      let content = redactSecrets(this.cfg, fno && this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(text) : text);
+      // When the page finished loading, the first snapshot only shows the splash: the loaded one below replaces it.
+      const shown = loaded ? withoutSnapshot(text) : text;
+      let content = redactSecrets(this.cfg, fno && this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(shown) : shown);
       if (loaded) {
         content += `\n\nThe page then finished loading:\n${redactSecrets(this.cfg, this.cfg.AGENT_SLIM_SNAPSHOTS !== false ? slimSnapshot(loaded) : loaded)}`;
       } else if (loaded === null) {

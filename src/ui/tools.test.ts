@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { TestResult } from '../testing/types.js';
-import { MAX_WAIT_SECONDS, nextStep, runProgress, summarizeResults } from './tools.js';
+import { compareResults, MAX_WAIT_SECONDS, nextStep, runProgress, summarizeResults } from './tools.js';
 
 describe('runProgress', () => {
   it('follows each case of a run from its log, with the time left', () => {
@@ -39,5 +39,28 @@ describe('summarizeResults', () => {
     assert.equal(out.cases[0].category, undefined);
     assert.equal(out.cases[2].category, 'assertion');
     assert.equal((summarizeResults([r('A', 'passed')]) as any).triage, undefined);
+  });
+});
+
+describe('compareResults', () => {
+  const result = (id: string, outcome: TestResult['outcome'], interrupted = false): TestResult => ({
+    testCaseId: id, title: id, outcome, interrupted, runState: 'completed',
+    startedAt: '', finishedAt: '', durationMs: 1, steps: [], artifacts: [],
+  });
+
+  it('distinguishes fixes, regressions, continuing failures and new cases', () => {
+    assert.deepEqual(compareResults(
+      [result('fixed', 'passed'), result('regressed', 'blocked'), result('failing', 'failed'), result('same', 'passed'), result('new', 'passed')],
+      [result('fixed', 'failed'), result('regressed', 'passed'), result('failing', 'blocked'), result('same', 'passed')],
+      'before',
+    ), { previous: 'before', fixed: ['fixed'], regressed: ['regressed'], stillFailing: ['failing'], added: ['new'], unchanged: 1 });
+  });
+
+  it('never calls skipped or interrupted cases fixed or regressed', () => {
+    assert.deepEqual(compareResults(
+      [result('failed', 'skipped'), result('passed', 'skipped'), result('stopped', 'passed', true), result('unverified', 'passed'), result('unfinished', 'failed')],
+      [result('failed', 'failed'), result('passed', 'passed'), result('stopped', 'failed'), result('unverified', 'skipped'), result('unfinished', 'blocked', true)],
+      'before',
+    ), { previous: 'before', fixed: [], regressed: [], stillFailing: [], added: ['unverified', 'unfinished'], unchanged: 0 });
   });
 });

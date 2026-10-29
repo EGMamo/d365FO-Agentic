@@ -97,6 +97,25 @@ describe('settings web server', () => {
     assert.match(r.body, /D365FO Agent/);
   });
 
+  it('serves the page scripts and styles to a signed-in browser only', async () => {
+    for (const [path, type] of [['/app.js', /javascript/], ['/app.css', /css/], ['/icon.svg', /svg/]] as const) {
+      const r = await call('GET', path);
+      assert.equal(r.status, 200, path);
+      assert.match(String(r.headers['content-type']), type);
+      assert.equal((await call('GET', path, { auth: false })).status, 403);
+    }
+    assert.equal((await call('GET', '/server.js')).status, 404);
+  });
+
+  it('describes each environment for its card without revealing secrets', async () => {
+    assert.equal((await call('POST', '/api/profiles', { body: { name: 'Card', entries: [{ key: 'D365_BASE_URL', value: 'https://card.sandbox.operations.dynamics.com' }, { key: 'D365_USERNAME', value: 'u' }, { key: 'D365_PASSWORD', value: 'sekret-pw' }, { key: 'D365_COMPANY', value: 'GBSI' }] } })).status, 201);
+    const r = await call('GET', '/api/state');
+    assert.ok(!r.body.includes('sekret-pw'));
+    const card = json(r).profiles.find((p: any) => p.name === 'Card');
+    assert.deepEqual([card.host, card.company, card.signIn, card.devops, card.check], ['card.sandbox.operations.dynamics.com', 'GBSI', 'password', false, null]);
+    assert.equal((await call('DELETE', '/api/profiles/Card')).status, 200);
+  });
+
   it('closes each connection after the response, so Safari never reuses a socket the server already dropped', async () => {
     for (const r of [await call('GET', '/api/health', { auth: false }), await call('PUT', '/api/profiles/none', { body: { entries: [] } })]) {
       assert.equal(r.headers.connection, 'close');
@@ -202,6 +221,22 @@ describe('run management', () => {
     const r = await pollStatus('passed');
     assert.match(r.lines.join('\n'), /--case TC-1,TC-2/);
     assert.doesNotMatch(r.lines.join('\n'), /--model|reloop/);
+  });
+
+  it('hands the page only the log lines it has not seen, with the run progress', async () => {
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) });
+    assert.equal(started.status, 200);
+    const all = await pollStatus('passed');
+    assert.equal(all.from, 0);
+    assert.equal(all.lineCount, all.lines.length);
+    assert.ok(all.progress);
+    const later = (await (await rcall('/api/run?since=' + (all.lineCount - 1))).json()) as any;
+    assert.deepEqual(later.lines, all.lines.slice(-1));
+    assert.equal(later.from, all.lineCount - 1);
+    const none = (await (await rcall('/api/run?since=' + all.lineCount)).json()) as any;
+    assert.deepEqual(none.lines, []);
+    const bogus = (await (await rcall('/api/run?since=999999')).json()) as any;
+    assert.equal(bogus.from, 0, 'an unknown position starts over');
   });
 
   it('refuses a second run while busy and can stop the first', async () => {
@@ -397,7 +432,7 @@ describe('Open WebUI tool server', () => {
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));
     assert.deepEqual(ops.sort(), [
-      'check_setup', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'start_run', 'stop_run', 'upload_run', 'use_profile',
+      'check_setup', 'compare_runs', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'rerun_failed', 'start_run', 'stop_run', 'upload_run', 'use_profile',
     ]);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
@@ -482,6 +517,26 @@ describe('Open WebUI tool server', () => {
     const up = ((await (await tcall('/runs/current?waitSeconds=10')).json()) as any).run;
     assert.deepEqual([up.kind, up.status], ['upload', 'passed']);
     assert.equal((await tcall('/runs/current/stop', { method: 'POST' })).status, 200);
+  });
+
+  it('reruns only the failed cases of a run, from its own source, and compares runs', async () => {
+    const runs = ((await (await tcall('/history')).json()) as any).runs;
+    const first = runs[0].id;
+    assert.equal((await tcall(`/history/${first}/compare`)).status, 404, 'nothing earlier to compare with');
+    const rerun = (await (await tcall(`/history/${first}/rerun`, { method: 'POST', body: '{}' })).json()) as any;
+    assert.deepEqual(rerun.cases, ['TC-2']);
+    const followed = (await (await tcall('/runs/current?waitSeconds=30&tail=5')).json()) as any;
+    assert.ok(followed.run.log.some((l: string) => /ran run --local cases --case TC-2 --fail-on/.test(l)), followed.run.log.join('\n'));
+    let second: string | undefined;
+    for (let i = 0; i < 50 && !second; i++) {
+      second = ((await (await tcall('/history')).json()) as any).runs.find((r: any) => r.id !== first)?.id;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    assert.ok(second);
+    const cmp = (await (await tcall(`/history/${second}/compare`)).json()) as any;
+    assert.equal(cmp.previous, first);
+    assert.deepEqual([cmp.fixed, cmp.regressed, cmp.stillFailing, cmp.unchanged], [[], [], ['TC-2'], 1]);
+    assert.equal((await tcall('/history/20990101-000000-1/rerun', { method: 'POST', body: '{}' })).status, 404);
   });
 });
 

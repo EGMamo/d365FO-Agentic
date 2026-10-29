@@ -41,6 +41,16 @@ export interface StepResult {
   durationMs: number;
 }
 
+export interface CaseUsage {
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Time spent waiting for the model, the rest of durationMs is mostly the browser. */
+  modelMs: number;
+}
+
 export interface TestResult {
   testCaseId: string;
   title: string;
@@ -66,6 +76,8 @@ export interface TestResult {
    * `passed`: that replay is the result. `failed`: the AI then ran the case (step and error say where the replay stopped).
    */
   replay?: { outcome: 'passed' | 'failed'; step?: number; error?: string };
+  /** Model turns and tokens the case used, to see what a case costs and whether prompt caching works. */
+  usage?: CaseUsage;
   /** True when Ctrl+C stopped the run during this case: not a verdict, never learned from or uploaded. */
   interrupted?: boolean;
   attemptCount?: number;

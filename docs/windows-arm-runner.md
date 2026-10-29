@@ -88,7 +88,8 @@ is not used.
 
 **Actions > desktop-e2e > Run workflow**, pick the branch, **arm64**, and leave **Wait for Open WebUI** on. Tick
 **fresh** to make Open WebUI install from scratch as on a new computer. The first run downloads Node.js, Electron and the npm packages, so it takes longer than later ones. The run's summary lists each check; the artifact
-`desktop-e2e-win-arm64` holds screenshots, the app's log and the summary, and `installer-win-arm64` the installer it built.
+`desktop-e2e-win-arm64` holds screenshots, the app's log and the summary for 7 days, and `installer-win-arm64` the installer it built for 3 days
+(manual runs only).
 
 The **Run workflow** button appears once the workflow is on the default branch. Before that, the workflow runs on its pull
 request once step 5 is done (push a commit or re-run the job).

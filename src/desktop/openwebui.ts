@@ -124,6 +124,8 @@ export const PROMPT_SUGGESTIONS = [
   { title: ['Check my setup', 'before testing'], content: 'Check the active environment setup and explain anything missing.' },
   { title: ['Run selected tests', 'from a local folder or DevOps'], content: 'Help me select test cases. Show the environment and cases and ask me to confirm before starting a real run.' },
   { title: ['Explain my results', 'and the next action'], content: 'Show the latest test run results and explain any failed or blocked steps.' },
+  { title: ['Compare with last run', 'what was fixed or broke'], content: 'Compare the latest run with the previous run of this environment and tell me what was fixed, what regressed and what still fails.' },
+  { title: ['Rerun failed cases', 'of the latest run'], content: 'Show the failed and blocked cases of the latest run and, after I confirm, rerun only those.' },
   { title: ['Upload results', 'to Azure DevOps'], content: 'Show the latest run and ask me to confirm before uploading its results to Azure DevOps.' },
 ];
 
@@ -219,6 +221,15 @@ export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: stri
     USER_PERMISSIONS_CHAT_TTS: 'False',
     USER_PERMISSIONS_CHAT_CALL: 'False',
     USER_PERMISSIONS_CHAT_MULTIPLE_MODELS: 'False',
+    // The app supplies the model, its parameters and its tools; per-chat overrides only confuse a test chat.
+    USER_PERMISSIONS_CHAT_CONTROLS: 'False',
+    USER_PERMISSIONS_CHAT_PARAMS: 'False',
+    USER_PERMISSIONS_CHAT_SYSTEM_PROMPT: 'False',
+    // Looks and behaves as part of the desktop app: its name, no update banner, no upstream easter eggs.
+    WEBUI_NAME: 'D365FO Agent',
+    ENABLE_VERSION_UPDATE_CHECK: 'False',
+    ENABLE_EASTER_EGGS: 'False',
+    ENABLE_USER_STATUS: 'False',
     BYPASS_EMBEDDING_AND_RETRIEVAL: 'True',
     SCARF_NO_ANALYTICS: 'true',
     DO_NOT_TRACK: 'true',
