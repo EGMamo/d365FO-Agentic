@@ -22,6 +22,9 @@ on:
         default: false
   pull_request:
     paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop-e2e.yml']
+  push:
+    branches: [main]
+    paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop-e2e.yml']
 
 permissions:
   contents: read
@@ -35,7 +38,8 @@ jobs:
   e2e:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (vars.WINDOWS_ARM_RUNNER == 'true' && github.event.pull_request.head.repo.full_name == github.repository)
+      (vars.WINDOWS_ARM_RUNNER == 'true' &&
+        (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: [self-hosted, windows, arm64]
     timeout-minutes: 90
     env:
@@ -97,7 +101,7 @@ jobs:
       - name: Start the app and drive it
         env:
           E2E_APP: ${{ env.INSTALL_DIR }}\D365FO Agent.exe
-          E2E_OPENWEBUI: ${{ github.event_name == 'pull_request' || inputs.openwebui }}
+          E2E_OPENWEBUI: ${{ github.event_name != 'workflow_dispatch' || inputs.openwebui }}
           E2E_ANTHROPIC_API_KEY: ${{ secrets.E2E_ANTHROPIC_API_KEY }}
           E2E_D365_BASE_URL: ${{ secrets.E2E_D365_BASE_URL }}
           E2E_D365_USERNAME: ${{ secrets.E2E_D365_USERNAME }}

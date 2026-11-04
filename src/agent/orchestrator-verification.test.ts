@@ -69,9 +69,44 @@ describe('assertion discipline', () => {
     assert.equal(result.outcome, 'passed');
   });
 
-  it('unverifiedSteps ignores steps without an expected result and failed steps', () => {
-    assert.deepEqual(unverifiedSteps(tc, [{ index: 2, status: 'failed', durationMs: 0 }]), []);
+  it('unverifiedSteps requires a passing, verified result for each expected result', () => {
+    assert.deepEqual(unverifiedSteps(tc, [{ index: 2, status: 'failed', durationMs: 0 }]), [2]);
     assert.deepEqual(unverifiedSteps(tc, []), [2]);
+  });
+
+  it('derives a failed verdict from a failed expected-result step despite finish_test claiming passed', async () => {
+    const { result } = await run([
+      call('report_step', { index: 1, status: 'passed' }),
+      call('report_step', { index: 2, status: 'failed', verified: false, observed: 'Wrong value' }),
+      finish(),
+    ]);
+    assert.equal(result.outcome, 'failed');
+    assert.match(result.errorMessage ?? '', /step 2 failed/);
+  });
+
+  for (const status of ['blocked', 'skipped'] as const) {
+    it(`refuses a pass with a ${status} required step`, async () => {
+      const { result } = await run([call('report_step', { index: 1, status }), call('report_step', { index: 2, status: 'passed', verified: true }), finish()]);
+      assert.equal(result.outcome, 'blocked');
+      assert.match(result.errorMessage ?? '', /required step 1/);
+    });
+  }
+
+  it('refuses a pass when a required action without an expected result was never reported', async () => {
+    const { result } = await run([call('report_step', { index: 2, status: 'passed', verified: true }), finish()]);
+    assert.equal(result.outcome, 'blocked');
+    assert.match(result.errorMessage ?? '', /required step 1/);
+  });
+
+  it('does not execute any tool following finish_test in the same model batch', async () => {
+    const reached: string[] = [];
+    const end = finish();
+    end.toolCalls.push({ id: 'late', name: 'playwright__browser_click', arguments: { target: 'Save' } });
+    const { result } = await run([
+      call('report_step', { index: 1, status: 'passed' }), call('report_step', { index: 2, status: 'passed', verified: true }), end,
+    ], {}, async (_server, tool) => { reached.push(tool); return { content: '', isError: false }; });
+    assert.equal(result.outcome, 'passed');
+    assert.deepEqual(reached, []);
   });
 });
 

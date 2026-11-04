@@ -20,6 +20,7 @@ const tc: TestCase = {
 const call = (name: string, args: Record<string, unknown>, id = name): LlmCompleteResponse => ({
   text: '', stopReason: 'tool_use', toolCalls: [{ id, name, arguments: args }],
 });
+const reportAll = (): LlmCompleteResponse[] => [1, 2].map((i) => call('report_step', { index: i, status: 'passed' }, `r${i}`));
 const finish = (args: Record<string, unknown> = { outcome: 'passed' }) => call('finish_test', args, 'fin');
 
 interface Harness {
@@ -77,7 +78,7 @@ describe('tool allowlist enforcement', () => {
   });
 
   it('refuses a hallucinated call to a hidden tool without reaching the MCP server, and reports it', async () => {
-    const h = harness([call('playwright__browser_storage_state', {}), finish()]);
+    const h = harness([call('playwright__browser_storage_state', {}), ...reportAll(), finish()]);
     const res = await h.run();
     assert.deepEqual(h.reached, []);
     assert.match(toolResults(h)[0], /Blocked by policy.*allowlist/);
@@ -212,7 +213,7 @@ describe('tool argument validation', () => {
   });
 
   it('survives non-object tool arguments', async () => {
-    const h = harness([{ text: '', stopReason: 'tool_use', toolCalls: [{ id: 'x', name: 'report_step', arguments: null as never }] }, finish()]);
+    const h = harness([{ text: '', stopReason: 'tool_use', toolCalls: [{ id: 'x', name: 'report_step', arguments: null as never }] }, ...reportAll(), finish()]);
     const res = await h.run();
     assert.equal(res.outcome, 'passed');
     assert.match(toolResults(h)[0], /Invalid step index/);
@@ -222,18 +223,18 @@ describe('tool argument validation', () => {
 describe('context compaction in the run loop', () => {
   const page = `### Page state\n${'- button "Save" [ref=e5]\n'.repeat(80)}`;
   const stubbed = (m: LlmMessage) => m.content.startsWith('[Omitted older tool result');
-  const snapshots = (n: number) => [...Array.from({ length: n }, (_, i) => call('playwright__browser_snapshot', { n: i }, `s${i}`)), finish()];
+  const snapshots = (n: number) => [...Array.from({ length: n }, (_, i) => call('playwright__browser_snapshot', { n: i }, `s${i}`)), ...reportAll(), finish()];
 
   it('collapses old snapshots but keeps the latest ones and the pairing intact', async () => {
     const h = harness(snapshots(12), { AGENT_MAX_REPEATED_CALLS: 0, AGENT_CONTEXT_KEEP_RECENT: 3 }, [], page);
     const res = await h.run();
     assert.equal(res.outcome, 'passed');
     const last = h.requests.at(-1)!.messages.filter((m) => m.role === 'tool');
-    assert.equal(last.length, 12);
+    assert.equal(last.length, 14, '12 snapshots and 2 step reports');
     assert.ok(stubbed(last[0]) && stubbed(last[7]), 'oldest results are collapsed');
     assert.deepEqual(last.slice(-3).map(stubbed), [false, false, false], 'latest three are verbatim');
     assert.ok(last.filter((m) => !stubbed(m)).length <= 6);
-    assert.deepEqual(last.map((m) => m.toolCallId), Array.from({ length: 12 }, (_, i) => `s${i}`));
+    assert.deepEqual(last.map((m) => m.toolCallId), [...Array.from({ length: 12 }, (_, i) => `s${i}`), 'r1', 'r2']);
   });
 
   it('sends far fewer characters than the uncompacted history would', async () => {

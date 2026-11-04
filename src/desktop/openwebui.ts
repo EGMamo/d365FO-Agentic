@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmod, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Open WebUI for the desktop app, without Docker. The app ships `uv` (a single binary); on first start uv downloads a
@@ -13,7 +15,7 @@ import { join } from 'node:path';
 export const OPENWEBUI_VERSION = '0.11.4';
 export const PYTHON_VERSION = '3.11';
 /** Bump when the set of installed packages changes, so an older install is replaced. */
-export const INSTALL_VARIANT = 'slim-1';
+export const INSTALL_VARIANT = 'slim-auth-locked-2';
 
 /**
  * Packages left out of the install. They are Open WebUI's local AI stack (PyTorch and its GPU libraries,
@@ -51,9 +53,30 @@ export interface OpenWebUiPaths {
   platform?: NodeJS.Platform;
 }
 
+interface InstallMarker { version?: string; variant?: string; runtime?: string; lockHash?: string; dataBackup?: string; previous?: InstallMarker; }
+const validRuntime = (name: unknown): name is string => typeof name === 'string' && /^venv-[a-z0-9-]{8,80}$/.test(name);
+
+function marker(p: OpenWebUiPaths): InstallMarker | undefined {
+  try { return JSON.parse(readFileSync(join(p.dataRoot, 'openwebui', 'installed.json'), 'utf8')) as InstallMarker; }
+  catch { return undefined; }
+}
+
+/** Source-tree development and staged desktop installations use the same checked-in lock. */
+export function pythonLockFile(): string {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  for (const dir of [join(root, 'runtime', 'python'), join(root, 'src', 'desktop', 'python')]) {
+    const path = join(dir, 'requirements.lock');
+    if (existsSync(path)) return path;
+  }
+  throw new Error('The pinned Open WebUI Python requirements lock is missing from this installation.');
+}
+
+const lockHash = (): string => createHash('sha256').update(readFileSync(pythonLockFile())).digest('hex');
+
 export function layout(p: OpenWebUiPaths) {
   const win = (p.platform ?? process.platform) === 'win32';
-  const venv = join(p.dataRoot, 'openwebui', 'venv');
+  const installed = marker(p);
+  const venv = join(p.dataRoot, 'openwebui', validRuntime(installed?.runtime) ? installed.runtime : 'venv');
   return {
     venv,
     python: win ? join(venv, 'Scripts', 'python.exe') : join(venv, 'bin', 'python'),
@@ -70,18 +93,31 @@ export async function isInstalled(p: OpenWebUiPaths, version = OPENWEBUI_VERSION
   const l = layout(p);
   if (!existsSync(l.exe)) return false;
   try {
-    const m = JSON.parse(await readFile(l.marker, 'utf8')) as { version?: string; variant?: string };
-    return m.version === version && m.variant === INSTALL_VARIANT;
+    const m = JSON.parse(await readFile(l.marker, 'utf8')) as InstallMarker;
+    return m.version === version && m.variant === INSTALL_VARIANT && m.lockHash === lockHash();
   } catch {
     return false;
   }
 }
 
 export type Exec = (command: string, args: string[], env: NodeJS.ProcessEnv, onLine: (line: string) => void, cwd?: string) => Promise<number | null>;
+const setupChildren = new Set<ChildProcess>();
+
+/** First-start setup belongs to this app lifetime, including uv's installer subprocesses. */
+export function cancelInstallation(): void {
+  for (const child of setupChildren) {
+    if (!child.pid) continue;
+    try {
+      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      else process.kill(-child.pid, 'SIGTERM');
+    } catch { /* already stopped */ }
+  }
+}
 
 export const exec: Exec = (command, args, env, onLine, cwd) =>
   new Promise((resolve) => {
-    const child = spawn(command, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    setupChildren.add(child);
     for (const s of [child.stdout, child.stderr]) {
       let buf = '';
       s.setEncoding('utf8');
@@ -93,31 +129,110 @@ export const exec: Exec = (command, args, env, onLine, cwd) =>
       });
     }
     child.on('error', (e) => {
+      setupChildren.delete(child);
       onLine(e.message);
       resolve(null);
     });
-    child.on('close', resolve);
+    child.on('close', (code) => { setupChildren.delete(child); resolve(code); });
   });
 
 /** First start: a Python and Open WebUI in a private venv inside the app folder. */
 export async function install(p: OpenWebUiPaths, onLine: (line: string) => void, run: Exec = exec, version = OPENWEBUI_VERSION): Promise<void> {
   const l = layout(p);
   const env = { ...process.env, ...l.uvEnv };
-  await mkdir(l.data, { recursive: true });
-  // A full install from an earlier app version is replaced: start from an empty environment.
-  await rm(l.venv, { recursive: true, force: true });
-  onLine(`Preparing Python ${PYTHON_VERSION}…`);
-  // Always uv's own Python, never one that happens to be installed on the computer.
-  if ((await run(p.uv, ['venv', '--allow-existing', '--managed-python', '--python', PYTHON_VERSION, l.venv], env, onLine)) !== 0) throw new Error('Could not set up Python for Open WebUI.');
-  onLine(`Installing Open WebUI ${version} (first start only)…`);
   const folder = join(p.dataRoot, 'openwebui');
-  await writeFile(join(folder, 'overrides.txt'), overridesFile());
-  // uv cannot read an overrides file whose path has a space in it ("D365FO Agent"), so it runs in the folder and gets a bare name.
-  // typer is imported by Open WebUI's entry point but only came in through one of the left-out packages.
-  if ((await run(p.uv, ['pip', 'install', '--python', l.python, '--overrides', 'overrides.txt', 'typer', `open-webui==${version}`], env, onLine, folder)) !== 0) throw new Error('Could not install Open WebUI. Check the internet connection and try again.');
-  // The downloaded packages are no longer needed once installed; keeping uv's cache would only take disk space.
-  await rm(l.uvEnv.UV_CACHE_DIR, { recursive: true, force: true });
-  await writeFile(l.marker, JSON.stringify({ version, variant: INSTALL_VARIANT, at: new Date().toISOString() }));
+  const runtime = `venv-${randomUUID()}`;
+  const candidate = join(folder, runtime);
+  const python = join(candidate, (p.platform ?? process.platform) === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const requirements = readFileSync(pythonLockFile());
+  const digest = createHash('sha256').update(requirements).digest('hex');
+  const previous = marker(p);
+  const dataBackup = previous ? `data-backup-${randomUUID()}` : undefined;
+  await mkdir(l.data, { recursive: true, mode: 0o700 });
+  // Virtualenv entry points contain absolute paths: never rename an installed venv. Activate an immutable candidate.
+  try {
+    if (dataBackup) await cp(l.data, join(folder, dataBackup), { recursive: true });
+    onLine(`Preparing Python ${PYTHON_VERSION}…`);
+    if ((await run(p.uv, ['venv', '--managed-python', '--python', PYTHON_VERSION, candidate], env, onLine)) !== 0) throw new Error('Could not set up Python for Open WebUI.');
+    onLine(`Installing Open WebUI ${version} from the verified runtime lock…`);
+    await writeFile(join(folder, 'requirements.lock'), requirements, { mode: 0o600 });
+    if ((await run(p.uv, ['pip', 'install', '--python', python, '--require-hashes', '--no-deps', '-r', 'requirements.lock'], env, onLine, folder)) !== 0) throw new Error('Could not install Open WebUI. The previous runtime was retained; check the internet connection and retry.');
+    const next = { version, variant: INSTALL_VARIANT, runtime, lockHash: digest, at: new Date().toISOString(), ...(previous ? { previous: { ...previous, previous: undefined }, dataBackup } : {}) };
+    await writeFile(`${l.marker}.tmp`, JSON.stringify(next), { mode: 0o600 });
+    await rename(`${l.marker}.tmp`, l.marker);
+  } catch (e) {
+    await rm(candidate, { recursive: true, force: true });
+    if (dataBackup) await rm(join(folder, dataBackup), { recursive: true, force: true });
+    throw e;
+  } finally {
+    await rm(l.uvEnv.UV_CACHE_DIR, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Restore the preceding runtime after a new runtime fails its first health check. Conversation data stays in place. */
+export async function rollbackInstall(p: OpenWebUiPaths): Promise<boolean> {
+  const current = marker(p);
+  if (!current?.previous) return false;
+  const previous = current.previous;
+  if (previous.runtime !== undefined && !validRuntime(previous.runtime)) return false;
+  const dir = join(p.dataRoot, 'openwebui', previous.runtime ?? 'venv');
+  const exe = join(dir, (p.platform ?? process.platform) === 'win32' ? 'Scripts/open-webui.exe' : 'bin/open-webui');
+  if (!existsSync(exe)) return false;
+  const target = join(p.dataRoot, 'openwebui', 'installed.json');
+  await writeFile(`${target}.tmp`, JSON.stringify(previous), { mode: 0o600 });
+  if (current.dataBackup) {
+    if (!/^data-backup-[a-f0-9-]{36}$/.test(current.dataBackup)) return false;
+    const folder = join(p.dataRoot, 'openwebui');
+    const backup = join(folder, current.dataBackup);
+    if (!existsSync(backup)) return false;
+    // Preserve the failed runtime's data as well; rolling back never deletes conversations.
+    await rename(join(folder, 'data'), join(folder, `data-failed-${randomUUID()}`));
+    await rename(backup, join(folder, 'data'));
+  }
+  await rename(`${target}.tmp`, target);
+  return true;
+}
+
+export interface DesktopAuth { header: string; secretKey: string; }
+const DESKTOP_USER = 'admin@localhost';
+
+/** The trusted-header name is a per-launch bearer secret held only by the main process and Python. */
+export async function desktopAuth(p: OpenWebUiPaths): Promise<DesktopAuth> {
+  const folder = join(p.dataRoot, 'openwebui');
+  await mkdir(folder, { recursive: true, mode: 0o700 });
+  await chmod(folder, 0o700);
+  const path = join(folder, 'desktop-auth.key');
+  let secretKey: string;
+  try { secretKey = (await readFile(path, 'utf8')).trim(); }
+  catch { secretKey = randomBytes(32).toString('hex'); await writeFile(path, secretKey, { mode: 0o600, flag: 'wx' }); }
+  if (!/^[a-f0-9]{64}$/.test(secretKey)) throw new Error('The desktop chat authentication key is invalid. Restore it from a private backup.');
+  await chmod(path, 0o600);
+  return { header: `x-d365fo-desktop-${randomBytes(32).toString('hex')}`, secretKey };
+}
+
+/** Electron's request hook uses frame identity, not a renderer-provided header, as the grant boundary. */
+export function chatRequestHeaders(
+  request: { url: string; webContentsId: number; frameUrl?: string; resourceType: string; headers: Record<string, string> },
+  chat: { origin: string; webContentsId: number; splashUrl: string; currentUrl: string; auth: DesktopAuth },
+): Record<string, string> {
+  const headers = Object.fromEntries(Object.entries(request.headers).filter(([name]) => !name.toLowerCase().startsWith('x-d365fo-desktop-')));
+  try {
+    const frame = request.frameUrl || (request.resourceType === 'mainFrame' ? chat.currentUrl : '');
+    const sourceAllowed = new URL(frame).origin === chat.origin || (request.resourceType === 'mainFrame' && frame === chat.splashUrl);
+    if (request.webContentsId === chat.webContentsId && new URL(request.url).origin === chat.origin && sourceAllowed) headers[chat.auth.header] = DESKTOP_USER;
+  } catch { /* Invalid or missing origins receive no capability. */ }
+  return headers;
+}
+
+export async function signIn(baseUrl: string, auth: DesktopAuth, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const res = await fetchImpl(`${baseUrl}/api/v1/auths/signin`, {
+    method: 'POST', headers: { [auth.header]: DESKTOP_USER, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: DESKTOP_USER, password: '' }), signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`The protected chat session could not start (${res.status}).`);
+  const body = await res.json() as { token?: unknown };
+  if (typeof body.token !== 'string' || !body.token) throw new Error('The protected chat returned no session token.');
+  return body.token;
 }
 
 export const PROMPT_SUGGESTIONS = [
@@ -148,43 +263,42 @@ const TOOL_SERVER_ID = 'd365fo';
  * start through its own API. Only this one connection is replaced; other tool servers and the chat model (a global
  * setting, managed in Open WebUI) are left as the user has them.
  */
-export async function syncToolServer(baseUrl: string, conn: Record<string, unknown>, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const call = async (path: string, token: string | undefined, body?: unknown): Promise<any> => {
+export async function syncToolServer(baseUrl: string, conn: Record<string, unknown>, token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const call = async (path: string, body?: unknown): Promise<any> => {
     const res = await fetchImpl(`${baseUrl}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`Open WebUI ${path} answered ${res.status}.`);
     return res.json();
   };
-  // With sign-in switched off, Open WebUI signs in its one built-in local user (this is what its own page does).
-  const token = (await call('/api/v1/auths/signin', undefined, { email: 'admin@localhost', password: 'admin' })).token as string | undefined;
-  const current = ((await call('/api/v1/configs/tool_servers', token)).TOOL_SERVER_CONNECTIONS ?? []) as Array<{ info?: { id?: string } }>;
+  const current = ((await call('/api/v1/configs/tool_servers')).TOOL_SERVER_CONNECTIONS ?? []) as Array<{ info?: { id?: string } }>;
   const others = current.filter((c) => c.info?.id !== TOOL_SERVER_ID);
   const next = [conn, ...others];
   const mine = current.find((c) => c.info?.id === TOOL_SERVER_ID);
   if (mine && others.length === current.length - 1 && JSON.stringify(mine) === JSON.stringify(conn)) return;
-  await call('/api/v1/configs/tool_servers', token, { TOOL_SERVER_CONNECTIONS: next });
+  await call('/api/v1/configs/tool_servers', { TOOL_SERVER_CONNECTIONS: next });
 }
 
 /**
  * Points Open WebUI's first OpenAI connection at the chat AI model. The chat model is global, so this runs on every
  * start and whenever the model is changed on the Chat page; further connections the user added stay as they are.
  */
-export async function syncChatModel(baseUrl: string, conn: { url: string; key: string } | undefined, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function syncChatModel(baseUrl: string, conn: { url: string; key: string } | undefined, token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   if (!conn) return;
-  const call = async (path: string, token: string | undefined, body?: unknown): Promise<any> => {
+  const call = async (path: string, body?: unknown): Promise<any> => {
     const res = await fetchImpl(`${baseUrl}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`Open WebUI ${path} answered ${res.status}.`);
     return res.json();
   };
-  const token = (await call('/api/v1/auths/signin', undefined, { email: 'admin@localhost', password: 'admin' })).token as string | undefined;
-  const cur = await call('/openai/config', token);
+  const cur = await call('/openai/config');
   const urls = [...((cur.OPENAI_API_BASE_URLS ?? []) as string[])];
   const keys = [...((cur.OPENAI_API_KEYS ?? []) as string[])];
   const configs = { ...((cur.OPENAI_API_CONFIGS ?? {}) as Record<string, unknown>) };
@@ -192,17 +306,38 @@ export async function syncChatModel(baseUrl: string, conn: { url: string; key: s
   urls[0] = conn.url;
   keys[0] = conn.key;
   configs['0'] = { ...((configs['0'] ?? {}) as object), enable: true };
-  await call('/openai/config/update', token, { ENABLE_OPENAI_API: true, OPENAI_API_BASE_URLS: urls, OPENAI_API_KEYS: keys, OPENAI_API_CONFIGS: configs });
+  await call('/openai/config/update', { ENABLE_OPENAI_API: true, OPENAI_API_BASE_URLS: urls, OPENAI_API_KEYS: keys, OPENAI_API_CONFIGS: configs });
 }
 
 /** Environment for `open-webui serve`. */
-export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; chat?: { url: string; key: string }; model?: string }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function serveEnv(opts: { dataDir: string; toolUrl: string; toolKey: string; origin: string; auth: DesktopAuth; chat?: { url: string; key: string }; model?: string }, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!/^x-d365fo-desktop-[a-f0-9]{64}$/.test(opts.auth.header) || !/^[a-f0-9]{64}$/.test(opts.auth.secretKey)) throw new Error('A protected desktop chat session is required.');
+  const origin = new URL(opts.origin);
+  if (origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' || origin.origin !== opts.origin) throw new Error('The chat origin must be an exact loopback HTTP origin.');
   return {
     // These credentials belong to the Node service; Python only needs the local bridge token.
     ...Object.fromEntries(Object.entries(base).filter(([key]) => !['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'D365_USERNAME', 'D365_PASSWORD', 'D365_CLIENT_SECRET', 'AZDO_PAT'].includes(key))),
     DATA_DIR: opts.dataDir,
-    // One person on one computer: no sign-up screen.
-    WEBUI_AUTH: 'False',
+    // The main process injects an unguessable trusted-header name for the existing local user's identity.
+    WEBUI_AUTH: 'True',
+    WEBUI_AUTH_TRUSTED_EMAIL_HEADER: opts.auth.header,
+    WEBUI_AUTH_TRUSTED_NAME_HEADER: '',
+    WEBUI_AUTH_TRUSTED_GROUPS_HEADER: '',
+    WEBUI_AUTH_TRUSTED_ROLE_HEADER: '',
+    WEBUI_SECRET_KEY: opts.auth.secretKey,
+    ENABLE_LOGIN_FORM: 'False',
+    ENABLE_SIGNUP: 'False',
+    ENABLE_INITIAL_ADMIN_SIGNUP: 'False',
+    ENABLE_PASSWORD_AUTH: 'True', // Upstream trusted-header signin shares this gate; passwords cannot bypass its header check.
+    ENABLE_LDAP: 'False',
+    ENABLE_OAUTH_SIGNUP: 'False',
+    ENABLE_OAUTH_TOKEN_EXCHANGE: 'False',
+    ENABLE_OAUTH_PERSISTENT_CONFIG: 'False',
+    CORS_ALLOW_ORIGIN: opts.origin,
+    WEBUI_URL: opts.origin,
+    WEBUI_AUTH_COOKIE_SAME_SITE: 'strict',
+    WEBUI_SESSION_COOKIE_SAME_SITE: 'strict',
+    JWT_EXPIRES_IN: '8h',
     // App-managed settings take effect on existing installs too; conversation data stays in the same database.
     ENABLE_PERSISTENT_CONFIG: 'False',
     DEFAULT_MODELS: opts.model ?? '',

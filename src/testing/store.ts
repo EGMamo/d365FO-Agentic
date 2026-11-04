@@ -1,5 +1,6 @@
-import { readFile, readdir, unlink, writeFile, mkdir } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { TestCase } from './types.js';
 
 /**
@@ -98,11 +99,50 @@ export function validateDraft(raw: unknown): TestCaseDraft {
 export class TestCaseFiles {
   constructor(private readonly root: string) {}
 
+  /** Resolve each component without following links imported with a case repository. */
+  private async directory(dir: string, create = false): Promise<string> {
+    const lexical = resolveCaseDir(this.root, dir);
+    if (create) await mkdir(this.root, { recursive: true });
+    const root = await realpath(this.root);
+    let current = root;
+    for (const part of relative(resolve(this.root), lexical).split(sep).filter(Boolean)) {
+      const next = join(current, part);
+      if (create) {
+        try { await mkdir(next); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+      }
+      const info = await lstat(next);
+      if (info.isSymbolicLink()) throw new TestCaseFileError('Symbolic links are not allowed in test-case paths.');
+      if (!info.isDirectory()) throw new TestCaseFileError('The test-case folder must be a directory.');
+      const canonical = await realpath(next);
+      const rel = relative(root, canonical);
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new TestCaseFileError('The test-case folder must be inside the project folder.');
+      current = canonical;
+    }
+    return current;
+  }
+
+  private async file(dir: string, file: string, allowMissing = false): Promise<string> {
+    const target = join(await this.directory(dir), checkFile(file));
+    try {
+      const info = await lstat(target);
+      if (info.isSymbolicLink()) throw new TestCaseFileError('Symbolic links are not allowed in test-case paths.');
+      if (!info.isFile()) throw new TestCaseFileError('The test case must be a regular file.');
+    } catch (e) {
+      if (!allowMissing || (e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+    return target;
+  }
+
+  private async readFile(dir: string, file: string): Promise<string> {
+    const handle = await open(await this.file(dir, file), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try { return await handle.readFile('utf8'); } finally { await handle.close(); }
+  }
+
   async list(dir: string): Promise<TestCaseFileSummary[]> {
-    const abs = resolveCaseDir(this.root, dir);
+    resolveCaseDir(this.root, dir);
     let names: string[];
     try {
-      names = (await readdir(abs, { withFileTypes: true })).filter((e) => e.isFile() && FILE.test(e.name)).map((e) => e.name);
+      names = (await readdir(await this.directory(dir), { withFileTypes: true })).filter((e) => e.isFile() && FILE.test(e.name)).map((e) => e.name);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw e;
@@ -110,7 +150,7 @@ export class TestCaseFiles {
     const out: TestCaseFileSummary[] = [];
     for (const file of names.sort()) {
       try {
-        const p = JSON.parse(await readFile(join(abs, file), 'utf8')) as Partial<TestCase>;
+        const p = JSON.parse(await this.readFile(dir, file)) as Partial<TestCase>;
         out.push({
           file,
           id: p.id ?? file.replace(/\.json$/i, ''),
@@ -121,7 +161,8 @@ export class TestCaseFiles {
           tags: p.tags ?? [],
           ...(!p.title || !Array.isArray(p.steps) ? { error: 'Not a test case: needs a title and steps; runs skip it.' } : {}),
         });
-      } catch {
+      } catch (e) {
+        if (e instanceof TestCaseFileError) throw e;
         out.push({ file, id: file.replace(/\.json$/i, ''), title: '(unreadable)', steps: 0, tags: [], error: 'The file is not valid JSON; runs skip it.' });
       }
     }
@@ -129,11 +170,13 @@ export class TestCaseFiles {
   }
 
   async read(dir: string, file: string): Promise<TestCaseDraft> {
-    const path = join(resolveCaseDir(this.root, dir), checkFile(file));
+    resolveCaseDir(this.root, dir);
+    checkFile(file);
     try {
-      const p = JSON.parse(await readFile(path, 'utf8')) as TestCase;
+      const p = JSON.parse(await this.readFile(dir, file)) as TestCase;
       return { ...p, id: p.id ?? file.replace(/\.json$/i, ''), steps: p.steps ?? [], tags: p.tags ?? [] };
     } catch (e) {
+      if (e instanceof TestCaseFileError) throw e;
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new TestCaseFileError('Test case not found.', 404);
       throw new TestCaseFileError('The file is not valid JSON.');
     }
@@ -144,21 +187,26 @@ export class TestCaseFiles {
    * existing file of that name is not overwritten.
    */
   async save(dir: string, draft: unknown, file?: string): Promise<{ file: string; testCase: TestCaseDraft }> {
-    const abs = resolveCaseDir(this.root, dir);
+    resolveCaseDir(this.root, dir);
     const tc = validateDraft(draft);
     const existing = await this.list(dir);
     const clash = existing.find((c) => c.id === tc.id && c.file !== file);
     if (clash) throw new TestCaseFileError(`Another test case (${clash.file}) already uses the id ${tc.id}.`, 409);
     const target = file ? checkFile(file) : fileNameFor(tc.id);
     if (!file && existing.some((c) => c.file === target)) throw new TestCaseFileError(`${target} already exists.`, 409);
-    await mkdir(abs, { recursive: true });
-    await writeFile(join(abs, target), `${JSON.stringify(tc, null, 2)}\n`);
+    await this.directory(dir, true);
+    const path = await this.file(dir, target, true);
+    const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0) | (file ? 0 : constants.O_EXCL), 0o600);
+    try {
+      await handle.truncate(0);
+      await handle.writeFile(`${JSON.stringify(tc, null, 2)}\n`);
+    } finally { await handle.close(); }
     return { file: target, testCase: tc };
   }
 
   async delete(dir: string, file: string): Promise<void> {
     try {
-      await unlink(join(resolveCaseDir(this.root, dir), checkFile(file)));
+      await unlink(await this.file(dir, file));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new TestCaseFileError('Test case not found.', 404);
       throw e;

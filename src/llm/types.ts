@@ -36,6 +36,8 @@ export interface LlmToolCall {
 }
 
 export interface LlmCompleteRequest {
+  /** Cancels an in-flight provider request when the run stops. */
+  signal?: AbortSignal;
   system?: string;
   messages: LlmMessage[];
   tools?: LlmTool[];

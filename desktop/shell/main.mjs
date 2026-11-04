@@ -12,6 +12,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appDir = join(here, '..');
 const lib = (p) => import(pathToFileURL(join(appDir, 'dist', p)).href);
 
+// Smoke tests isolate Python, conversations and Electron state as well as the agent profile/workspace.
+if (process.env.D365FO_DESKTOP_DATA) {
+  mkdirSync(process.env.D365FO_DESKTOP_DATA, { recursive: true, mode: 0o700 });
+  app.setPath('userData', process.env.D365FO_DESKTOP_DATA);
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 
 const RAIL_WIDTH = 76;
@@ -29,6 +35,7 @@ let current = 'chat';
 let profileInfo = { active: null, profiles: [], busy: false };
 let ui;
 let webui;
+let cancelChatInstall;
 let quitting = false;
 /** Open WebUI answered once; a later exit is reported to the user. */
 let ready = false;
@@ -67,6 +74,15 @@ function guardLinks(contents) {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
+  const guardNavigation = (event, url) => {
+    const allowed = (ui && new URL(url).origin === new URL(ui.url).origin) || (webuiUrl && new URL(url).origin === webuiUrl);
+    if (!allowed) {
+      event.preventDefault();
+      if (/^https?:/.test(url)) void shell.openExternal(url);
+    }
+  };
+  contents.on('will-navigate', guardNavigation);
+  contents.on('will-redirect', guardNavigation);
 }
 
 function layout() {
@@ -169,32 +185,49 @@ async function waitFor(url, ms, stopped = () => undefined) {
   return false;
 }
 
-async function startOpenWebUi() {
+async function startOpenWebUi(skipInstall = false) {
   const owui = await lib('desktop/openwebui.js');
+  cancelChatInstall = owui.cancelInstallation;
   const paths = { uv: uvPath(), dataRoot: app.getPath('userData') };
-  if (!(await owui.isInstalled(paths))) {
+  let installed = false;
+  if (!skipInstall && !(await owui.isInstalled(paths))) {
     status(
       'Setting up the chat for the first time. This downloads a few hundred MB and takes a few minutes; later starts take under a minute.',
       undefined,
       'install',
     );
     await owui.install(paths, (line) => status(undefined, line));
+    installed = true;
   }
   const chat = { url: `${ui.url}model/v1`, key: ui.toolToken };
   const port = await owui.freePort();
+  const url = `http://127.0.0.1:${port}`;
+  const auth = await owui.desktopAuth(paths);
+  ui.setChatOrigin(url);
+  // Electron main supplies the private trusted-header capability; page JS never receives its name.
+  // Bind it to this view AND exact origin; remote pages, another window and arbitrary clients cannot acquire it.
+  chatView.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+    callback({ requestHeaders: owui.chatRequestHeaders(
+      { url: details.url, webContentsId: details.webContentsId, frameUrl: details.frame?.url, resourceType: details.resourceType, headers: details.requestHeaders },
+      { origin: url, webContentsId: chatView.webContents.id, splashUrl: pathToFileURL(join(here, 'splash.html')).href, currentUrl: chatView.webContents.getURL(), auth },
+    ) });
+  });
   const env = owui.serveEnv({
     dataDir: owui.layout(paths).data,
     toolUrl: `${ui.url}tools`,
     toolKey: ui.toolToken,
     chat,
+    origin: url,
+    auth,
     model: 'd365fo-claude',
   });
   status('Starting the chat…', undefined, 'start');
   webui = owui.serve(paths, port, env, (line) => status(undefined, line));
+  const child = webui;
   let failed;
   webui.on('error', (e) => (failed = e));
   webui.on('exit', (code) => {
-    webui = undefined;
+    if (webui === child) webui = undefined;
     failed ??= new Error(`Open WebUI exited (code ${code}).`);
     if (!quitting && ready)
       void dialog.showMessageBox({
@@ -203,30 +236,54 @@ async function startOpenWebUi() {
         detail: `${failed.message} The settings app still works; restart the app to try again.`,
       });
   });
-  const url = `http://127.0.0.1:${port}`;
   const up = await waitFor(`${url}/health`, 240_000, () => failed);
-  if (!up) throw failed ?? new Error('Open WebUI did not start in time.');
+  if (!up) {
+    await stopOpenWebUi();
+    if (installed && await owui.rollbackInstall(paths)) {
+      status('The chat update failed its startup check. Restoring the previous runtime…');
+      return startOpenWebUi(true);
+    }
+    throw failed ?? new Error('Open WebUI did not start in time.');
+  }
   status('Connecting the chat to your tests…', undefined, 'connect');
-  // Open WebUI keeps its first-start settings; the tool server address and key are refreshed every time.
-  try {
-    await owui.syncToolServer(url, owui.toolConnection({ toolUrl: `${ui.url}tools`, toolKey: ui.toolToken }));
-  } catch (e) {
-    status(undefined, `Could not refresh the tool server in the chat: ${e.message}`);
-  }
-  try {
-    await owui.syncChatModel(url, chat);
-  } catch (e) {
-    status(undefined, `Could not refresh the chat model: ${e.message}`);
-  }
+  // Refuse to present a ready chat unless its authenticated model and tool connections are current.
+  const token = await owui.signIn(url, auth);
+  await owui.syncToolServer(url, owui.toolConnection({ toolUrl: `${ui.url}tools`, toolKey: ui.toolToken }), token);
+  await owui.syncChatModel(url, chat, token);
   ready = true;
   webuiUrl = url;
   return url;
 }
 
-function stopOpenWebUi() {
-  if (!webui?.pid) return;
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(webui.pid), '/T', '/F'], { windowsHide: true });
-  else webui.kill('SIGTERM');
+async function stopOpenWebUi() {
+  const child = webui;
+  if (!child?.pid || child.exitCode !== null) return;
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+  else child.kill('SIGTERM');
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 5000);
+    child.once('close', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+async function approveToolAction(action) {
+  if (quitting || !win || win.isDestroyed()) return false;
+  const upload = action.kind === 'upload';
+  const details = [
+    `Environment: ${action.profile || 'None selected'}`,
+    ...(action.environment ? [`F&O address: ${action.environment.url}`, `Legal entity: ${action.environment.company}`] : []),
+    ...(action.source?.type === 'local' ? [`Cases folder: ${action.source.folder}`] : []),
+    ...(action.source?.type === 'devops' ? [`DevOps plan/suite: ${action.source.plan || 'default'} / ${action.source.suite || 'default'}`] : []),
+    ...(action.cases?.length ? [`Cases: ${action.cases.join(', ')}`] : []),
+    ...(action.runId ? [`Saved run: ${action.runId}`] : []),
+    ...(action.plan ? [`Upload plan: ${action.plan}`] : []),
+  ];
+  const result = await dialog.showMessageBox(win, {
+    type: 'question', buttons: ['Cancel', upload ? 'Upload results' : 'Run tests'], defaultId: 0, cancelId: 0,
+    message: upload ? 'Allow Chat to upload these results to Azure DevOps?' : 'Allow Chat to run these tests in F&O?',
+    detail: details.join('\n'), noLink: true,
+  });
+  return !quitting && result.response === 1;
 }
 
 async function main() {
@@ -237,7 +294,7 @@ async function main() {
     webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
   chatView = new WebContentsView({
-    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
+    webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, partition: `d365fo-chat-${Date.now()}` },
   });
   // Once Open WebUI loads, it gets the app's look; the splash page has its own.
   chatView.webContents.on('dom-ready', () => {
@@ -251,8 +308,13 @@ async function main() {
     if (process.platform !== 'darwin') app.quit();
   });
   guardLinks(chatView.webContents);
-  ipcMain.on('rail:go', (_e, id) => void go(id));
-  ipcMain.on('rail:profile-menu', profileMenu);
+  const isShellSender = (event) => {
+    const page = event.senderFrame?.url;
+    return (event.sender === rail.webContents && page === pathToFileURL(join(here, 'rail.html')).href) ||
+      (event.sender === chatView.webContents && page === pathToFileURL(join(here, 'splash.html')).href);
+  };
+  ipcMain.on('rail:go', (event, id) => { if (isShellSender(event)) void go(id); });
+  ipcMain.on('rail:profile-menu', (event) => { if (isShellSender(event)) profileMenu(); });
   layout();
   await Promise.all([
     rail.webContents.loadFile(join(here, 'rail.html')),
@@ -269,7 +331,7 @@ async function main() {
   const { environmentForChild } = await lib('config/load-env.js');
   const childEnv = () => ({ ...environmentForChild(), ELECTRON_RUN_AS_NODE: '1' });
   status('Starting the test app…', undefined, 'app');
-  ui = await startUiServer({ home, root, childEnv });
+  ui = await startUiServer({ home, root, childEnv, approveToolAction });
 
   // The settings app loads right away, so profiles can be set up while the chat installs on first start.
   settingsView = new WebContentsView();
@@ -294,6 +356,7 @@ async function main() {
     if (current === 'chat') await go('chat');
   } catch (e) {
     if (quitting) return;
+    await stopOpenWebUi();
     status(`The chat could not start: ${e.message}`, undefined, 'failed');
     await dialog.showMessageBox(win, {
       type: 'warning',
@@ -313,7 +376,8 @@ app.on('second-instance', () => {
 app.on('activate', () => win?.show());
 app.on('before-quit', () => {
   quitting = true;
-  stopOpenWebUi();
+  cancelChatInstall?.();
+  void stopOpenWebUi();
   void ui?.close();
 });
 app.on('window-all-closed', () => app.quit());

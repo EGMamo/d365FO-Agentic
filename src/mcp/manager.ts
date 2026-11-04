@@ -51,7 +51,8 @@ export class McpManager {
     this.specs.set(spec.name, spec);
   }
 
-  async connect(name: string): Promise<Client> {
+  async connect(name: string, signal?: AbortSignal): Promise<Client> {
+    signal?.throwIfAborted();
     const existing = this.clients.get(name);
     if (existing) return existing;
     const spec = this.specs.get(name);
@@ -63,21 +64,35 @@ export class McpManager {
         ...stdioLaunch(spec.command, spec.args ?? []),
         env: { ...process.env, ...(spec.env ?? {}) } as Record<string, string>,
       });
-      await client.connect(transport);
+      try {
+        await client.connect(transport, { signal });
+        signal?.throwIfAborted();
+      } catch (e) {
+        await client.close().catch(() => undefined);
+        throw e;
+      }
     } else {
       const transport = new StreamableHTTPClientTransport(new URL(spec.url), {
         requestInit: { headers: spec.headers },
       });
-      await client.connect(transport);
+      try {
+        await client.connect(transport, { signal });
+        signal?.throwIfAborted();
+      } catch (e) {
+        await client.close().catch(() => undefined);
+        throw e;
+      }
     }
 
     this.clients.set(name, client);
     return client;
   }
 
-  async listTools(name: string): Promise<McpToolDescriptor[]> {
-    const client = await this.connect(name);
-    const { tools } = await client.listTools();
+  async listTools(name: string, signal?: AbortSignal): Promise<McpToolDescriptor[]> {
+    const client = await this.connect(name, signal);
+    signal?.throwIfAborted();
+    const { tools } = await client.listTools(undefined, { signal });
+    signal?.throwIfAborted();
     return tools.map((t) => ({
       server: name,
       name: t.name,
@@ -91,9 +106,12 @@ export class McpManager {
     tool: string,
     args: Record<string, unknown>,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<{ content: unknown; isError: boolean }> {
-    const client = await this.connect(server);
-    const res = await client.callTool({ name: tool, arguments: args }, undefined, timeoutMs ? { timeout: timeoutMs } : undefined);
+    const client = await this.connect(server, signal);
+    signal?.throwIfAborted();
+    const res = await client.callTool({ name: tool, arguments: args }, undefined, { ...(timeoutMs ? { timeout: timeoutMs } : {}), signal });
+    signal?.throwIfAborted();
     return {
       content: res.content,
       isError: Boolean(res.isError),

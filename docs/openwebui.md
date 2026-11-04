@@ -7,7 +7,9 @@ The desktop connects two local services automatically:
 - The authenticated `/tools` OpenAPI bridge: select environments, list/read local or Azure DevOps cases, list Azure DevOps test plans and suites, check setup, start/stop/follow runs, read results/history with failure triage, and upload a selected result. Case editing stays in Tests; there is no chat tool for writing cases or managing learned pages.
 - The authenticated `/model/v1` bridge: Open WebUI's native text/function-tool protocol is translated to the shared Claude adapter. The provider credentials stay in the Node settings service. Settings changes apply to subsequent requests without a second model picker.
 
-Chat asks for confirmation before a real run or upload. Tests and Results retain direct action buttons and confirmations. Only one run or upload happens at a time. Use the active environment indicator to confirm the target.
+Chat-triggered real runs and uploads require a native desktop confirmation enforced by the Node bridge, showing the actual target and selected cases. Model text or a confirmation flag cannot bypass this check; a browser-only server without a native approval callback refuses these tool mutations. Tests and Results retain direct action buttons and confirmations. The execution slot is reserved before asynchronous setup and held through history finalization, so only one run or upload happens at a time. Use the active environment indicator to confirm the target.
+
+Open WebUI authentication remains enabled. Electron main injects a per-launch trusted-header capability only for the app's own chat view at its exact loopback origin; ordinary HTTP clients do not receive an administrator session. The bridge and Open WebUI accept only the registered chat origin for browser access. Provider secrets stay in the Node service.
 
 ## Following a long run
 
@@ -19,7 +21,7 @@ The runtime disables general-purpose sharing, collaboration, notes, calendar, au
 
 `ENABLE_PERSISTENT_CONFIG=False` makes the app's environment settings authoritative on every startup, including existing installations. The same Open WebUI data directory is retained, preserving conversations and leaving old saved configuration available for rollback. Model and tool connection details are refreshed through Open WebUI's supported APIs.
 
-Supported controls were checked against the pinned release's upstream `backend/open_webui/config.py`, `routers/tools.py`, and chat component. Some administrator settings may remain visible: the local no-auth user is an administrator, and permissions do not necessarily hide every upstream admin control. There is no CSS/DOM patch collection or Open WebUI fork to conceal them.
+Supported controls were checked against the pinned release's upstream `backend/open_webui/config.py`, `routers/tools.py`, and chat component. Some administrator settings may remain visible to the authenticated local desktop user. The app injects `desktop/shell/chat.css` for theme alignment and reduced-feature entry points; it preserves upstream branding and is not an Open WebUI fork. Access control is enforced independently of that stylesheet.
 
 ## Startup and recovery
 

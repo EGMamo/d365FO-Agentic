@@ -128,7 +128,12 @@ describe('orchestrator and LLM outages', () => {
   });
 
   it('never invents a reason for a passing test', async () => {
-    const res = await orchestrator(async () => ({ text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: 'finish_test', arguments: { outcome: 'passed' } }] })).run(tc('D'));
+    const turns: LlmCompleteResponse[] = [
+      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '0', name: 'report_step', arguments: { index: 1, status: 'passed' } }] },
+      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: 'finish_test', arguments: { outcome: 'passed' } }] },
+    ];
+    const res = await orchestrator(async () => turns.shift()!).run(tc('D'));
+    assert.equal(res.outcome, 'passed');
     assert.equal(res.errorMessage, undefined);
   });
 });

@@ -49,3 +49,9 @@ jobs:
           cache: 'npm'
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - name: Audit locked desktop runtime
+        working-directory: desktop/runtime
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit desktop packaging toolchain
+        working-directory: desktop
+        run: npm audit --audit-level=high

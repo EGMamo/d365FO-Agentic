@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { validateForRun, type AppConfig } from '../config/index.js';
 import { buildDefaultManager } from '../mcp/registry.js';
 import { d365SystemGuidance } from './guidance.js';
-import { activeSessionFile, checkSession, interactiveSessionLogin, probeBlocksRun, probeSession, sessionLoginArgs, type ProbeFetch } from './session.js';
+import { activeSessionFile, checkSession, interactiveSessionLogin, PLAYWRIGHT_SESSION_PACKAGE, probeBlocksRun, probeSession, sessionCommand, sessionLoginArgs, type ProbeFetch } from './session.js';
 
 const NOW = Date.UTC(2026, 0, 10, 12);
 const base = { D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_SESSION_MAX_AGE_HOURS: 12 };
@@ -116,16 +116,24 @@ describe('interactiveSessionLogin', () => {
   it('installs the browser, opens the D365 URL saving to the output path, and locks the file down', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'login-'));
     const out = join(dir, 'sub', 'state.json');
-    const calls: string[][] = [];
-    const run = async (_c: string, args: string[]) => {
-      calls.push(args);
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const run = async (command: string, args: string[]) => {
+      calls.push({ command, args });
       if (args.includes('open')) await writeFile(out, '{"cookies":[]}', { mode: 0o644 });
       return 0;
     };
     await interactiveSessionLogin({ PW_BROWSER: 'chromium', D365_BASE_URL: base.D365_BASE_URL }, out, run);
-    assert.deepEqual(calls[0], ['-y', 'playwright@latest', 'install', 'chromium']);
-    assert.deepEqual(calls[1], sessionLoginArgs({ PW_BROWSER: 'chromium' }, base.D365_BASE_URL, out));
+    assert.deepEqual(calls[0], sessionCommand(['install', 'chromium']));
+    assert.deepEqual(calls[1], sessionCommand(sessionLoginArgs({ PW_BROWSER: 'chromium' }, base.D365_BASE_URL, out)));
     if (process.platform !== 'win32') assert.equal((await stat(out)).mode & 0o777, 0o600);
+  });
+  it('uses the bundled Electron/Node CLI without npx, and pins the source-checkout fallback', () => {
+    const args = sessionLoginArgs({ PW_BROWSER: 'chromium' }, base.D365_BASE_URL, '/tmp/session with spaces.json');
+    assert.deepEqual(sessionCommand(args, () => '/app/node_modules/playwright/cli.js'), {
+      command: process.execPath, args: ['/app/node_modules/playwright/cli.js', ...args],
+    });
+    assert.deepEqual(sessionCommand(args, () => undefined), { command: 'npx', args: ['-y', PLAYWRIGHT_SESSION_PACKAGE, ...args] });
+    assert.ok(!PLAYWRIGHT_SESSION_PACKAGE.includes('latest'));
   });
   it('fails clearly when the browser closes without saving', async () => {
     const out = join(await mkdtemp(join(tmpdir(), 'login-')), 'state.json');

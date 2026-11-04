@@ -77,15 +77,19 @@ function freePort() {
 }
 
 // The Playwright the app ships for its own test runs (asar is off, so it is a plain folder next to the exe).
-const appRequire = createRequire(join(dirname(exe), 'resources', 'app', 'package.json'));
+const resources = process.platform === 'darwin' ? join(dirname(dirname(exe)), 'Resources') : join(dirname(exe), 'resources');
+const appRequire = createRequire(join(resources, 'app', 'package.json'));
 const { chromium } = appRequire('playwright-core');
 
 const cdpPort = await freePort();
 const log = createWriteStream(join(out, 'app.log'));
 // --disable-gpu: build VMs often have no usable GPU. E2E_APP_ARGS adds switches, e.g. --no-sandbox when run as root on Linux.
 const extraArgs = (process.env.E2E_APP_ARGS ?? '').split(' ').filter(Boolean);
+// An inherited ELECTRON_RUN_AS_NODE (set by Electron-based IDEs and terminals) would make the app run as plain Node and reject its switches.
+const appEnv = { ...process.env };
+delete appEnv.ELECTRON_RUN_AS_NODE;
 const child = spawn(exe, [`--remote-debugging-port=${cdpPort}`, '--disable-gpu', ...extraArgs], {
-  env: { ...process.env, D365FO_AGENT_HOME: home, D365FO_WORKSPACE: workspace, ELECTRON_ENABLE_LOGGING: '1' },
+  env: { ...appEnv, D365FO_AGENT_HOME: home, D365FO_WORKSPACE: workspace, D365FO_DESKTOP_DATA: join(out, 'desktop-data'), ELECTRON_ENABLE_LOGGING: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
   windowsHide: false,
 });
@@ -188,17 +192,22 @@ try {
     });
 
     await check('Settings save through the form and survive a reload', async () => {
+      const before = process.env.E2E_D365_COMPANY || 'USMF';
+      const sentinel = before === 'GBSI' ? 'USMF' : 'GBSI';
       await rail.click('button[data-id="settings"]');
       await settings.click('[data-edit="e2e"]');
-      await settings.locator('#f_D365_COMPANY').fill(process.env.E2E_D365_COMPANY || 'USMF');
-      if (await settings.locator('#saveProfile').isEnabled()) {
-        await settings.click('#saveProfile');
-        await settings.waitForFunction(() => document.querySelector('#profileStatus').textContent === 'Saved');
-      }
+      await settings.locator('#f_D365_COMPANY').fill(sentinel);
+      if (!(await settings.locator('#saveProfile').isEnabled())) throw new Error('Editing the legal entity did not enable Save.');
+      await settings.click('#saveProfile');
+      await settings.waitForFunction(() => document.querySelector('#profileStatus').textContent === 'Saved');
       await settings.reload();
       await settings.evaluate(() => showTab('settings'));
       await settings.click('[data-edit="e2e"]');
-      await settings.waitForFunction((value) => document.querySelector('#f_D365_COMPANY')?.value === value, process.env.E2E_D365_COMPANY || 'USMF');
+      await settings.waitForFunction((value) => document.querySelector('#f_D365_COMPANY')?.value === value, sentinel);
+      // Restore the configured entity before any sandbox diagnostic runs.
+      await settings.locator('#f_D365_COMPANY').fill(before);
+      await settings.click('#saveProfile');
+      await settings.waitForFunction(() => document.querySelector('#profileStatus').textContent === 'Saved');
     });
 
     await check("The agent's own CLI runs on the app's Electron (profile check)", async () => {

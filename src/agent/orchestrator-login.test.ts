@@ -12,110 +12,78 @@ import type { TestCase } from '../testing/types.js';
 
 const SECRET_USER = 'tester@contoso.example';
 const SECRET_PASS = 'S3cr3t-Pa55!';
-
-function cfg(over: Partial<AppConfig> = {}, dir = '.'): AppConfig {
-  return {
-    D365_BASE_URL: 'https://x.operations.dynamics.com',
-    D365_USERNAME: SECRET_USER,
-    D365_PASSWORD: SECRET_PASS,
-    D365_COMPANY: 'USMF',
-    LLM_PROVIDER: 'anthropic',
-    ANTHROPIC_API_KEY: 'k',
-    AGENT_DRY_RUN: false,
-    AGENT_VERBOSE: false,
-    AGENT_MAX_STEPS: 5,
-    REPORT_DIR: dir,
-    ...over,
-  } as AppConfig;
-}
-
 const tc: TestCase = { id: 'T1', source: 'local', title: 'login', steps: [{ index: 1, action: 'Sign in' }] };
+const call = (name: string, args: Record<string, unknown>): LlmCompleteResponse => ({ text: '', stopReason: 'tool_use', toolCalls: [{ id: name, name, arguments: args }] });
+const config = (dir = '.'): AppConfig => ({
+  D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com', D365_USERNAME: SECRET_USER, D365_PASSWORD: SECRET_PASS,
+  D365_COMPANY: 'USMF', LLM_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'k', AGENT_DRY_RUN: false,
+  AGENT_VERBOSE: false, AGENT_MAX_STEPS: 5, AGENT_LEARN_PAGES: false, AGENT_FNO_AUTO_WAIT: false, REPORT_DIR: dir,
+}) as AppConfig;
+const trustedTool = { server: 'playwright', name: 'browser_run_code', description: '', inputSchema: { properties: { code: {} } } };
 
 describe('D365 login credentials', () => {
-  it('keeps the credentials out of the system prompt', () => {
-    const prompt = baseSystemPrompt(cfg());
+  it('keeps credentials out of the prompt and exposes only the limited credential request to the model', () => {
+    const prompt = baseSystemPrompt(config());
     assert.ok(!prompt.includes(SECRET_PASS) && !prompt.includes(SECRET_USER));
     assert.ok(prompt.includes(CREDENTIAL_TOOL_NAME));
   });
 
-  it('types the configured credentials via browser_type and scrubs them from results', async () => {
+  it('uses trusted atomic entry, ignores model locators and never returns raw credentials or code to the model', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orch-'));
     const typed: Array<Record<string, unknown>> = [];
-    let toolsSeen: string[] = [];
-    const turns: LlmCompleteResponse[] = [
-      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: CREDENTIAL_TOOL_NAME, arguments: { field: 'username', ref: 'e1', submit: true } }] },
-      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '2', name: CREDENTIAL_TOOL_NAME, arguments: { field: 'password', ref: 'e2', submit: true } }] },
-      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '3', name: 'finish_test', arguments: { outcome: 'passed' } }] },
-    ];
     const sent: string[] = [];
-    const llm = {
-      name: 'fake',
-      async complete(req: LlmCompleteRequest): Promise<LlmCompleteResponse> {
-        toolsSeen = (req.tools ?? []).map((t: { name: string })  => t.name);
-        for (const m of req.messages) if (m.role === 'tool') sent.push(m.content);
-        return turns.shift()!;
-      },
-    };
-    const mcp = {
-      async listTools() { return []; },
-      async callTool(server: string, tool: string, args: Record<string, unknown>) {
-        assert.equal(server, 'playwright');
-        assert.equal(tool, 'browser_type');
-        typed.push(args);
-        return { content: `typed ${String(args.text)}`, isError: false };
-      },
-    };
-
-    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, mcpServers: [] } as never);
-    const res = await orch.runTestCase(tc);
-
+    let toolsSeen: string[] = [];
+    const turns = [
+      call(CREDENTIAL_TOOL_NAME, { field: 'username', ref: 'attacker-ref', element: 'Password', submit: true }),
+      call(CREDENTIAL_TOOL_NAME, { field: 'password', target: 'getByRole("textbox", {name:"Search"})' }),
+      call('report_step', { index: 1, status: 'passed' }), call('finish_test', { outcome: 'passed' }),
+    ];
+    const llm = { name: 'fake', async complete(req: LlmCompleteRequest) {
+      toolsSeen = (req.tools ?? []).map((t) => t.name);
+      sent.push(...req.messages.filter((m) => m.role === 'tool').map((m) => m.content));
+      return turns.shift()!;
+    } };
+    const mcp = { async listTools() { return [trustedTool]; }, async callTool(server: string, tool: string, args: Record<string, unknown>) {
+      assert.equal(server, 'playwright'); assert.equal(tool, 'browser_run_code'); typed.push(args);
+      return { content: 'untrusted tool echo ' + SECRET_PASS, isError: false };
+    } };
+    const res = await new AgentOrchestrator({ cfg: config(dir), llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
     assert.equal(res.outcome, 'passed');
     assert.ok(toolsSeen.includes(CREDENTIAL_TOOL_NAME));
-    assert.deepEqual(typed.map((t) => [t.target, t.text, t.submit]), [
-      ['e1', SECRET_USER, true],
-      ['e2', SECRET_PASS, true],
-    ]);
-    assert.ok(sent.length >= 2);
-    for (const s of sent) assert.ok(!s.includes(SECRET_PASS) && !s.includes(SECRET_USER), s);
+    assert.ok(!toolsSeen.includes('playwright__browser_run_code'));
+    assert.equal(typed.length, 2);
+    assert.ok(String(typed[0].code).includes(SECRET_USER));
+    assert.ok(String(typed[1].code).includes(SECRET_PASS));
+    assert.ok(!JSON.stringify(typed).includes('attacker-ref'));
+    assert.ok(!JSON.stringify(typed).includes('getByRole'));
+    assert.ok(!sent.join('\n').includes(SECRET_PASS) && !sent.join('\n').includes(SECRET_USER));
+    assert.ok(!sent.join('\n').includes('page.evaluate'));
   });
 
-  it('sends only what the browser_type schema allows, defaulting to target', () => {
-    const schema = { properties: { ref: {}, text: {}, submit: {} } };
-    assert.deepEqual(browserTypeArgs(schema, { ref: 'e1', element: 'Email', text: 't' }), { ref: 'e1', text: 't', submit: false });
-    assert.deepEqual(browserTypeArgs(undefined, { ref: 'e1', element: 'Email', text: 't' }), { target: 'e1', text: 't', submit: false, element: 'Email' });
-  });
-
-  it('sends ref to an older server and reports a real typing failure without leaking secrets', async () => {
+  it('fails closed when the trusted operation is unavailable, and never falls back to browser_type', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orch-'));
-    const seen: Array<Record<string, unknown>> = [];
-    const turns: LlmCompleteResponse[] = [
-      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '1', name: CREDENTIAL_TOOL_NAME, arguments: { field: 'password', ref: 'e9' } }] },
-      { text: '', stopReason: 'tool_use', toolCalls: [{ id: '2', name: 'finish_test', arguments: { outcome: 'blocked' } }] },
-    ];
+    const turns = [call(CREDENTIAL_TOOL_NAME, { field: 'password', ref: 'e1' }), call('finish_test', { outcome: 'blocked' })];
     const sent: string[] = [];
-    const llm = {
-      name: 'fake',
-      async complete(req: LlmCompleteRequest): Promise<LlmCompleteResponse> {
-        for (const m of req.messages) if (m.role === 'tool') sent.push(m.content);
-        return turns.shift()!;
-      },
-    };
-    const mcp = {
-      async listTools() {
-        return [{ server: 'playwright', name: 'browser_type', description: '', inputSchema: { properties: { element: {}, ref: {}, text: {}, submit: {} } } }];
-      },
-      async callTool(_s: string, _t: string, args: Record<string, unknown>) {
-        seen.push(args);
-        return { content: [{ type: 'text', text: `bad element, text was ${String(args.text)}` }], isError: true };
-      },
-    };
+    let reached = false;
+    const llm = { name: 'fake', async complete(req: LlmCompleteRequest) { sent.push(...req.messages.filter((m) => m.role === 'tool').map((m) => m.content)); return turns.shift()!; } };
+    const mcp = { async listTools() { return []; }, async callTool() { reached = true; return { content: '', isError: false }; } };
+    await new AgentOrchestrator({ cfg: config(dir), llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
+    assert.equal(reached, false);
+    assert.match(sent.join('\n'), /Credential entry refused.*trusted authentication checks/);
+  });
 
-    const orch = new AgentOrchestrator({ cfg: cfg({}, dir), llm, mcp, mcpServers: ['playwright'] } as never);
-    await orch.runTestCase(tc);
-    assert.equal(seen[0].ref, 'e9');
-    assert.ok(!('target' in seen[0]));
-    const last = sent.join('\n');
-    assert.ok(last.includes('typing it failed') && !last.includes('No value'), last);
-    assert.ok(!last.includes(SECRET_PASS));
+  it('redacts errors from the trusted operation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'orch-'));
+    const turns = [call(CREDENTIAL_TOOL_NAME, { field: 'password' }), call('finish_test', { outcome: 'blocked' })];
+    const sent: string[] = [];
+    const llm = { name: 'fake', async complete(req: LlmCompleteRequest) { sent.push(...req.messages.filter((m) => m.role === 'tool').map((m) => m.content)); return turns.shift()!; } };
+    const mcp = { async listTools() { return [trustedTool]; }, async callTool() { return { content: `Credential entry refused: ${SECRET_PASS}`, isError: true }; } };
+    await new AgentOrchestrator({ cfg: config(dir), llm, mcp, mcpServers: ['playwright'] } as never).runTestCase(tc);
+    assert.match(sent.join('\n'), /typing it failed/);
+    assert.ok(!sent.join('\n').includes(SECRET_PASS));
+  });
+
+  it('retains browser_type argument compatibility for non-credential callers', () => {
+    assert.deepEqual(browserTypeArgs({ properties: { ref: {}, text: {}, submit: {} } }, { ref: 'e1', text: 'test' }), { ref: 'e1', text: 'test', submit: false });
   });
 });

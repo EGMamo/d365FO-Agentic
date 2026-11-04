@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { finishTrace, snapshotFiles, traceOutputDir, tracingEnabled } from '../mcp/playwright-trace.js';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { AppConfig } from '../config/index.js';
 import type { LlmProvider } from '../llm/index.js';
 import type { LlmMessage, LlmTool, LlmToolCall } from '../llm/types.js';
@@ -9,7 +10,7 @@ import { mergeMenuItems, PageMap, pageKey, type ControlAction } from '../knowled
 import { isFnoLoading, isMissingTarget, isSnapshotRef, pageInfo, ranLocators, responseText, slimSnapshot, withoutSnapshot } from '../mcp/playwright-response.js';
 import type { CaseUsage, RunState, StepCause, StepResult, StepStatus, TestCase, TestResult } from '../testing/types.js';
 import { classifyFailure } from '../testing/triage.js';
-import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, browserTypeArgs, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
+import { CREDENTIAL_TOOL, CREDENTIAL_TOOL_NAME, credentialEntryCode, credentialFor, mcpErrorText, redactSecrets } from '../d365fo/login.js';
 import { isMenuItemName, loadMenuItems, menuItemUrl, openMenuItemTool, OPEN_MENU_ITEM_TOOL_NAME, resolveMenuItem, type MenuItem } from '../d365fo/navigation.js';
 import { baseSystemPrompt, testCaseUserPrompt } from './prompts.js';
 import { compactHistory } from './context.js';
@@ -156,7 +157,6 @@ export class AgentOrchestrator {
   private cfg: AppConfig;
   private llm: LlmProvider;
   private mcp: McpManager;
-  private browserTypeSchema?: Record<string, unknown>;
   private mcpServers: string[];
   private guardrails: Guardrails;
   private reportedHiddenTools = false;
@@ -173,9 +173,20 @@ export class AgentOrchestrator {
     this.guardrails = new Guardrails(opts.cfg, opts.mcpServers);
   }
 
-  /** `signal` (Ctrl+C) stops the case at the next model turn; the result is then marked `interrupted` and nothing is learned from it. */
+  /** Cancellation stops in-flight requests and prevents dispatching any subsequent action. */
   async runTestCase(tc: TestCase, signal?: AbortSignal): Promise<TestResult> {
-    const result = await this.runAttempt(tc, signal);
+    const startedAt = new Date().toISOString();
+    let result: AttemptResult;
+    try {
+      result = await this.runAttempt(tc, signal);
+    } catch (e) {
+      if (!signal?.aborted) throw e;
+      result = {
+        interrupted: true, outcome: 'blocked', runState: 'blocked', startedAt, finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - Date.parse(startedAt), steps: [], artifacts: [], learnings: [], policyBlocks: [], timeouts: [], data: {},
+        usage: { turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, modelMs: 0 }, errorMessage: INTERRUPTED_MESSAGE,
+      };
+    }
     const category = classifyFailure(result);
     return {
       ...result, testCaseId: tc.id, title: tc.title,
@@ -187,22 +198,23 @@ export class AgentOrchestrator {
   }
 
   private async runAttempt(tc: TestCase, signal?: AbortSignal): Promise<AttemptResult> {
+    signal?.throwIfAborted();
     const startedAt = new Date();
     const artifactsDir = join(this.cfg.REPORT_DIR, 'artifacts', tc.id);
     await mkdir(artifactsDir, { recursive: true });
+    signal?.throwIfAborted();
 
     const mcpTools: McpToolDescriptor[] = [];
     for (const server of this.mcpServers) {
       try {
         let tools = this.toolCache.get(server);
         if (!tools) {
-          tools = await this.mcp.listTools(server);
+          tools = await withCancellation(signal, () => this.mcp.listTools(server, signal));
           this.toolCache.set(server, tools);
         }
         mcpTools.push(...tools);
-        const bt = tools.find((t) => t.server === 'playwright' && t.name === 'browser_type');
-        if (bt) this.browserTypeSchema = bt.inputSchema;
       } catch (e) {
+        signal?.throwIfAborted();
         console.warn(`[agent] failed to list tools for MCP server '${server}': ${(e as Error).message}`);
       }
     }
@@ -214,13 +226,14 @@ export class AgentOrchestrator {
     const canOpenPages = this.mcpServers.includes('playwright') && Boolean(this.cfg.D365_BASE_URL);
     if (this.mcpServers.includes('playwright') && this.cfg.AGENT_LEARN_PAGES !== false && !this.pageMap) {
       try {
-        this.pageMap = await PageMap.load(this.cfg.KB_DIR ?? './knowledge');
+        this.pageMap = await withCancellation(signal, () => PageMap.load(this.cfg.KB_DIR ?? './knowledge'));
       } catch (e) {
+        signal?.throwIfAborted();
         console.warn(`[agent] page learning is off for this run: ${(e as Error).message}`);
       }
     }
     // Reloaded per case, so forms learned by earlier cases of this run can be opened by caption.
-    if (canOpenPages) this.menuItems = mergeMenuItems(await loadMenuItems(this.cfg.KB_DIR ?? './knowledge'), this.pageMap?.menuItems() ?? []);
+    if (canOpenPages) this.menuItems = mergeMenuItems(await withCancellation(signal, () => loadMenuItems(this.cfg.KB_DIR ?? './knowledge')), this.pageMap?.menuItems() ?? []);
     const tools: LlmTool[] = [
       ...allowedTools.map((t) => ({
         name: `${t.server}__${t.name}`,
@@ -236,9 +249,10 @@ export class AgentOrchestrator {
     let traceBefore: Set<string> | undefined;
     if (tracingEnabled(this.cfg) && this.mcpServers.includes('playwright')) {
       try {
-        traceBefore = await snapshotFiles(traceOutputDir(this.cfg));
-        await this.mcp.callTool('playwright', 'browser_start_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
+        traceBefore = await withCancellation(signal, () => snapshotFiles(traceOutputDir(this.cfg)));
+        await this.callMcp('playwright', 'browser_start_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS, signal);
       } catch (e) {
+        signal?.throwIfAborted();
         traceBefore = undefined;
         console.warn(`[agent] could not start a Playwright trace (${(e as Error).message}); continuing without one`);
       }
@@ -276,11 +290,12 @@ export class AgentOrchestrator {
           break;
         }
         const askedAt = Date.now();
-        const response = await this.llm.complete({
+        const response = await withCancellation(signal, () => this.llm.complete({
           system: baseSystemPrompt(this.cfg),
           messages,
           tools,
-        });
+          signal,
+        }));
         usage.modelMs += Date.now() - askedAt;
         usage.turns++;
         usage.inputTokens += response.usage?.inputTokens ?? 0;
@@ -303,6 +318,7 @@ export class AgentOrchestrator {
         }
 
         for (const call of response.toolCalls) {
+          signal?.throwIfAborted();
           const callKey = `${call.name}:${JSON.stringify(call.arguments)}`;
           repeats = callKey === lastCallKey ? repeats + 1 : 1;
           lastCallKey = callKey;
@@ -324,7 +340,9 @@ export class AgentOrchestrator {
             data,
             guard,
             page,
+            signal,
           });
+          signal?.throwIfAborted();
           if (this.cfg.AGENT_VERBOSE) this.log(`← ${dispatched.content}`);
           messages.push({
             role: 'tool',
@@ -337,6 +355,7 @@ export class AgentOrchestrator {
             outcome = dispatched.outcome ?? 'blocked';
             overallError = dispatched.errorMessage;
             stopped = true;
+            break;
           } else if (stop) {
             outcome = 'blocked';
             overallError = stop.message;
@@ -362,7 +381,7 @@ export class AgentOrchestrator {
         overallError = `Agent stopped: the test used all ${maxTurns} model turns (AGENT_MAX_STEPS) before it finished${left.length ? `; step ${left.join(', ')} ${left.length > 1 ? 'were' : 'was'} not reported` : ''}. Raise AGENT_MAX_STEPS for long cases, or split the case.`;
       }
     } catch (e) {
-      const unavailable = toUnavailable(e);
+      const unavailable = signal?.aborted ? undefined : toUnavailable(e);
       if (unavailable) throw unavailable;
       outcome = 'blocked';
       overallError = this.clean(`Transient orchestration failure: ${(e as Error).message}`, LIMITS.error);
@@ -383,25 +402,27 @@ export class AgentOrchestrator {
     }
 
     if (outcome === 'passed' && !this.cfg.AGENT_DRY_RUN) {
-      const unverified = unverifiedSteps(tc, steps);
-      if (unverified.length) {
-        outcome = 'blocked';
-        overallError = `Not counted as passed: step ${unverified.join(', ')} ${unverified.length > 1 ? 'have' : 'has'} an expected result that was not verified against the page. Nothing was checked, so no pass is claimed.`;
-      }
+      const verdict = verifiedCaseVerdict(tc, steps);
+      outcome = verdict.outcome;
+      overallError = verdict.errorMessage;
     }
 
-    await this.savePages();
+    if (!signal?.aborted) await this.savePages();
 
-    if (traceBefore) {
+    if (traceBefore && !signal?.aborted) {
       try {
-        await this.mcp.callTool('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS);
-        artifacts.push(...(await finishTrace(this.cfg, traceBefore, outcome)));
+        await this.callMcp('playwright', 'browser_stop_tracing', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS, signal);
+        artifacts.push(...(await withCancellation(signal, () => finishTrace(this.cfg, traceBefore!, outcome))));
       } catch (e) {
         console.warn(`[agent] could not finish the Playwright trace: ${(e as Error).message}`);
       }
     }
 
     const finishedAt = new Date();
+    if (signal?.aborted) {
+      outcome = 'blocked';
+      overallError = INTERRUPTED_MESSAGE;
+    }
     const runState: RunState = outcome === 'failed' ? 'failed' : outcome === 'blocked' ? 'blocked' : 'completed';
     return {
       outcome,
@@ -417,7 +438,7 @@ export class AgentOrchestrator {
       timeouts,
       data,
       usage,
-      ...(interrupted ? { interrupted: true } : {}),
+      ...(signal?.aborted ? { interrupted: true } : {}),
     };
   }
 
@@ -435,9 +456,11 @@ export class AgentOrchestrator {
       guard: AttemptGuard;
       /** The F&O form the browser is on, and the forms whose learned hints were already shown this attempt. */
       page: { key?: string; hinted: Set<string> };
+      signal?: AbortSignal;
     },
     opts: { noHint?: boolean } = {},
   ): Promise<DispatchResult> {
+    ctx.signal?.throwIfAborted();
     const args: Record<string, unknown> =
       call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments : {};
     const fail = (error: string): DispatchResult => ({ content: JSON.stringify({ error }), errored: true });
@@ -497,26 +520,23 @@ export class AgentOrchestrator {
         };
       }
       if (this.cfg.AGENT_DRY_RUN) return { content: JSON.stringify({ dryRun: true, note: 'Skipped credential entry' }) };
-      const ref = (args.ref ?? args.target) as string | undefined;
-      if (!ref) {
-        return { content: JSON.stringify({ error: 'Missing `ref`: take the element ref from the latest browser_snapshot and call again.' }) };
+      if (!this.mcpServers.includes('playwright') || !this.toolCache.get('playwright')?.some((t) => t.name === 'browser_run_code')) {
+        return fail('Credential entry refused: this browser does not support trusted authentication checks. Sign in with a saved browser session.');
       }
       try {
-        const res = await this.mcp.callTool(
+        const res = await this.callMcp(
           'playwright',
-          'browser_type',
-          browserTypeArgs(this.browserTypeSchema, {
-            ref,
-            element: (args.element as string | undefined) ?? `${field} field`,
-            text: secret,
-            submit: Boolean(args.submit),
-          }),
+          'browser_run_code',
+          { code: credentialEntryCode(field as 'username' | 'password', secret, args.submit === true) },
+          this.cfg.AGENT_TOOL_TIMEOUT_MS,
+          ctx.signal,
         );
         const body = res.isError
           ? { error: `The credential was configured, but typing it failed: ${mcpErrorText(res.content)}` }
           : { ok: true, entered: args.field };
         return { content: redactSecrets(this.cfg, JSON.stringify(body)) };
       } catch (e) {
+        ctx.signal?.throwIfAborted();
         return { content: redactSecrets(this.cfg, JSON.stringify({ error: `Typing the credential failed: ${(e as Error).message}` })) };
       }
     }
@@ -528,6 +548,7 @@ export class AgentOrchestrator {
       if (!note.trim()) return fail('Give the note text. Nothing was saved.');
       this.pageMap.addNote(ctx.page.key, note);
       await this.savePages();
+      ctx.signal?.throwIfAborted();
       return { content: JSON.stringify({ ok: true, savedFor: ctx.page.key }) };
     }
     if (call.name === 'finish_test') {
@@ -581,24 +602,26 @@ export class AgentOrchestrator {
       }
       const fno = server === 'playwright';
       const autoWait = fno && this.cfg.AGENT_FNO_AUTO_WAIT !== false;
-      let res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
+      let res = await this.callMcp(server, toolName, args, this.toolTimeoutMs(toolName, args), ctx.signal);
       let text = responseText(res.content);
       // A locator target is resolved at once, without waiting, so it misses controls of a form that is still
       // loading. Nothing was done in that case, so waiting for F&O and trying once more is safe.
       const locatorTarget = fno && typeof args.target === 'string' && !isSnapshotRef(args.target) ? args.target : undefined;
       if (res.isError && locatorTarget && isMissingTarget(text)) {
         if (autoWait) {
-          await this.waitForFno();
-          res = await this.mcp.callTool(server, toolName, args, this.toolTimeoutMs(toolName, args));
+          await this.waitForFno(ctx.signal);
+          res = await this.callMcp(server, toolName, args, this.toolTimeoutMs(toolName, args), ctx.signal);
           text = responseText(res.content);
         }
         if (res.isError && ctx.page.key) this.pageMap?.failControl(ctx.page.key, locatorTarget);
       }
-      if (autoWait && !res.isError && FNO_SETTLE_TOOLS.has(toolName)) await this.waitForFno();
+      if (autoWait && !res.isError && FNO_SETTLE_TOOLS.has(toolName)) await this.waitForFno(ctx.signal);
       // A page load leaves F&O on its splash for a while: wait it out here rather than leave the model to
       // spend turns on waits and snapshots, or navigate again because the page looks stuck.
-      const loaded = autoWait && !res.isError && toolName !== 'browser_wait_for' ? await this.waitPastSplash(text) : undefined;
+      const loaded = autoWait && !res.isError && toolName !== 'browser_wait_for' ? await this.waitPastSplash(text, ctx.signal) : undefined;
+      ctx.signal?.throwIfAborted();
       const captured = await this.captureBinaryContent(res.content, ctx.artifactsDir);
+      ctx.signal?.throwIfAborted();
       ctx.artifacts.push(...captured);
       // When the page finished loading, the first snapshot only shows the splash: the loaded one below replaces it.
       const shown = loaded ? withoutSnapshot(text) : text;
@@ -631,6 +654,7 @@ export class AgentOrchestrator {
       }
       return { content, ...(res.isError ? { errored: true } : {}) };
     } catch (e) {
+      ctx.signal?.throwIfAborted();
       if (isTimeoutError(e)) {
         const ms = this.toolTimeoutMs(toolName, args);
         const note = this.clean(`${call.name} exceeded ${Math.round(ms / 1000)}s`, LIMITS.blockNote);
@@ -687,8 +711,8 @@ export class AgentOrchestrator {
     const nav = await this.dispatch({ id: call.id, name: 'playwright__browser_navigate', arguments: { url } }, ctx, { noHint: true });
     if (nav.errored || nav.policyBlocked || nav.stop) return nav;
     try {
-      await this.mcp.callTool('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000);
-      const snap = await this.mcp.callTool('playwright', 'browser_snapshot', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000);
+      await this.callMcp('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000, ctx.signal);
+      const snap = await this.callMcp('playwright', 'browser_snapshot', {}, this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000, ctx.signal);
       if (!snap.isError) {
         const raw = responseText(snap.content);
         this.learnFromResult('browser_snapshot', {}, raw, ctx);
@@ -697,6 +721,7 @@ export class AgentOrchestrator {
         return { content: redactSecrets(this.cfg, `Opened ${label} (${mi}) in ${company}.\n${text}${hint ? `\n\n${hint}` : ''}`) };
       }
     } catch {
+      ctx.signal?.throwIfAborted();
       // The navigation result below still carries a snapshot; the model can wait and snapshot itself.
     }
     const hint = this.takeHint(ctx);
@@ -742,7 +767,8 @@ export class AgentOrchestrator {
    * unstuck it by hand) and returns the loaded page's snapshot; null when it never loaded, undefined when the page
    * was not on the splash.
    */
-  private async waitPastSplash(text: string): Promise<string | null | undefined> {
+  private async waitPastSplash(text: string, signal?: AbortSignal): Promise<string | null | undefined> {
+    signal?.throwIfAborted();
     if (!isFnoLoading(text, this.cfg.D365_BASE_URL)) return undefined;
     const budget = this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000;
     const timeout = this.cfg.AGENT_TOOL_TIMEOUT_MS ?? 60000;
@@ -750,20 +776,21 @@ export class AgentOrchestrator {
     let reloaded = false;
     try {
       while (Date.now() - started < budget) {
-        await sleep(SPLASH_POLL_MS);
+        await delay(SPLASH_POLL_MS, undefined, { signal });
         if (!this.cfg.AGENT_DRY_RUN && !reloaded && Date.now() - started >= Math.min(budget / 2, SPLASH_RELOAD_AFTER_MS)) {
           reloaded = true;
-          await this.mcp.callTool('playwright', 'browser_press_key', { key: 'F5' }, timeout);
+          await this.callMcp('playwright', 'browser_press_key', { key: 'F5' }, timeout, signal);
           continue;
         }
-        const snap = await this.mcp.callTool('playwright', 'browser_snapshot', {}, timeout);
+        const snap = await this.callMcp('playwright', 'browser_snapshot', {}, timeout, signal);
         const raw = responseText(snap.content);
         if (snap.isError || isFnoLoading(raw, this.cfg.D365_BASE_URL)) continue;
-        await this.waitForFno();
-        const settled = await this.mcp.callTool('playwright', 'browser_snapshot', {}, timeout);
+        await this.waitForFno(signal);
+        const settled = await this.callMcp('playwright', 'browser_snapshot', {}, timeout, signal);
         return settled.isError ? raw : responseText(settled.content);
       }
     } catch {
+      signal?.throwIfAborted();
       // The model sees the page state on its next snapshot.
       return undefined;
     }
@@ -771,12 +798,17 @@ export class AgentOrchestrator {
   }
 
   /** Waits for F&O's blocking overlay to clear. Returns at once when it is not shown. */
-  private async waitForFno(): Promise<void> {
+  private async waitForFno(signal?: AbortSignal): Promise<void> {
     try {
-      await this.mcp.callTool('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000);
+      await this.callMcp('playwright', 'browser_wait_for', { textGone: FNO_BUSY_TEXT }, this.cfg.AGENT_NAV_TIMEOUT_MS ?? 60000, signal);
     } catch {
+      signal?.throwIfAborted();
       // The model sees the page state on its next snapshot.
     }
+  }
+
+  private callMcp(server: string, tool: string, args: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<{ content: unknown; isError: boolean }> {
+    return withCancellation(signal, () => this.mcp.callTool(server, tool, args, timeoutMs, signal));
   }
 
   private async savePages(): Promise<void> {
@@ -829,8 +861,18 @@ export function turnBudget(maxSteps: number, stepCount: number): number {
   return Math.max(maxSteps, stepCount * TURNS_PER_STEP);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Also bounds fake/third-party providers that do not themselves honor AbortSignal. */
+function withCancellation<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+  signal?.throwIfAborted();
+  if (!signal) return run();
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => { reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve().then(() => { signal.throwIfAborted(); return run(); }).then(
+      (value) => { signal.removeEventListener('abort', abort); signal.aborted ? reject(signal.reason) : resolve(value); },
+      (error: unknown) => { signal.removeEventListener('abort', abort); reject(error); },
+    );
+  });
 }
 
 function isMutatingBrowserTool(name: string): boolean {
@@ -849,7 +891,20 @@ export function unverifiedSteps(tc: TestCase, steps: StepResult[]): number[] {
     .filter((t) => {
       const r = steps.find((s) => s.index === t.index);
       if (!r) return true;
-      return r.status === 'passed' && r.verified !== true;
+      return r.status !== 'passed' || r.verified !== true;
     })
     .map((t) => t.index);
+}
+
+/** The model cannot declare a pass that contradicts the recorded required steps. */
+export function verifiedCaseVerdict(tc: TestCase, steps: StepResult[]): { outcome: StepStatus; errorMessage?: string } {
+  const failed = steps.filter((s) => s.status === 'failed');
+  if (failed.length) return { outcome: 'failed', errorMessage: `Not counted as passed: step ${failed.map((s) => s.index).join(', ')} failed.` };
+  const incomplete = tc.steps.filter((s) => steps.find((r) => r.index === s.index)?.status !== 'passed');
+  if (!tc.steps.length || incomplete.length) return {
+    outcome: 'blocked', errorMessage: `Not counted as passed: ${tc.steps.length ? `required step ${incomplete.map((s) => s.index).join(', ')} was not completed as passed` : 'the case has no required steps'}.`,
+  };
+  const unverified = unverifiedSteps(tc, steps);
+  if (unverified.length) return { outcome: 'blocked', errorMessage: `Not counted as passed: step ${unverified.join(', ')} has an expected result that was not verified against the page.` };
+  return { outcome: 'passed' };
 }

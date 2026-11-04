@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
-import { startUiServer, type RunningUi } from './server.js';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { startUiServer, type RunningUi, type ToolActionApproval } from './server.js';
 import { ProfileStore } from '../profiles/store.js';
+import { RunHistory } from './history.js';
+import { TestCaseFiles } from '../testing/store.js';
 
 it('Tests and Chat read the same Azure DevOps suite through the existing REST client', async () => {
   const remote = createServer((req, res) => {
@@ -407,7 +409,8 @@ describe('Open WebUI tool server', () => {
         return [{ id: '11', name: 'Root' }, { id: '12', name: 'AP', parentId: '11' }];
       },
     });
-    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, devopsClient });
+    tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, devopsClient, approveToolAction: async () => true });
+    tui.setChatOrigin('http://127.0.0.1:3000');
     tcall = (path, init = {}) => {
       const { key = tui.toolToken, ...rest } = init;
       const headers: Record<string, string> = {};
@@ -421,10 +424,10 @@ describe('Open WebUI tool server', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('publishes an OpenAPI document without a key, with CORS for browser-side tool servers', async () => {
+  it('publishes an OpenAPI document without a key, with CORS restricted to the registered chat origin', async () => {
     const r = await tcall('/openapi.json', { key: null });
     assert.equal(r.status, 200);
-    assert.equal(r.headers.get('access-control-allow-origin'), '*');
+    assert.equal(r.headers.get('access-control-allow-origin'), null);
     const spec = (await r.json()) as any;
     const docker = await raw('/tools/openapi.json', { host: `host.docker.internal:${tui.port}` });
     assert.equal(JSON.parse(docker.body).servers[0].url, `http://host.docker.internal:${tui.port}/tools`, 'server URL follows the address Open WebUI used');
@@ -434,9 +437,13 @@ describe('Open WebUI tool server', () => {
     assert.deepEqual(ops.sort(), [
       'check_setup', 'compare_runs', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'rerun_failed', 'start_run', 'stop_run', 'upload_run', 'use_profile',
     ]);
-    const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000', 'access-control-request-method': 'POST' } });
+    const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:3000', 'access-control-request-method': 'POST' } });
     assert.equal(pre.status, 204);
+    assert.equal(pre.headers.get('access-control-allow-origin'), 'http://127.0.0.1:3000');
     assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
+    const foreign = await fetch(`http://127.0.0.1:${tui.port}/tools/profiles`, { headers: { origin: 'https://untrusted.example', authorization: `Bearer ${tui.toolToken}` } });
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.headers.get('access-control-allow-origin'), null);
   });
 
   it('refuses tool calls without the right key, and the browser cookie token is not accepted', async () => {
@@ -454,7 +461,10 @@ describe('Open WebUI tool server', () => {
   it('lists and selects profiles without revealing their values', async () => {
     const home = join(dir, 'home');
     const { ProfileStore } = await import('../profiles/store.js');
-    await new ProfileStore(home).write('UAT', [{ key: 'D365_PASSWORD', value: 'hunter2!' }], 'create');
+    await new ProfileStore(home).write('UAT', [
+      { key: 'D365_PASSWORD', value: 'hunter2!' }, { key: 'D365_BASE_URL', value: 'https://uat.sandbox.operations.dynamics.com' },
+      { key: 'AZDO_ORG_URL', value: 'https://dev.azure.com/org' }, { key: 'AZDO_PROJECT', value: 'p' },
+    ], 'create');
     assert.equal((await tcall('/profiles/active', { method: 'POST', body: JSON.stringify({ name: 'Nope' }) })).status, 404);
     assert.equal((await tcall('/profiles/active', { method: 'POST', body: JSON.stringify({ name: 'UAT' }) })).status, 200);
     const r = await tcall('/profiles');
@@ -488,6 +498,7 @@ describe('Open WebUI tool server', () => {
   });
 
   it('starts a run, waits for it, summarises results and uploads it from the history', async () => {
+    for (const id of ['TC-1', 'TC-2']) await new TestCaseFiles(dir).save('cases', { id, title: id, steps: [{ action: 'Read a list' }] });
     assert.equal(((await (await tcall('/results')).json()) as any).error !== undefined, true);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'devops', plan: '1;x' }) })).status, 400);
     assert.equal((await tcall('/runs', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) })).status, 200);
@@ -581,5 +592,188 @@ describe('settings handed to the commands the app starts', () => {
       lines = ((await (await ecall('/api/run')).json()) as { lines: string[] }).lines;
     }
     assert.ok(lines.includes('PROFILE=Other FROM_FILE=unset REAL=kept'), lines.join(' | '));
+  });
+});
+
+describe('atomic job reservations and native tool approval', () => {
+  let dir: string;
+  let home: string;
+  let reportDir: string;
+  let savedId: string;
+  let server: RunningUi | undefined;
+  const body = { source: 'local', local: 'cases' };
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'job-lock-'));
+    home = join(dir, 'home');
+    const store = new ProfileStore(home);
+    for (const name of ['Alpha', 'Beta']) await store.write(name, [
+      { key: 'D365_BASE_URL', value: `https://${name.toLowerCase()}.sandbox.operations.dynamics.com` },
+      { key: 'D365_COMPANY', value: 'GBSI' }, { key: 'AZDO_ORG_URL', value: 'https://dev.azure.com/example' },
+      { key: 'AZDO_PROJECT', value: 'Finance' }, { key: 'AZDO_TEST_PLAN_ID', value: '7' },
+    ], 'create');
+    await store.setActive('Alpha');
+    const profileId = await store.idOf('Alpha');
+    reportDir = join(dir, 'reports', profileId);
+    await mkdir(reportDir, { recursive: true });
+    await writeFile(join(reportDir, 'results.json'), JSON.stringify([
+      { testCaseId: 'TC-1', title: 'One', outcome: 'passed', steps: [], durationMs: 1 },
+      { testCaseId: 'TC-2', title: 'Two', outcome: 'failed', steps: [], durationMs: 1 },
+    ]));
+    savedId = (await new RunHistory(async () => reportDir).record({
+      profile: 'Alpha', profileId, status: 'failed', args: ['run', '--local', 'cases'], startedAt: new Date(Date.now() - 5000).toISOString(),
+    }, 41)).id;
+    for (const id of ['TC-1', 'TC-2']) await new TestCaseFiles(dir).save('cases', { id, title: id, steps: [{ action: 'Read a list' }] });
+    await writeFile(join(dir, 'cli.mjs'), [
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      "import { setTimeout as sleep } from 'node:timers/promises';",
+      "appendFileSync('spawned.log', process.argv.slice(2).join(' ') + '\\n');",
+      "while (!existsSync('release')) await sleep(20);",
+    ].join('\n'));
+  });
+  afterEach(async () => {
+    await server?.close();
+    server = undefined;
+    await rm(dir, { recursive: true, force: true });
+  });
+  const start = async (approveToolAction?: (action: ToolActionApproval) => Promise<boolean>, childEnv: () => NodeJS.ProcessEnv = () => process.env) => {
+    server = await startUiServer({ home, root: dir, port: 0, cliPath: join(dir, 'cli.mjs'), childEnv, approveToolAction });
+  };
+  const call = async (path: string, method = 'GET', data?: unknown): Promise<Response> => {
+    const tool = path.startsWith('/tools/');
+    return fetch(server!.url + path.slice(1), {
+      method,
+      headers: { ...(tool ? { authorization: `Bearer ${server!.toolToken}` } : { cookie: `d365fo_ui=${server!.token}`, 'x-requested-with': 'd365fo-ui' }), 'content-type': 'application/json' },
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  };
+  const wait = async (predicate: (state: any) => boolean): Promise<any> => {
+    for (let i = 0; i < 200; i++) {
+      const state = await (await call('/api/run')).json();
+      if (predicate(state)) return state;
+      await new Promise((done) => setTimeout(done, 10));
+    }
+    throw new Error('The job did not reach the expected state');
+  };
+
+  it('accepts exactly one simultaneous run/upload/rerun across the UI and tools', async () => {
+    await start(async () => true);
+    const requests = [
+      ['/api/run', { ...body, dryRun: true }], ['/tools/runs', { ...body, dryRun: true }],
+      [`/api/history/${savedId}/upload`, {}], [`/tools/history/${savedId}/upload`, {}],
+      [`/api/history/${savedId}/rerun`, { dryRun: true }], [`/tools/history/${savedId}/rerun`, { dryRun: true }],
+      ['/api/run', body], ['/tools/runs', body],
+    ] as const;
+    const replies = await Promise.all(requests.map(([path, data]) => call(path, 'POST', data)));
+    assert.deepEqual(replies.map((r) => r.status).sort(), [200, 409, 409, 409, 409, 409, 409, 409]);
+    await writeFile(join(dir, 'release'), '');
+    await wait((s) => s?.settled);
+    assert.equal((await readFile(join(dir, 'spawned.log'), 'utf8')).trim().split('\n').length, 1);
+  });
+
+  it('shows and stops a pending start before it can create a child, then releases the slot', async () => {
+    await start();
+    const entered = deferred(); const release = deferred();
+    const original = ProfileStore.prototype.idOf;
+    ProfileStore.prototype.idOf = async function (name: string) {
+      if (this.home === home) { entered.resolve(); await release.promise; }
+      return original.call(this, name);
+    };
+    try {
+      const request = call('/api/run', 'POST', body);
+      await entered.promise;
+      const pending = await (await call('/api/run')).json() as any;
+      assert.deepEqual([pending.status, pending.phase, pending.settled], ['running', 'starting', false]);
+      assert.equal((await call('/api/run', 'POST', body)).status, 409);
+      assert.equal((await call('/api/active', 'POST', { name: 'Beta' })).status, 409);
+      assert.equal(((await (await call('/api/run/stop', 'POST', {})).json()) as any).stopped, true);
+      release.resolve();
+      assert.equal((await request).status, 400);
+      await wait((s) => s?.status === 'stopped' && s.settled);
+      await assert.rejects(readFile(join(dir, 'spawned.log')), { code: 'ENOENT' });
+    } finally { release.resolve(); ProfileStore.prototype.idOf = original; }
+    await writeFile(join(dir, 'release'), '');
+    assert.equal((await call('/api/run', 'POST', body)).status, 200);
+    await wait((s) => s?.settled);
+  });
+
+  it('keeps the slot and running status until history has finished settling', async () => {
+    await start();
+    await writeFile(join(dir, 'release'), '');
+    const entered = deferred(); const release = deferred();
+    const original = RunHistory.prototype.record;
+    RunHistory.prototype.record = async function (...args: Parameters<RunHistory['record']>) {
+      if (await this.historyDir() === join(reportDir, 'history')) { entered.resolve(); await release.promise; }
+      return original.apply(this, args);
+    };
+    try {
+      assert.equal((await call('/api/run', 'POST', body)).status, 200);
+      await entered.promise;
+      const pending = await (await call('/api/run')).json() as any;
+      assert.deepEqual([pending.status, pending.phase, pending.settled], ['running', 'finalizing', false]);
+      assert.equal((await call('/api/run', 'POST', body)).status, 409);
+      assert.equal((await call(`/api/history/${savedId}/upload`, 'POST', {})).status, 409);
+      assert.equal((await call('/api/active', 'POST', { name: 'Beta' })).status, 409);
+      let finished = false;
+      const following = call('/tools/runs/current?waitSeconds=30').then((r) => { finished = true; return r; });
+      await new Promise((done) => setTimeout(done, 20));
+      assert.equal(finished, false);
+      release.resolve();
+      assert.equal(((await (await following).json()) as any).run.status, 'passed');
+      await wait((s) => s?.settled);
+    } finally { release.resolve(); RunHistory.prototype.record = original; }
+  });
+
+  it('releases a reservation after setup fails', async () => {
+    let broken = true;
+    await start(undefined, () => { if (broken) throw new Error('Simulated settings failure'); return process.env; });
+    assert.equal((await call('/api/run', 'POST', body)).status, 500);
+    await wait((s) => s?.status === 'failed' && s.settled);
+    broken = false;
+    await writeFile(join(dir, 'release'), '');
+    assert.equal((await call('/api/run', 'POST', body)).status, 200);
+    await wait((s) => s?.settled);
+  });
+
+  it('denies model-supplied confirmations without a native approver, while diagnostics remain available', async () => {
+    await start();
+    const forged = { ...body, confirmed: true, approval: 'user confirmed', userConfirmation: true };
+    assert.equal((await call('/tools/runs', 'POST', forged)).status, 403);
+    assert.equal((await call(`/tools/history/${savedId}/rerun`, 'POST', { confirmed: true })).status, 403);
+    assert.equal((await call(`/tools/history/${savedId}/upload`, 'POST', { confirmed: true, plan: '7' })).status, 403);
+    await assert.rejects(readFile(join(dir, 'spawned.log')), { code: 'ENOENT' });
+    await writeFile(join(dir, 'release'), '');
+    assert.equal((await call('/tools/runs', 'POST', { ...body, dryRun: true })).status, 200);
+    await wait((s) => s?.settled);
+    assert.throws(() => server!.setChatOrigin('https://outside.example'), /local HTTP/);
+  });
+
+  it('binds native approval to the actual profile, source and selected cases', async () => {
+    const entered = deferred(); const release = deferred();
+    let shown: ToolActionApproval | undefined;
+    await start(async (action) => { shown = action; entered.resolve(); await release.promise; return true; });
+    const request = call('/tools/runs', 'POST', { ...body, profile: 'Beta', confirmed: true });
+    try {
+      await entered.promise;
+      assert.deepEqual(shown, {
+        kind: 'run', profile: 'Alpha', environment: { url: 'https://alpha.sandbox.operations.dynamics.com', company: 'GBSI' },
+        source: { type: 'local', folder: join(dir, 'cases') }, cases: ['TC-1', 'TC-2'],
+      });
+      assert.equal((await call('/tools/profiles/active', 'POST', { name: 'Beta' })).status, 409);
+      assert.equal((await call('/api/profiles/Alpha', 'PUT', { entries: [] })).status, 409);
+      assert.equal((await call('/api/ai', 'PUT', { entries: [] })).status, 409);
+      await new TestCaseFiles(dir).save('cases', { id: 'TC-3', title: 'Added after approval', steps: [{ action: 'New action' }] });
+      release.resolve();
+      assert.equal((await request).status, 200);
+      await writeFile(join(dir, 'release'), '');
+      await wait((s) => s?.settled);
+      const args = await readFile(join(dir, 'spawned.log'), 'utf8');
+      assert.match(args, /--case TC-1,TC-2/);
+      assert.doesNotMatch(args, /TC-3/);
+    } finally { release.resolve(); }
   });
 });

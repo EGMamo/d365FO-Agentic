@@ -1,11 +1,13 @@
 name: desktop
 
 # Builds the desktop installers (macOS .dmg, Windows .exe). Tag and manual runs keep them as workflow artifacts.
-# Unsigned until signing secrets are added; see desktop/README.md.
+# Main/PR builds are development artifacts; tag builds require signing/notarization credentials.
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+    paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop.yml']
   pull_request:
     paths: ['src/**', 'web/**', 'desktop/**', 'package*.json', 'tsconfig.json', '.github/workflows/desktop.yml']
 
@@ -24,8 +26,10 @@ jobs:
         include:
           - os: macos-latest
             files: desktop/release/*.dmg
+            signing: MACOS
           - os: windows-latest
             files: desktop/release/*.exe
+            signing: WINDOWS
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +41,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             desktop/package-lock.json
+            desktop/runtime/package-lock.json
 
       # Gate installer creation on checks, including tag-triggered builds.
       - run: npm ci
@@ -48,17 +53,51 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Build the installer
+      - name: Build development installer
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         working-directory: desktop
         env:
-          # No signing identity yet: build unsigned instead of failing.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist
+
+      - name: Build signed release installer
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ matrix.signing == 'MACOS' && secrets.MACOS_CSC_LINK || secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.signing == 'MACOS' && secrets.MACOS_CSC_KEY_PASSWORD || secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist:release
 
       - name: Check the bundled Playwright starts under the app's Electron
         shell: bash
         working-directory: desktop
         run: ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron app/node_modules/@playwright/mcp/cli.js --version
+
+      - name: Check bundled browser sign-in CLI under Electron
+        shell: bash
+        working-directory: desktop
+        run: ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron app/node_modules/playwright/cli.js --version
+
+      - name: Exercise the packaged app on the target platform
+        working-directory: desktop
+        run: npm run smoke
+
+      - name: Keep packaged-app smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-${{ matrix.os }}
+          path: |
+            desktop/release/smoke/screenshots/
+            desktop/release/smoke/*.log
+            desktop/release/smoke/*.txt
+            desktop/release/smoke/*.md
+          retention-days: 7
+          if-no-files-found: warn
+        continue-on-error: true
 
       # Pull requests only check that the installer builds; tag and manual builds keep it.
       - uses: actions/upload-artifact@v4

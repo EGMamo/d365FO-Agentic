@@ -2,7 +2,7 @@
   "name": "d365fo-agentic",
   "version": "0.1.0",
   "description": "Desktop D365 Finance & Operations test assistant with Open WebUI and Claude.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "d365fo-agent": "./dist/cli/index.js"
@@ -27,6 +27,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
+    "playwright": "1.64.0-alpha-1789764292000",
     "undici": "^6.29.1",
     "zod": "^4.6.7"
   },

@@ -70,6 +70,28 @@ describe('anthropic prompt caching', () => {
   });
 });
 
+describe('anthropic request cancellation', () => {
+  it('passes the run signal to the SDK request and rejects late responses after cancellation', async () => {
+    const controller = new AbortController();
+    const client = { messages: { async create(_params: never, options: { signal?: AbortSignal }) {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      return { content: [], stop_reason: 'end_turn', usage: {} };
+    } } };
+    const llm = new AnthropicProvider({ model: 'test', maxTokens: 1, temperature: 0, client: client as never });
+    await assert.rejects(llm.complete({ messages: [], signal: controller.signal }), { name: 'AbortError' });
+  });
+
+  it('does not contact the SDK for an already cancelled run', async () => {
+    const controller = new AbortController(); controller.abort();
+    let reached = false;
+    const client = { messages: { async create() { reached = true; return { content: [], stop_reason: 'end_turn', usage: {} }; } } };
+    const llm = new AnthropicProvider({ model: 'test', maxTokens: 1, temperature: 0, client: client as never });
+    await assert.rejects(llm.complete({ messages: [], signal: controller.signal }), { name: 'AbortError' });
+    assert.equal(reached, false);
+  });
+});
+
 describe('custom Claude API URL', () => {
   it('accepts the address in the forms people paste it', () => {
     for (const url of ['https://gw.example/anthropic', 'https://gw.example/anthropic/', ' https://gw.example/anthropic/v1 ', 'https://gw.example/anthropic/v1/messages', 'https://gw.example/anthropic/V1/']) {

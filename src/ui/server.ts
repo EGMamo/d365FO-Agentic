@@ -13,7 +13,7 @@ import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { AiSettings } from '../profiles/ai.js';
 import { discoverTestCases } from '../core/runner.js';
-import { TestCaseFileError, TestCaseFiles } from '../testing/store.js';
+import { resolveCaseDir, TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
 import { compareResults, failedCaseIds, MAX_WAIT_SECONDS, nextStep, openApiSpec, runProgress, runSource, summarizeResults, TOOLS_PREFIX } from './tools.js';
 import { AzureDevOpsClient } from '../devops/client.js';
@@ -72,6 +72,18 @@ interface RunState {
   stopRequested?: boolean;
   /** Set once the job has ended and its history entry is written, so its results can be read. */
   settled?: boolean;
+  phase: 'starting' | 'running' | 'finalizing' | 'finished';
+}
+
+export interface ToolActionApproval {
+  kind: 'run' | 'rerun' | 'upload';
+  profile: string | null;
+  environment?: { url: string; company: string };
+  source?: { type: 'local'; folder: string } | { type: 'devops'; plan?: string; suite?: string };
+  cases: string[];
+  runId?: string;
+  plan?: string;
+  devops?: { organization: string; project: string };
 }
 
 export interface UiServerOptions {
@@ -92,6 +104,8 @@ export interface UiServerOptions {
   modelProvider?: (cfg: AppConfig) => LlmProvider;
   /** Builds the Azure DevOps client for the profile in use (test plans and suites). Tests pass a fake. */
   devopsClient?: (cfg: AppConfig) => Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
+  /** Native, non-model approval for live chat runs/reruns and uploads. Without it those tool actions are denied. */
+  approveToolAction?: (action: ToolActionApproval) => Promise<boolean>;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -106,6 +120,8 @@ export interface RunningUi {
   openUrl: string;
   /** Bearer token for the Open WebUI tool server at `<url>tools`. */
   toolToken: string;
+  /** Register the one browser origin allowed to use the chat/model bridges. */
+  setChatOrigin: (origin: string) => void;
   close: () => Promise<void>;
 }
 
@@ -230,6 +246,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const caseFiles = new TestCaseFiles(repoRoot);
   let run: RunState | undefined;
   let runSeq = 0;
+  let chatOrigin: string | undefined;
   const listeners = new Set<ServerResponse>();
   /** get_run calls waiting for the current job to settle. */
   const settleWaiters = new Set<() => void>();
@@ -238,7 +255,36 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of listeners) res.write(msg);
   };
-  const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.status, args: r.args, profile: r.profile ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+  const jobBusy = (): boolean => Boolean(run && !run.settled);
+  const publicRun = (r: RunState) => ({ id: r.id, kind: r.kind, status: r.settled ? r.status : 'running', phase: r.phase, args: r.args, profile: r.profile ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, exitCode: r.exitCode });
+  type StartResult = { error?: string; status?: number; busy?: boolean; run?: ReturnType<typeof publicRun>; cases?: string[] };
+  const settleJob = (state: RunState): void => {
+    state.finishedAt ??= new Date().toISOString();
+    state.phase = 'finished';
+    state.settled = true;
+    history.invalidate();
+    for (const wake of [...settleWaiters]) wake();
+    broadcast('status', { ...publicRun(state), settled: true, savedAs: savedRunId(state) });
+  };
+  /** Claim the slot before the first await, including source lookup and native approval. */
+  async function reservedJob(kind: RunState['kind'], action: (state: RunState) => Promise<StartResult>): Promise<StartResult> {
+    if (jobBusy()) return { error: 'A run is already in progress', busy: true };
+    const state: RunState = { id: ++runSeq, kind, status: 'running', phase: 'starting', args: [], startedAt: new Date().toISOString(), lines: [], base: 0 };
+    run = state;
+    broadcast('status', publicRun(state));
+    try {
+      const result = await action(state);
+      if (result.error) {
+        state.status = state.stopRequested ? 'stopped' : 'failed';
+        settleJob(state);
+      }
+      return result;
+    } catch (e) {
+      state.status = state.stopRequested ? 'stopped' : 'failed';
+      settleJob(state);
+      throw e;
+    }
+  }
   /** The run as the app page shows it: status, per-case progress and the log lines after `since` (absolute line number). */
   const runForPage = (r: RunState, since?: number) => {
     const total = r.base + r.lines.length;
@@ -269,33 +315,72 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     });
   }
 
-  async function startRun(body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
-    if (['model', 'retries', 'upload', 'tags', 'modules', 'maxPriority', 'sortByPriority'].some((key) => body[key] !== undefined)) return { error: 'Choose cases and use the shared AI connection. Upload a selected result after the run.' };
-    if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
+  function runArguments(body: Record<string, unknown>): { args: string[]; cases: string[]; error?: string } {
+    const bad = (error: string) => ({ args: [], cases: [], error });
+    if (['model', 'retries', 'upload', 'tags', 'modules', 'maxPriority', 'sortByPriority'].some((key) => body[key] !== undefined)) return bad('Choose cases and use the shared AI connection. Upload a selected result after the run.');
     const args = ['run'];
     const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
     if (body.source === 'local') {
       const dir = str('local');
-      if (!dir) return { error: 'Choose a local test-case directory' };
+      if (!dir) return bad('Choose a local test-case directory');
+      resolveCaseDir(repoRoot, dir);
       args.push('--local', dir);
-    } else {
+    } else if (body.source === 'devops') {
       const plan = str('plan');
       const suite = str('suite');
-      for (const [name, v] of [['plan', plan], ['suite', suite]]) if (v && !ID.test(v)) return { error: `Invalid ${name} id` };
+      for (const [name, v] of [['plan', plan], ['suite', suite]]) if (v && !/^\d+$/.test(v)) return bad(`Invalid ${name} id`);
       if (plan) args.push('--plan', plan);
       if (suite) args.push('--suite', suite);
-    }
+    } else return bad('Choose a local or Azure DevOps source.');
     const caseIds = [str('caseId'), ...(Array.isArray(body.cases) ? (body.cases as unknown[]).map((c) => (typeof c === 'string' ? c.trim() : '')) : [])].filter(Boolean);
-    if (caseIds.some((c) => !ID.test(c))) return { error: 'Invalid case id' };
+    if (caseIds.some((c) => !ID.test(c))) return bad('Invalid case id');
     if (caseIds.length) args.push('--case', caseIds.join(','));
     if (body.dryRun === true) args.push('--dry-run');
     args.push('--fail-on', 'failed,blocked');
-    return startCli('run', args);
+    return { args, cases: [...new Set(caseIds)] };
   }
 
-  /** Uploads a run kept in the history to Azure DevOps, using the profile in use now. */
-  async function startUpload(id: string, body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
-    if (run?.status === 'running') return { error: 'A run is already in progress', busy: true };
+  async function configForProfile(profile: string | undefined): Promise<AppConfig> {
+    return parseConfig({ ...(profile ? Object.fromEntries((await store.read(profile, true)).map((e) => [e.key, e.value])) : {}), ...childEnv() });
+  }
+
+  async function launchRun(state: RunState, body: Record<string, unknown>, fromTools: boolean, rerunId?: string): Promise<StartResult> {
+    const parsed = runArguments(body);
+    if (parsed.error) return { error: parsed.error };
+    const active = await store.getActive();
+    state.profile = active;
+    state.args = parsed.args;
+    if (fromTools && body.dryRun !== true) {
+      if (!opts.approveToolAction) return { error: 'A native approval is required for live chat runs. Start this run from Tests instead.', status: 403 };
+      const cfg = await configForProfile(active);
+      if (!active || !cfg.D365_BASE_URL) return { error: 'Choose an environment with an F&O address before starting a live chat run.' };
+      const source: NonNullable<ToolActionApproval['source']> = body.source === 'local'
+        ? { type: 'local', folder: resolveCaseDir(repoRoot, String(body.local).trim()) }
+        : { type: 'devops', plan: String(body.plan || cfg.AZDO_TEST_PLAN_ID || ''), suite: String(body.suite || cfg.AZDO_TEST_SUITE_ID || '') };
+      const available = source.type === 'local'
+        ? (await caseFiles.list(String(body.local).trim())).filter((c) => !c.error)
+        : await discoverTestCases(cfg, { plan: source.plan, suite: source.suite });
+      const known = new Set(available.map((c) => c.id));
+      const cases = parsed.cases.length ? parsed.cases : [...known];
+      if (!cases.length || cases.some((id) => !known.has(id))) return { error: 'The selected cases are missing from that source. Load the cases again before running.' };
+      const approved = await opts.approveToolAction({ kind: rerunId ? 'rerun' : 'run', profile: active, environment: { url: cfg.D365_BASE_URL, company: cfg.D365_COMPANY }, source, cases, ...(rerunId ? { runId: rerunId } : {}) });
+      if (!approved) return { error: 'The live run was not approved.', status: 403 };
+      // Bind an "all cases" approval to the exact selection shown in the native dialog.
+      if (!parsed.cases.length) parsed.args.push('--case', cases.join(','));
+    }
+    return startCli(state, parsed.args, active);
+  }
+
+  async function startRun(body: Record<string, unknown>, fromTools = false): Promise<StartResult> {
+    const parsed = runArguments(body);
+    if (parsed.error) return { error: parsed.error };
+    return reservedJob('run', (state) => launchRun(state, body, fromTools));
+  }
+
+  /** Upload a saved run using its original environment, reserving the slot during all lookups. */
+  async function startUpload(id: string, body: Record<string, unknown>, fromTools = false): Promise<StartResult> {
+    return reservedJob('upload', async (state) => {
+    if (fromTools && !opts.approveToolAction) return { error: 'A native approval is required for chat uploads. Upload this run from Results instead.', status: 403 };
     const input = await history.file(id, 'results.json');
     if (!input) return { error: 'That run has no results to upload.' };
     // Always the profile the run belongs to, whichever profile is in use now.
@@ -308,27 +393,42 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const args = ['upload', '--input', input];
     const plan = typeof body.plan === 'string' ? body.plan.trim() : '';
     if (plan) {
-      if (!ID.test(plan)) return { error: 'Invalid plan id' };
+      if (!/^\d+$/.test(plan)) return { error: 'Invalid plan id' };
       args.push('--plan', plan);
     }
-    return startCli('upload', args, owner, async (state) => {
+    state.args = args;
+    state.profile = owner ?? (await store.getActive());
+    if (fromTools) {
+      const cfg = await configForProfile(state.profile);
+      const selectedPlan = plan || cfg.AZDO_TEST_PLAN_ID;
+      if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT || !selectedPlan || !/^\d+$/.test(selectedPlan)) return { error: 'The saved run needs a configured Azure DevOps organization, project and numeric test plan.' };
+      if (!plan) args.push('--plan', selectedPlan);
+      const results = JSON.parse(await readFile(input, 'utf8')) as TestResult[];
+      const approved = await opts.approveToolAction!({ kind: 'upload', profile: state.profile ?? null, cases: results.map((r) => r.testCaseId), runId: id, plan: selectedPlan, devops: { organization: cfg.AZDO_ORG_URL, project: cfg.AZDO_PROJECT } });
+      if (!approved) return { error: 'The upload was not approved.', status: 403 };
+    }
+    return startCli(state, args, state.profile, async (state) => {
       const line = state.lines.find((l) => /^Uploaded run #\d+/.test(l));
       const m = line && /^Uploaded run #(\d+): (\S+)/.exec(line);
       if (state.status === 'passed') await history.update(id, { upload: { runId: m ? Number(m[1]) : undefined, url: m ? m[2] : undefined, at: new Date().toISOString() } });
     });
+    });
   }
 
   async function startCli(
-    kind: RunState['kind'],
+    state: RunState,
     args: string[],
     profile?: string,
     onDone?: (state: RunState) => Promise<void>,
-  ): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun> }> {
+  ): Promise<StartResult> {
     const active = profile ?? (await store.getActive());
     if (active) await store.idOf(active); // older profiles get their id (and report folder) before the run reads the file
     const secrets = active ? await profileSecrets(store, active, childEnv()) : (await ai.read(true)).filter((e) => isSecretKey(e.key)).map((e) => e.value);
-    const state: RunState = { id: ++runSeq, kind, status: 'running', args, profile: active, startedAt: new Date().toISOString(), lines: [], base: 0 };
-    run = state;
+    if (state.stopRequested) return { error: 'The job was stopped before it started.' };
+    state.profile = active;
+    state.args = args;
+    state.phase = 'running';
+    const kind = state.kind;
     const push = (line: string): void => {
       let clean = line;
       for (const s of secrets) clean = clean.split(s).join('***');
@@ -361,12 +461,13 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       state.exitCode = code;
       state.finishedAt = new Date().toISOString();
       state.status = state.stopRequested ? 'stopped' : code === 0 ? 'passed' : 'failed';
+      state.phase = 'finalizing';
       state.child = undefined;
       const finish = async (): Promise<void> => {
         try {
           // The run saves itself to the history; only a run that failed before it could is recorded here.
           if (kind === 'run' && !state.lines.some((l) => /^Saved to run history as \d{8}-\d{6}-\d+\./.test(l))) {
-            const meta = await new RunHistory(reportDir).record(
+            const meta = await new RunHistory(async () => active ? reportDirOf(active) : resolve(repoRoot, 'reports')).record(
               { status: state.status, args, profile: active ?? null, profileId: active ? await store.idOf(active) : null, origin: 'app', startedAt: state.startedAt, finishedAt: state.finishedAt },
               state.id,
             );
@@ -376,10 +477,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         } catch (e) {
           console.error(`[ui] could not update the run history: ${(e as Error).message}`);
         }
-        state.settled = true;
-        history.invalidate();
-        for (const wake of [...settleWaiters]) wake();
-        broadcast('status', { ...publicRun(state), settled: true, savedAs: savedRunId(state) });
+        settleJob(state);
       };
       void finish();
     });
@@ -389,8 +487,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
 
   function stopRun(): boolean {
     const child = run?.child;
-    if (!run || !child?.pid) return false;
+    if (!run || run.settled || run.phase === 'finalizing') return false;
     run.stopRequested = true;
+    if (!child?.pid) return true;
     // The run spawns MCP servers and a browser; signal the whole process group.
     const kill = (sig: NodeJS.Signals): void => {
       try {
@@ -507,7 +606,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   /** Starts a run of the failed and blocked cases of a run from the history, from the source it read them from. */
-  async function rerunFailed(id: string, body: Record<string, unknown>): Promise<{ error?: string; busy?: boolean; run?: ReturnType<typeof publicRun>; cases?: string[] }> {
+  async function rerunFailed(id: string, body: Record<string, unknown>, fromTools = false): Promise<StartResult> {
+    return reservedJob('run', async (state) => {
     const meta = await history.meta(id);
     if (!meta) return { error: 'No such run.' };
     const raw = await reportFile('results.json', id);
@@ -516,8 +616,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (!cases.length) return { error: 'Every case of that run passed; there is nothing to rerun.' };
     const source = runSource(meta.args ?? []);
     if (!source) return { error: 'The source of that run is not known. Load its cases in Tests and run them from there.' };
-    const started = await startRun({ ...source, cases, dryRun: body.dryRun === true });
+    const started = await launchRun(state, { ...source, cases, dryRun: body.dryRun === true }, fromTools, id);
     return { ...started, cases };
+    });
   }
 
   async function compareRun(id: string, withId?: string | null): Promise<{ error?: string; status: number; comparison?: ReturnType<typeof compareResults> }> {
@@ -561,8 +662,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return path && existsSync(path) ? readFile(path, 'utf8') : undefined;
   }
 
-  /** Bearer tokens carry no ambient browser credentials, so any origin may call (Open WebUI user tool servers call from the browser). */
-  const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600' };
+  /** Browser calls are limited to the registered local chat origin; token-authenticated CLI calls have no Origin. */
+  const CORS = { 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600', Vary: 'Origin' };
   const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' });
   const intParam = (url: URL, name: string, def: number, max: number): number => {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
@@ -605,6 +706,10 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   /** The Open WebUI tool server: the same actions as the app, for a chat model. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
     const path = url.pathname.slice(TOOLS_PREFIX.length) || '/';
+    if (req.headers.origin) {
+      if (req.headers.origin !== chatOrigin) return send(res, 403, { error: 'Unexpected chat origin.' });
+      res.setHeader('Access-Control-Allow-Origin', chatOrigin);
+    }
     if (method === 'OPTIONS') {
       res.writeHead(204, CORS);
       return void res.end();
@@ -618,7 +723,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
 
     if (method === 'GET' && path === '/profiles') return tsend(res, 200, { active: (await store.getActive()) ?? null, profiles: await store.list() });
     if (method === 'POST' && path === '/profiles/active') {
-      if (run?.status === 'running') return tsend(res, 409, { error: 'Stop the current run before switching environments.' });
+      if (jobBusy()) return tsend(res, 409, { error: 'Stop the current run before switching environments.' });
       const body = await readJson(req);
       if (typeof body.name !== 'string' || !body.name) return tsend(res, 400, { error: 'Give the profile name.' });
       await store.read(body.name); // 404 for an unknown profile
@@ -632,8 +737,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (method === 'GET') return tsend(res, 200, await caseFiles.read(dir, file));
     }
     if (method === 'POST' && path === '/runs') {
-      const result = await startRun(await readJson(req));
-      return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
+      const result = await startRun(await readJson(req), true);
+      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? 400 : 200), result);
     }
     if (method === 'GET' && path === '/runs/current') {
       if (run) await waitToSettle(run, intParam(url, 'waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, res);
@@ -659,8 +764,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
     const rr = /^\/history\/([\w-]+)\/rerun$/.exec(path);
     if (method === 'POST' && rr) {
-      const result = await rerunFailed(rr[1], await readJson(req));
-      return tsend(res, result.busy ? 409 : result.error ? (result.error === 'No such run.' ? 404 : 400) : 200, result);
+      const result = await rerunFailed(rr[1], await readJson(req), true);
+      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'No such run.' ? 404 : 400) : 200), result);
     }
     const cmp = /^\/history\/([\w-]+)\/compare$/.exec(path);
     if (method === 'GET' && cmp) {
@@ -669,9 +774,8 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
     const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
     if (method === 'POST' && up) {
-      if (!(await history.meta(up[1]))) return tsend(res, 404, { error: 'No such run.' });
-      const result = await startUpload(up[1], await readJson(req));
-      return tsend(res, result.busy ? 409 : result.error ? 400 : 200, result);
+      const result = await startUpload(up[1], await readJson(req), true);
+      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'That run has no results to upload.' ? 404 : 400) : 200), result);
     }
     return tsend(res, 404, { error: 'Not found.' });
   }
@@ -693,6 +797,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const url = new URL(req.url ?? '/', `http://${hostHeader}`);
     const method = req.method ?? 'GET';
     if (url.pathname.startsWith('/model/v1/')) {
+      if (req.headers.origin && req.headers.origin !== chatOrigin) return send(res, 403, { error: { message: 'Unexpected chat origin.' } });
       const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
       if (!auth || !same(auth[1], toolToken)) return send(res, 401, { error: { message: 'Wrong model-bridge token.' } });
       try {
@@ -740,11 +845,12 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       }
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
-        if (run?.status === 'running') return send(res, 409, { error: 'A run is in progress. Wait for it to finish or stop it before switching profiles.' });
+        if (jobBusy()) return send(res, 409, { error: 'A run is in progress. Wait for it to finish or stop it before switching profiles.' });
         await store.setActive(typeof body.name === 'string' ? body.name : undefined);
         return send(res, 200, { active: (await store.getActive()) ?? null });
       }
       if (method === 'POST' && url.pathname === '/api/profiles') {
+        if (jobBusy()) return send(res, 409, { error: 'Wait for the current job before changing environments.' });
         const body = await readJson(req);
         const name = String(body.name ?? '');
         if (typeof body.copyFrom === 'string' && body.copyFrom) await store.duplicate(body.copyFrom, name);
@@ -754,6 +860,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login|\/session-login)?$/.exec(url.pathname);
       if (m) {
         const name = decodeURIComponent(m[1]);
+        if (method !== 'GET' && jobBusy()) return send(res, 409, { error: 'Wait for the current job before changing environments.' });
         if (m[2] === '/check' && method === 'POST') return send(res, 200, await checkProfile(name));
         if (m[2] === '/session-login' && method === 'POST') return send(res, 200, await sessionLogin(name));
         // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
@@ -776,7 +883,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (url.pathname === '/api/ai') {
         if (method === 'GET') return send(res, 200, { entries: await ai.read() });
         if (method === 'PUT') {
-          if (run?.status === 'running') return send(res, 409, { error: 'Wait for the current run before changing the AI connection.' });
+          if (jobBusy()) return send(res, 409, { error: 'Wait for the current run before changing the AI connection.' });
           await ai.write((await readJson(req)).entries);
           return send(res, 200, { saved: true });
         }
@@ -794,7 +901,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       }
       if (method === 'POST' && url.pathname === '/api/run') {
         const result = await startRun(await readJson(req));
-        return send(res, result.busy ? 409 : result.error ? 400 : 200, result);
+        return send(res, result.busy ? 409 : result.status ?? (result.error ? 400 : 200), result);
       }
       if (method === 'POST' && url.pathname === '/api/run/stop') {
         return send(res, 200, { stopped: stopRun() });
@@ -840,7 +947,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       const hx = /^\/api\/history\/([\w-]+)\/(rerun|compare)$/.exec(url.pathname);
       if (hx && hx[2] === 'rerun' && method === 'POST') {
         const result = await rerunFailed(hx[1], await readJson(req));
-        return send(res, result.busy ? 409 : result.error ? (result.error === 'No such run.' ? 404 : 400) : 200, result);
+        return send(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'No such run.' ? 404 : 400) : 200), result);
       }
       if (hx && hx[2] === 'compare' && method === 'GET') {
         const result = await compareRun(hx[1], url.searchParams.get('with'));
@@ -848,11 +955,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       }
       const hm = /^\/api\/history\/([\w-]+)(\/upload)?$/.exec(url.pathname);
       if (hm) {
-        if (!(await history.meta(hm[1]))) return send(res, 404, { error: 'No such run.' });
         if (hm[2] && method === 'POST') {
           const result = await startUpload(hm[1], await readJson(req));
-          return send(res, result.busy ? 409 : result.error ? 400 : 200, result);
+          return send(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'That run has no results to upload.' ? 404 : 400) : 200), result);
         }
+        if (!(await history.meta(hm[1]))) return send(res, 404, { error: 'No such run.' });
         if (!hm[2] && method === 'DELETE') return send(res, 200, { deleted: await history.delete(hm[1]) });
       }
       if (url.pathname === '/api/testcases') {
@@ -911,6 +1018,11 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     url,
     openUrl: `${url}?token=${token}`,
     toolToken,
+    setChatOrigin: (origin: string) => {
+      const parsed = new URL(origin);
+      if (parsed.protocol !== 'http:' || !isLoopback(parsed.hostname) || parsed.origin !== origin) throw new Error('The chat origin must be an exact local HTTP origin.');
+      chatOrigin = origin;
+    },
     close: () =>
       new Promise((resolve) => {
         stopRun();

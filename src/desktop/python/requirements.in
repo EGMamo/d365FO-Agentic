@@ -1,0 +1,3 @@
+# Direct runtime requirements; resolve with the pinned uv version in desktop/package.json.
+open-webui==0.11.4
+typer

@@ -3,6 +3,10 @@ import { statSync } from 'node:fs';
 import { chmod, mkdir, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import type { AppConfig } from '../config/index.js';
+import { packageCommand } from '../runtime/bundled.js';
+
+/** Must match the Playwright version used by the pinned desktop MCP. */
+export const PLAYWRIGHT_SESSION_PACKAGE = 'playwright@1.64.0-alpha-1789764292000';
 
 /**
  * Optional login via a saved browser session (Playwright storage state) instead
@@ -182,12 +186,16 @@ export async function probeSession(
 }
 
 export function sessionLoginArgs(cfg: Pick<AppConfig, 'PW_BROWSER'>, url: string, out: string): string[] {
-  return ['-y', 'playwright@latest', 'open', '--browser', cfg.PW_BROWSER, `--save-storage=${out}`, url];
+  return ['open', '--browser', cfg.PW_BROWSER, `--save-storage=${out}`, url];
+}
+
+export function sessionCommand(args: string[], find?: Parameters<typeof packageCommand>[4]): { command: string; args: string[] } {
+  return packageCommand('playwright', PLAYWRIGHT_SESSION_PACKAGE, 'playwright', args, find);
 }
 
 function runInteractive(command: string, args: string[]): Promise<number | null> {
   return new Promise((res, rej) => {
-    const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32' });
+    const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32' && command === 'npx' });
     child.on('error', rej);
     child.on('close', (code) => res(code));
   });
@@ -205,9 +213,11 @@ export async function interactiveSessionLogin(
   if (!cfg.D365_BASE_URL) throw new Error('D365_BASE_URL is required for session-login');
   const path = resolve(out);
   await mkdir(dirname(path), { recursive: true });
-  const installCode = await run('npx', ['-y', 'playwright@latest', 'install', cfg.PW_BROWSER]);
+  const install = sessionCommand(['install', cfg.PW_BROWSER]);
+  const installCode = await run(install.command, install.args);
   if (installCode !== 0) throw new Error(`Installing the ${cfg.PW_BROWSER} browser failed (exit ${installCode})`);
-  const code = await run('npx', sessionLoginArgs(cfg, cfg.D365_BASE_URL, path));
+  const open = sessionCommand(sessionLoginArgs(cfg, cfg.D365_BASE_URL, path));
+  const code = await run(open.command, open.args);
   if (code !== 0) throw new Error(`The browser exited with code ${code}; no session was saved`);
   try {
     await chmod(path, 0o600);

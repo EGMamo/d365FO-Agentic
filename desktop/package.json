@@ -3,20 +3,23 @@
   "private": true,
   "version": "0.1.0",
   "description": "Desktop app and installer for the D365FO Agent: Open WebUI chat plus the settings app in one window, no Docker or Node needed.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "stage": "node scripts/stage.mjs",
+    "lock:runtime": "node scripts/lock-runtime.mjs",
     "uv": "node scripts/fetch-uv.mjs",
     "start": "npm run stage && electron app",
-    "dist": "npm run stage && npm run uv && electron-builder --publish never"
+    "dist": "npm run stage && npm run uv && electron-builder --publish never",
+    "dist:release": "node scripts/check-release.mjs && npm run stage && npm run uv && electron-builder --config electron-builder.release.yml --publish never",
+    "smoke": "node scripts/smoke.mjs"
   },
   "bundle": {
     "playwrightMcp": "0.0.82",
     "uv": "0.12.18"
   },
   "devDependencies": {
-    "electron": "44.4.5",
+    "electron": "44.10.0",
     "electron-builder": "26.16.1"
   }
 }

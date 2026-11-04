@@ -1,0 +1,22 @@
+{
+  "name": "d365fo-agent",
+  "productName": "D365FO Agent",
+  "version": "0.1.0",
+  "description": "Desktop D365 Finance & Operations test assistant with Open WebUI and Claude.",
+  "license": "Apache-2.0",
+  "author": "D365FO Agent contributors",
+  "private": true,
+  "type": "module",
+  "main": "shell/main.mjs",
+  "desktopName": "d365fo-agent.desktop",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "playwright": "1.64.0-alpha-1789764292000",
+    "undici": "^6.29.1",
+    "zod": "^4.6.7",
+    "@playwright/mcp": "0.0.82"
+  }
+}

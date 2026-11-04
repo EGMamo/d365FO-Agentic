@@ -11,7 +11,7 @@ const EPHEMERAL = { cache_control: { type: 'ephemeral' } } as const;
 
 /** The slice of the SDK client this adapter uses; tests inject a fake. */
 export interface AnthropicClientLike {
-  messages: { create(params: never): Promise<Anthropic.Message> };
+  messages: { create(params: never, options?: { signal?: AbortSignal }): Promise<Anthropic.Message> };
 }
 
 /**
@@ -65,6 +65,7 @@ export class AnthropicProvider implements LlmProvider {
   }
 
   async complete(req: LlmCompleteRequest): Promise<LlmCompleteResponse> {
+    req.signal?.throwIfAborted();
     const anthropicMessages: Anthropic.MessageParam[] = [];
     for (const m of req.messages) {
       if (m.role === 'system') continue; // handled via top-level `system`
@@ -109,7 +110,8 @@ export class AnthropicProvider implements LlmProvider {
         input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
       })),
     };
-    const response = await this.client.messages.create(params as never);
+    const response = await this.client.messages.create(params as never, { signal: req.signal });
+    req.signal?.throwIfAborted();
 
     let text = '';
     const toolCalls: LlmToolCall[] = [];
