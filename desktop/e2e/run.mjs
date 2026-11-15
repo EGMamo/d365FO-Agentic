@@ -189,6 +189,12 @@ try {
       if (active !== 'e2e') throw new Error(`active profile is ${active}`);
       // The calls above bypass the page's own form, so let it re-read the state as it does after a save.
       await settings.evaluate(() => refresh());
+      // On a fresh home the first-run wizard opens itself as a modal; dismiss it like a user would,
+      // or it intercepts every click on the settings form that follows.
+      await settings.evaluate(() => {
+        const w = document.querySelector('#wizard');
+        if (w?.open) w.close();
+      });
     });
 
     await check('Settings save through the form and survive a reload', async () => {
