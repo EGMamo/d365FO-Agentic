@@ -51,6 +51,8 @@ npm run build
 npm run ui -- --no-open
 ```
 
+Playwright is pinned to the exact `1.64.0-alpha` build that the bundled `@playwright/mcp` (see `desktop/package.json` → `bundle.playwrightMcp`) depends on, so the whole stack runs one Playwright. Bump both together, or `npm audit`/install will resolve two conflicting copies.
+
 `ui` starts the local Tests/Results/Settings pages for development. The packaged desktop app supplies Open WebUI Chat; the browser-only UI has no second chat engine. See [docs/openwebui.md](docs/openwebui.md).
 
 Internal CLI examples:
