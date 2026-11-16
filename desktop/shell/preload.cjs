@@ -1,4 +1,4 @@
-// Gives the side strip (rail.html) and the start screen (splash.html) their few calls into the main process; nothing else is exposed.
+// Gives the side strip (rail.html) its few calls into the main process; no Node APIs are exposed to the app page.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('rail', {

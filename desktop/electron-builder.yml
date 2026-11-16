@@ -1,4 +1,4 @@
-# Builds the installer from app/ (written by scripts/stage.mjs) and the uv binary in resources/ (scripts/fetch-uv.mjs).
+# Builds the installer from app/ (written by scripts/stage.mjs).
 appId: com.d365fo.agent
 productName: D365FO Agent
 directories:
@@ -9,9 +9,7 @@ directories:
 asar: false
 # No auto-update feed yet.
 publish: null
-extraResources:
-  - from: resources/uv/${os}-${arch}
-    to: uv
+# No Python, uv or other first-launch runtime downloads are required.
 mac:
   category: public.app-category.developer-tools
   target:

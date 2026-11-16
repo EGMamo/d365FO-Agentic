@@ -12,12 +12,12 @@ on:
         type: choice
         options: [arm64, x64]
         default: arm64
-      openwebui:
-        description: Wait for Open WebUI to install and start in the Chat page
+      model:
+        description: Send a real Chat request after saving the E2E Anthropic key
         type: boolean
-        default: true
+        default: false
       fresh:
-        description: Delete the app's data folder first, so Open WebUI installs from scratch as on a new computer
+        description: Delete the app's data folder first, including its conversations and legacy migration state
         type: boolean
         default: false
   pull_request:
@@ -85,7 +85,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npm run stage; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          node scripts/fetch-uv.mjs "win-$env:ARCH"; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # The app needs no Python/uv runtime; build directly from the staged Node application.
           npx electron-builder --win nsis "--$env:ARCH" --publish never; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Install it silently
@@ -101,7 +101,7 @@ jobs:
       - name: Start the app and drive it
         env:
           E2E_APP: ${{ env.INSTALL_DIR }}\D365FO Agent.exe
-          E2E_OPENWEBUI: ${{ github.event_name != 'workflow_dispatch' || inputs.openwebui }}
+          E2E_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model }}
           E2E_ANTHROPIC_API_KEY: ${{ secrets.E2E_ANTHROPIC_API_KEY }}
           E2E_D365_BASE_URL: ${{ secrets.E2E_D365_BASE_URL }}
           E2E_D365_USERNAME: ${{ secrets.E2E_D365_USERNAME }}

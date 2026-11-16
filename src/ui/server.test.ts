@@ -87,7 +87,7 @@ describe('settings web server', () => {
       })).status, 403);
     }
     assert.equal((await call('GET', `/?token=${encodeURIComponent(multibyte)}`, { auth: false })).status, 403);
-    assert.equal((await call('GET', '/model/v1/models', {
+    assert.equal((await call('GET', '/tools/profiles', {
       auth: false, headers: { authorization: `Bearer ${'é'.repeat(ui.toolToken.length)}` },
     })).status, 401);
     assert.equal((await call('GET', '/api/state')).status, 200);
@@ -369,7 +369,7 @@ describe('test-case editor, run history and upload', () => {
   });
 });
 
-describe('Open WebUI tool server', () => {
+describe('OpenAPI integration endpoint', () => {
   const FAKE_CLI = [
     "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
     "const args = process.argv.slice(2);",
@@ -430,7 +430,7 @@ describe('Open WebUI tool server', () => {
     assert.equal(r.headers.get('access-control-allow-origin'), null);
     const spec = (await r.json()) as any;
     const docker = await raw('/tools/openapi.json', { host: `host.docker.internal:${tui.port}` });
-    assert.equal(JSON.parse(docker.body).servers[0].url, `http://host.docker.internal:${tui.port}/tools`, 'server URL follows the address Open WebUI used');
+    assert.equal(JSON.parse(docker.body).servers[0].url, `http://host.docker.internal:${tui.port}/tools`, 'server URL follows the integration client host header');
     const viaDocker = await raw('/tools/profiles', { host: `host.docker.internal:${tui.port}`, authorization: `Bearer ${tui.toolToken}` });
     assert.equal(viaDocker.status, 200);
     const ops = Object.values(spec.paths).flatMap((p: any) => Object.values(p).map((o: any) => o.operationId));

@@ -3,15 +3,15 @@ import type { TestResult } from '../testing/types.js';
 import { totals } from './history.js';
 
 /**
- * Open WebUI integration: the settings app also serves an OpenAPI tool server under `/tools`, so an Open WebUI chat
- * model can list profiles, read test cases, browse Azure DevOps test plans, start and stop runs, read results with
- * their triage and upload them to Azure DevOps.
- * Those routes use a separate bearer token (`openwebui-token` in the agent home) instead of the browser cookie, so
- * the key pasted into Open WebUI can be rotated without signing the browser out. They never return profile values.
+ * Optional OpenAPI integration endpoint: list profiles, read test cases, browse Azure DevOps test plans,
+ * start and stop runs, read results with their triage and upload them to Azure DevOps. The app-owned Chat uses
+ * the same operation catalog and executor directly; this HTTP adapter adds no second implementation.
+ * Bearer authentication is separate from the browser cookie, so integration credentials can be rotated without
+ * signing the browser out. Profile values are never returned.
  */
 export const TOOLS_PREFIX = '/tools';
 /**
- * Longest get_run wait. Open WebUI and Node's fetch give up on a tool call after about 300 s, so a wait stays
+ * Longest get_run wait. API clients and Node's fetch can give up on a call after about 300 s, so a wait stays
  * under that; a long run is followed with a few calls of this length, each told by `next` what to do.
  */
 export const MAX_WAIT_SECONDS = 240;
@@ -25,7 +25,7 @@ const query = (name: string, description: string, schema: unknown = str, require
 const jsonBody = (schema: unknown) => ({ required: true, content: { 'application/json': { schema } } });
 
 const DIR = query('dir', 'Test-case folder inside the project, for example "examples/testcases".', str, true);
-/** The OpenAPI document Open WebUI reads to build its tools. Paths are relative to `serverUrl`. */
+/** The application's operation catalog. It drives both the OpenAPI integration endpoint and Chat's tool schemas. */
 export function openApiSpec(serverUrl: string): Record<string, unknown> {
   return {
     openapi: '3.1.0',

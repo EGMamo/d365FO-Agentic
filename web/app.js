@@ -1,5 +1,5 @@
 'use strict';
-/* The app page: Tests, Results and Settings. Plain browser JavaScript, no build step. The desktop shell calls
+/* The app page: Chat, Tests, Results and Settings. Plain browser JavaScript, no build step. The desktop shell calls
    showTab, refresh, appInfo and useEnvironment; keep those global. */
 
 const $ = (id) => document.getElementById(id);
@@ -129,7 +129,7 @@ async function api(path, method = 'GET', body) {
 /* ---------- App state and navigation ---------- */
 
 let state = { profiles: [], active: null, catalog: [], categoryHints: {} };
-let currentTab = 'cases';
+let currentTab = 'chat';
 
 /** For the desktop shell's side strip: the environment in use, all environments and whether a run is going. */
 function appInfo() {
@@ -148,12 +148,14 @@ async function refreshState() {
 }
 
 async function showTab(id) {
-  if (!['cases', 'results', 'settings'].includes(id)) return;
-  for (const tab of ['cases', 'results', 'settings']) $('tab-' + tab).hidden = tab !== id;
+  if (!['chat', 'cases', 'results', 'settings'].includes(id)) return;
+  for (const tab of ['chat', 'cases', 'results', 'settings']) $('tab-' + tab).hidden = tab !== id;
   for (const b of document.querySelectorAll('[data-tab]'))
     if (b.dataset.tab === id) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   currentTab = id;
+  if (id === 'chat') await window.chatPage?.show();
+  else window.chatPage?.hide();
   if (id === 'results') await loadResults().catch(fail);
   if (id === 'cases') tests.autoload();
   if (id === 'settings') renderEnvGrid();

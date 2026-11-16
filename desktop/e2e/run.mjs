@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 // End-to-end check of an installed desktop app: starts it with Chromium's remote debugging port, attaches with the
-// Playwright bundled inside the app, and drives the settings app and Open WebUI the way a user would. Profiles and the
+// Playwright bundled inside the app, and drives the app-owned Chat, Tests, Results and Settings the way a user would. Profiles and the
 // workspace go to fresh folders under E2E_OUT, so the computer's own profiles are never touched.
 //
 //   E2E_APP          path of the installed "D365FO Agent.exe" (required)
 //   E2E_OUT          folder for screenshots, logs and summary.md (required)
 //   E2E_APP_ARGS     extra command-line switches for the app (optional)
-//   E2E_OPENWEBUI    'false' to skip waiting for Open WebUI (default: wait)
-//   E2E_OPENWEBUI_MINUTES  how long to wait for Open WebUI, including a first-start install (default 25)
+//   E2E_MODEL          'true' to send a real Chat request after saving an E2E Anthropic key (optional)
 //   E2E_ANTHROPIC_API_KEY, E2E_D365_BASE_URL, E2E_D365_USERNAME, E2E_D365_PASSWORD (optional, all four): also run the
 //                    sample login test case in dry-run mode against that F&O environment. E2E_D365_COMPANY is optional.
 import { spawn, spawnSync } from 'node:child_process';
@@ -22,8 +21,8 @@ if (!exe || !out) {
   console.error('Set E2E_APP (the installed app) and E2E_OUT (an output folder).');
   process.exit(1);
 }
-const waitOpenWebUi = process.env.E2E_OPENWEBUI !== 'false';
-const owuiMinutes = Number(process.env.E2E_OPENWEBUI_MINUTES || 25);
+const aiKey = Boolean(process.env.E2E_ANTHROPIC_API_KEY);
+const testChatModel = process.env.E2E_MODEL === 'true' && aiKey;
 const creds = ['E2E_ANTHROPIC_API_KEY', 'E2E_D365_BASE_URL', 'E2E_D365_USERNAME', 'E2E_D365_PASSWORD'].every((k) => process.env[k]);
 
 const home = join(out, 'agent-home');
@@ -164,7 +163,7 @@ try {
       return `${cases.length} cases (${cases.map((c) => c.id).join(', ')})`;
     });
 
-    if (creds) {
+    if (aiKey) {
       await check('Shared AI connection works', async () => {
         expectStatus(await api(settings, '/api/ai', 'PUT', { entries: [{ key: 'ANTHROPIC_API_KEY', value: process.env.E2E_ANTHROPIC_API_KEY }] }), 200);
         const result = expectStatus(await api(settings, '/api/ai/check', 'POST'), 200);
@@ -216,6 +215,37 @@ try {
       await settings.waitForFunction(() => document.querySelector('#profileStatus').textContent === 'Saved');
     });
 
+    await check('App-owned Chat persists and renders a conversation without Python', async () => {
+      const created = expectStatus(await api(settings, '/api/chat/conversations', 'POST', { title: 'E2E original' }), 201);
+      const title = 'E2E persisted chat';
+      expectStatus(await api(settings, `/api/chat/conversations/${created.id}`, 'PATCH', { title }), 200);
+      await rail.click('button[data-id="chat"]');
+      await settings.waitForSelector('.chat-page');
+      await settings.waitForFunction((value) => Array.from(document.querySelectorAll('.chat-history-title')).some((n) => n.textContent === value), title);
+      await settings.reload();
+      // A fresh page opens Settings when no AI key is configured, just like a user's first launch; return to Chat.
+      await settings.waitForFunction(() => typeof showTab === 'function' && Boolean(window.chatPage));
+      await rail.click('button[data-id="chat"]');
+      await until('the Chat page after reload', 15_000, async () => (await rail.getAttribute('button[data-id="chat"]', 'aria-current')) === 'page');
+      await settings.waitForFunction((value) => Array.from(document.querySelectorAll('.chat-history-title')).some((n) => n.textContent === value), title);
+      const saved = expectStatus(await api(settings, `/api/chat/conversations/${created.id}`), 200);
+      if (saved.title !== title) throw new Error(`Conversation title did not persist: ${saved.title}`);
+      await shot(settings, '20-app-chat');
+      expectStatus(await api(settings, `/api/chat/conversations/${created.id}`, 'DELETE'), 200);
+      return `${created.id}; reload retained ${title}`;
+    });
+
+    if (testChatModel) {
+      await check('Chat answers through the shared AI connection', async () => {
+        const { id } = expectStatus(await api(settings, '/api/chat/conversations', 'POST', { title: 'E2E model check' }), 201);
+        const response = expectStatus(await api(settings, `/api/chat/conversations/${id}/messages`, 'POST', { text: 'Reply with exactly OK.' }), 200);
+        if (typeof response !== 'string' || !response.includes('OK')) throw new Error(`No OK answer in the event stream: ${JSON.stringify(response).slice(0, 500)}`);
+        const saved = expectStatus(await api(settings, `/api/chat/conversations/${id}`), 200);
+        if (!saved.messages.some((m) => m.role === 'assistant' && m.content.includes('OK'))) throw new Error('No assistant message was persisted.');
+        return saved.messages.at(-1).content.slice(0, 80);
+      });
+    }
+
     await check("The agent's own CLI runs on the app's Electron (profile check)", async () => {
       const res = expectStatus(await api(settings, '/api/profiles/e2e/check', 'POST'), 200);
       writeFileSync(join(out, 'doctor.txt'), res.output ?? '');
@@ -225,7 +255,7 @@ try {
     });
 
     await check('Every page opens from the side strip', async () => {
-      const tabs = ['cases', 'results', 'settings'];
+      const tabs = ['chat', 'cases', 'results', 'settings'];
       for (const [i, tab] of tabs.entries()) {
         await rail.click(`button[data-id="${tab}"]`);
         await until(`the ${tab} page`, 10_000, async () => (await rail.getAttribute(`button[data-id="${tab}"]`, 'aria-current')) === 'page');
@@ -255,28 +285,6 @@ try {
     }
   }
 
-  if (waitOpenWebUi && browser) {
-    await check(
-      'Open WebUI installs and starts in the Chat page',
-      async () => {
-        let lastStatus = '';
-        const chat = await findPage('Open WebUI', owuiMinutes * 60_000, async (p) => {
-          if (p.url().endsWith('splash.html')) {
-            const text = await p.evaluate(() => document.body.innerText.trim().split('\n').slice(-2).join(' | '));
-            if (text && text !== lastStatus) console.log(`  splash: ${(lastStatus = text).slice(0, 200)}`);
-            return false;
-          }
-          if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(p.url()) || p === settings) return false;
-          return p.evaluate(async () => (await fetch('/health')).ok);
-        });
-        await rail.click('button[data-id="chat"]');
-        await chat.waitForLoadState('load');
-        await sleep(3000);
-        await shot(chat, '20-openwebui');
-        return chat.url();
-      },
-    );
-  }
 } finally {
   if (browser) await browser.close().catch(() => {});
   stopApp();

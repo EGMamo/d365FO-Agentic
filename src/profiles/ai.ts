@@ -24,7 +24,7 @@ export const AI_KEYS = [
 ] as const;
 export const aiFile = (home: string): string => join(home, 'ai.env');
 
-/** One connection shared by Open WebUI and every test run. Legacy files are never deleted. */
+/** One connection shared by app-owned Chat and every test run. Legacy files are never deleted. */
 export class AiSettings {
   constructor(readonly home: string) {}
 

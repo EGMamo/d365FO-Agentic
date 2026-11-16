@@ -6,13 +6,14 @@
     <title>D365FO Agent</title>
     <link rel="icon" href="/icon.svg" />
     <link rel="stylesheet" href="/app.css" />
+    <link rel="stylesheet" href="/chat.css" />
   </head>
   <body>
     <header>
       <span class="brand"><img src="/icon.svg" alt="" />D365FO Agent</span>
       <span id="environment" class="chip">No environment</span>
       <nav aria-label="App">
-        <button data-tab="cases">Tests</button><button data-tab="results">Results</button
+        <button data-tab="chat">Chat</button><button data-tab="cases">Tests</button><button data-tab="results">Results</button
         ><button data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -34,6 +35,11 @@
     </section>
 
     <main>
+      <!-- App-owned Chat: populated by web/chat.js. -->
+      <section id="tab-chat" hidden>
+        <div id="chatRoot"></div>
+      </section>
+
       <!-- Tests -->
       <section id="tab-cases">
         <div class="page-head">
@@ -161,5 +167,9 @@
 
     <div id="toasts" aria-live="polite"></div>
     <script src="/app.js"></script>
+    <script src="/chat.js"></script>
+    <script>
+      window.chatPage = window.createChatPage({ root: $('chatRoot'), notify: () => appChanged() });
+    </script>
   </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "name": "d365fo-agentic",
   "version": "0.1.0",
-  "description": "Desktop D365 Finance & Operations test assistant with Open WebUI and Claude.",
+  "description": "Desktop D365 Finance & Operations test assistant with app-owned Chat and Claude.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -10,8 +10,9 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "dev": "npm run clean && tsc -p tsconfig.json --watch",
     "start": "node dist/cli/index.js",
     "agent": "node dist/cli/index.js",
     "ui": "npm run build && node dist/cli/index.js ui",
@@ -20,7 +21,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -32,7 +33,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^20.14.10",
+    "@types/node": "^24.19.2",
     "typescript": "^5.5.3"
   }
 }

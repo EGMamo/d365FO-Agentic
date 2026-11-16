@@ -20,7 +20,7 @@ const result = spawnSync(process.execPath, [join(root, 'desktop', 'e2e', 'run.mj
     ...process.env,
     E2E_APP: exe,
     E2E_OUT: process.env.E2E_OUT || join(root, 'desktop', 'release', 'smoke'),
-    E2E_OPENWEBUI: process.env.E2E_OPENWEBUI || 'false',
+    E2E_MODEL: process.env.E2E_MODEL || 'false',
   },
 });
 process.exit(result.status ?? 1);

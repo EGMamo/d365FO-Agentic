@@ -2,7 +2,7 @@
   "name": "d365fo-agent",
   "productName": "D365FO Agent",
   "version": "0.1.0",
-  "description": "Desktop D365 Finance & Operations test assistant with Open WebUI and Claude.",
+  "description": "Desktop D365 Finance & Operations test assistant with app-owned Chat and Claude.",
   "license": "Apache-2.0",
   "author": "D365FO Agent contributors",
   "private": true,

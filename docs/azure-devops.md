@@ -42,7 +42,7 @@ AZDO_TEST_SUITE_ID=5678
 
 The agent lists the suite's test cases from `Plans/<planId>/Suites/<suiteId>/testcases`, then reads the work items' title, area path, tags (split on `;`), priority and `Microsoft.VSTS.TCM.Steps`. Each step's first parameterized string becomes the action and the second the expected result. If the field has no `<step>` elements (for example plain text), the parser falls back to one step per line, without expected results. Nothing else is read from the test case: attachments such as Task recorder recordings or RSAT Excel parameter files are ignored.
 
-In the Open WebUI chat, `list_devops_plans` lists the project's test plans with their ids and root suites, and `list_devops_suites` the suites of one plan (read only). `d365fo-agent discover --plan <id> --suite <id>` lists what would run; `--output <file>` writes the parsed cases as JSON.
+In app-owned Chat, `list_devops_plans` lists the project's test plans with their ids and root suites, and `list_devops_suites` the suites of one plan (read only). `d365fo-agent discover --plan <id> --suite <id>` lists what would run; `--output <file>` writes the parsed cases as JSON.
 
 ## Runs & results
 

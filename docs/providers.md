@@ -1,6 +1,6 @@
 # Claude connection
 
-This release supports one shared Claude connection for Open WebUI Chat and all D365 test runs. Enter it in **Settings > Shared AI connection**. There is no model catalog or per-run override.
+This release supports one shared Claude connection for app-owned Chat and all D365 test runs. Enter it in **Settings > AI connection**. There is no model catalog or per-run override.
 
 - **API key:** from Anthropic or your corporate gateway.
 - **Model name:** Advanced; defaults to `claude-opus-4-5-20251101`.
@@ -9,7 +9,7 @@ This release supports one shared Claude connection for Open WebUI Chat and all D
 
 **Test connection** makes a real model request and reports failure even if the local HTTP request completed normally. Save errors preserve form entries. A successful save followed by a status reload failure is reported separately.
 
-The desktop stores the connection in `ai.env` in the agent's private settings folder. Secret values are masked when read by the settings page. The local model bridge translates Open WebUI's protocol into the same Claude adapter the runner uses; Open WebUI receives a local bridge token rather than the provider key. It supports text and native function tools, not file/image/audio input. Responses are buffered until Claude finishes, then returned in Open WebUI's requested protocol.
+The desktop stores the connection in `ai.env` in the agent's private settings folder. Secret values are masked when read by the settings page and redacted from Chat errors. App-owned Chat uses the same provider interface as the runner directly; no second provider configuration or model bridge token is needed. It supports text and native function tools, not file/image/audio input. Responses are buffered until Claude finishes, while status and tool progress stream to the page over SSE.
 
 For CLI fallback, use `ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`, and `LLM_MODEL` in `.env`. Real process variables always take precedence.
 

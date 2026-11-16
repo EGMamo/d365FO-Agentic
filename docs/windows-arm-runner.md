@@ -11,8 +11,8 @@ Do the steps in order. Steps 1 to 3 are on the computer, 4 to 6 on github.com.
 - Windows 11 on ARM64, with at least 4 CPUs, 8 GB of memory and 30 GB free disk. Turn off sleep
   (Settings > System > Power > Screen and sleep: Never).
 - Outbound internet access to `github.com`, `*.githubusercontent.com`, `*.actions.githubusercontent.com`,
-  `registry.npmjs.org`, `nodejs.org`, `pypi.org` and `files.pythonhosted.org` (the app installs Python and Open WebUI on
-  its first start).
+  `registry.npmjs.org`, `nodejs.org`, and the Playwright browser download hosts (the first browser test run downloads
+  Chromium). No Python or Python package index access is needed.
 - Install **Git for Windows** (the ARM64 installer from <https://git-scm.com/download/win>). Node.js is not needed: the
   workflow installs its own.
 - Create a local standard user for the runner, for example `ghrunner`, and sign in as that user for the next steps. A
@@ -86,10 +86,12 @@ is not used.
 
 ## 6. Run it
 
-**Actions > desktop-e2e > Run workflow**, pick the branch, **arm64**, and leave **Wait for Open WebUI** on. Tick
-**fresh** to make Open WebUI install from scratch as on a new computer. The first run downloads Node.js, Electron and the npm packages, so it takes longer than later ones. The run's summary lists each check; the artifact
-`desktop-e2e-win-arm64` holds screenshots, the app's log and the summary for 7 days, and `installer-win-arm64` the installer it built for 3 days
-(manual runs only).
+**Actions > desktop-e2e > Run workflow**, pick the branch, and choose **arm64**. Tick **fresh** to delete the app's data
+folder first, so Chat history, settings, and legacy migration state start empty as on a new computer. Leave **model**
+off unless `E2E_ANTHROPIC_API_KEY` is configured and you want a real Chat request. The first run downloads Node.js,
+Electron, and the npm packages, so it takes longer than later ones. The run's summary lists each check; the artifact
+`desktop-e2e-win-arm64` holds screenshots, the app's log and the summary for 7 days, and `installer-win-arm64` the
+installer it built for 3 days (manual runs only).
 
 The **Run workflow** button appears once the workflow is on the default branch. Before that, the workflow runs on its pull
 request once step 5 is done (push a commit or re-run the job).

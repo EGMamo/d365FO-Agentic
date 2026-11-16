@@ -20,18 +20,23 @@ import { AzureDevOpsClient } from '../devops/client.js';
 import { environmentForChild } from '../config/load-env.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
-import { completionRequest, sendCompletion } from './completions.js';
-import { redactSecrets } from '../d365fo/login.js';
 import { checkModel as checkModelEndpoint } from '../llm/check.js';
+import { redactSecrets } from '../d365fo/login.js';
 import type { LlmProvider } from '../llm/types.js';
 import type { TestResult } from '../testing/types.js';
+import { chatToolCatalog } from './chat/catalog.js';
+import { ChatService } from './chat/service.js';
+import { createChatController } from './chat/controller.js';
+import { JsonChatRepository } from './chat/store.js';
+import { importOpenWebUiChats } from './chat/legacy.js';
+import type { ChatRepository } from './chat/types.js';
 
 /**
  * Local web UI for managing profiles. It binds to the loopback interface only and is meant to be opened from the
  * desktop app or `npm run ui`. Three checks keep other web pages and other local users away from the secrets it manages:
  * the Host header must be this server (blocks DNS rebinding), writes must come from this page (Origin and a custom
  * header, blocks cross-site forms) and every request needs the per-machine token held in a cookie.
- * The Open WebUI tool routes under /tools are the exception: they take a bearer token instead (see tools.ts).
+ * Optional OpenAPI integration routes under /tools are the exception: they take a bearer token instead (see tools.ts).
  */
 export const DEFAULT_PORT = 4365;
 const COOKIE = 'd365fo_ui';
@@ -43,6 +48,8 @@ const STATIC_ASSETS: Record<string, string> = {
   'icon.svg': 'image/svg+xml',
   'app.css': 'text/css; charset=utf-8',
   'app.js': 'text/javascript; charset=utf-8',
+  'chat.css': 'text/css; charset=utf-8',
+  'chat.js': 'text/javascript; charset=utf-8',
 };
 const assetCache = new Map<string, Buffer>();
 /** The page's files are read once; set D365FO_UI_DEV=1 to re-read them on every request while editing. */
@@ -106,6 +113,10 @@ export interface UiServerOptions {
   devopsClient?: (cfg: AppConfig) => Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
   /** Native, non-model approval for live chat runs/reruns and uploads. Without it those tool actions are denied. */
   approveToolAction?: (action: ToolActionApproval) => Promise<boolean>;
+  /** Conversation persistence. Defaults to private per-user JSON storage in the agent home. */
+  chatRepository?: ChatRepository;
+  /** Existing Open WebUI data directory to import conversations from once, without modifying it. */
+  legacyOpenWebUiData?: string;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -118,7 +129,7 @@ export interface RunningUi {
   url: string;
   /** The URL that signs the browser in (sets the cookie) and then lands on the app. */
   openUrl: string;
-  /** Bearer token for the Open WebUI tool server at `<url>tools`. */
+  /** Bearer token for the optional OpenAPI integration endpoint at `<url>tools`. */
   toolToken: string;
   /** Register the one browser origin allowed to use the chat/model bridges. */
   setChatOrigin: (origin: string) => void;
@@ -139,7 +150,7 @@ async function loadOrCreate(home: string, file: string): Promise<string> {
 }
 
 export const loadOrCreateToken = (home: string): Promise<string> => loadOrCreate(home, tokenFile(home));
-/** The key Open WebUI sends to the tool routes. Delete the file and restart the app to issue a new one. */
+/** The key external integration clients send to the tool routes. Delete the file and restart to rotate it. */
 export const loadOrCreateToolToken = (home: string): Promise<string> => loadOrCreate(home, toolTokenFile(home));
 
 const same = (a: string, b: string): boolean => {
@@ -248,6 +259,25 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   let runSeq = 0;
   let chatOrigin: string | undefined;
   const listeners = new Set<ServerResponse>();
+  const chatRepository = opts.chatRepository ?? new JsonChatRepository(join(opts.home, 'chats'));
+  if (opts.legacyOpenWebUiData) {
+    try {
+      const result = await importOpenWebUiChats(chatRepository, opts.legacyOpenWebUiData, join(opts.home, 'legacy-chat-import.json'));
+      if (result.imported) console.log(`[chat] imported ${result.imported} conversation(s) from Open WebUI.`);
+    } catch (e) {
+      console.warn(`[chat] could not import Open WebUI conversations: ${(e as Error).message}`);
+    }
+  }
+  const chatService = new ChatService({
+    repository: chatRepository,
+    provider: async () => (opts.modelProvider ?? createLlmProvider)(await modelConfig()),
+    tools: () => chatToolCatalog(executeChatOperation),
+    redact: async (message) => {
+      const cfg = await modelConfig().catch(() => undefined);
+      return cfg ? redactSecrets(cfg, message) : message;
+    },
+  });
+  const chatController = createChatController({ repository: chatRepository, service: chatService, send, readJson });
   /** get_run calls waiting for the current job to settle. */
   const settleWaiters = new Set<() => void>();
 
@@ -669,20 +699,22 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
   };
-  /** Waits until the job settles, `ms` pass or the caller goes away, whichever comes first. */
-  const waitToSettle = (state: RunState, ms: number, res: ServerResponse): Promise<void> =>
-    state.settled || ms <= 0
+  /** Waits until the job settles, `ms` pass, the caller goes away or the chat answer is cancelled. */
+  const waitToSettle = (state: RunState, ms: number, res?: ServerResponse, signal?: AbortSignal): Promise<void> =>
+    state.settled || ms <= 0 || signal?.aborted
       ? Promise.resolve()
       : new Promise((resolve) => {
           const wake = (): void => {
             clearTimeout(timer);
             settleWaiters.delete(wake);
-            res.off('close', wake);
+            res?.off('close', wake);
+            signal?.removeEventListener('abort', wake);
             resolve();
           };
           const timer = setTimeout(wake, ms);
           settleWaiters.add(wake);
-          res.on('close', wake);
+          res?.on('close', wake);
+          signal?.addEventListener('abort', wake, { once: true });
         });
   /** The results a finished run saved to the history, for get_run to hand back without another call. */
   async function settledResults(state: RunState): Promise<TestResult[] | undefined> {
@@ -703,7 +735,77 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     };
   }
 
-  /** The Open WebUI tool server: the same actions as the app, for a chat model. */
+  /**
+   * The application operations available to an LLM. This is the single execution path for the owned Chat service;
+   * the legacy OpenAPI adapter below exposes the same operations during migration. Approval remains inside startRun,
+   * startUpload and rerunFailed, so neither transport can bypass the native desktop policy.
+   */
+  async function executeChatOperation(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    const text = (key: string): string => typeof args[key] === 'string' ? String(args[key]).trim() : '';
+    const numeric = (key: string, fallback: number, max: number): number => {
+      const parsed = Number(args[key] ?? fallback);
+      if (!Number.isFinite(parsed)) throw new ProfileError(`${key} must be a number.`);
+      return Math.min(Math.max(Math.trunc(parsed), 0), max);
+    };
+    switch (name) {
+      case 'list_profiles':
+        return { active: (await store.getActive()) ?? null, profiles: await store.list() };
+      case 'use_profile': {
+        if (jobBusy()) throw new ProfileError('Stop the current run before switching environments.', 409);
+        if (!text('name')) throw new ProfileError('Give the profile name.');
+        await store.read(text('name'));
+        await store.setActive(text('name'));
+        return { active: await store.getActive() };
+      }
+      case 'list_test_cases': {
+        const query = new URLSearchParams();
+        for (const key of ['plan', 'suite', 'dir', 'local']) if (text(key)) query.set(key, text(key));
+        return casesFor(new URL(`http://tools/testcases?${query}`));
+      }
+      case 'read_test_case':
+        return caseFiles.read(text('dir'), text('file'));
+      case 'list_devops_plans':
+      case 'list_devops_suites': {
+        const result = await devopsListing(name === 'list_devops_suites' ? text('plan') : undefined);
+        if (result.status !== 200) throw new ProfileError(typeof (result.body as { error?: unknown })?.error === 'string' ? String((result.body as { error: string }).error) : 'Azure DevOps could not be read.', result.status);
+        return result.body;
+      }
+      case 'start_run':
+        return startRun(args, true);
+      case 'get_run':
+        signal?.throwIfAborted();
+        if (run) await waitToSettle(run, numeric('waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, undefined, signal);
+        signal?.throwIfAborted();
+        return runView(numeric('tail', 40, 400));
+      case 'stop_run':
+        return { stopped: stopRun() };
+      case 'get_results': {
+        const requested = text('run');
+        const raw = await reportFile('results.json', requested || null);
+        if (!raw) throw new ProfileError(requested ? 'That run has no results.' : 'No results yet. Start a run first.', 404);
+        return { run: requested || 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) };
+      }
+      case 'check_setup': {
+        const active = await store.getActive();
+        if (!active) throw new ProfileError('No profile is in use. Create one in Settings, then call use_profile.');
+        return { profile: active, ...(await checkProfile(active)) };
+      }
+      case 'list_runs':
+        return { runs: (await history.list()).slice(0, numeric('limit', 20, 200) || 20) };
+      case 'rerun_failed':
+        return rerunFailed(text('id'), args, true);
+      case 'compare_runs': {
+        const result = await compareRun(text('id'), text('with') || null);
+        return result.comparison ? { run: text('id'), ...result.comparison } : { run: text('id'), status: result.status, error: result.error };
+      }
+      case 'upload_run':
+        return startUpload(text('id'), args, true);
+      default:
+        throw new ProfileError(`Unknown tool: ${name}`, 404);
+    }
+  }
+
+  /** Optional OpenAPI adapter over the exact operations used by app-owned Chat. */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
     const path = url.pathname.slice(TOOLS_PREFIX.length) || '/';
     if (req.headers.origin) {
@@ -721,62 +823,34 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
     if (!auth || !same(auth[1].trim(), toolToken)) return tsend(res, 401, { error: 'Missing or wrong tool-server token. Restart the desktop app to reconnect.' });
 
-    if (method === 'GET' && path === '/profiles') return tsend(res, 200, { active: (await store.getActive()) ?? null, profiles: await store.list() });
-    if (method === 'POST' && path === '/profiles/active') {
-      if (jobBusy()) return tsend(res, 409, { error: 'Stop the current run before switching environments.' });
-      const body = await readJson(req);
-      if (typeof body.name !== 'string' || !body.name) return tsend(res, 400, { error: 'Give the profile name.' });
-      await store.read(body.name); // 404 for an unknown profile
-      await store.setActive(body.name);
-      return tsend(res, 200, { active: (await store.getActive()) ?? null });
-    }
-    if (path === '/testcases' || path === '/testcases/file') {
-      const dir = url.searchParams.get('dir') ?? '';
-      const file = url.searchParams.get('file') ?? '';
-      if (method === 'GET' && path === '/testcases') return tsend(res, 200, await casesFor(url));
-      if (method === 'GET') return tsend(res, 200, await caseFiles.read(dir, file));
-    }
-    if (method === 'POST' && path === '/runs') {
-      const result = await startRun(await readJson(req), true);
-      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? 400 : 200), result);
-    }
+    const invoke = async (name: string, args: Record<string, unknown>): Promise<void> => {
+      const result = await executeChatOperation(name, args);
+      const value = result as { status?: number; error?: string; busy?: boolean } | undefined;
+      const missing = value?.error === 'No such run.' || value?.error === 'That run has no results to upload.';
+      const status = value?.busy ? 409 : value?.status ?? (value?.error ? (missing ? 404 : 400) : 200);
+      return tsend(res, status, result);
+    };
+    if (method === 'GET' && path === '/profiles') return invoke('list_profiles', {});
+    if (method === 'POST' && path === '/profiles/active') return invoke('use_profile', await readJson(req));
+    if (method === 'GET' && path === '/testcases') return invoke('list_test_cases', Object.fromEntries(url.searchParams));
+    if (method === 'GET' && path === '/testcases/file') return invoke('read_test_case', Object.fromEntries(url.searchParams));
+    if (method === 'POST' && path === '/runs') return invoke('start_run', await readJson(req));
     if (method === 'GET' && path === '/runs/current') {
       if (run) await waitToSettle(run, intParam(url, 'waitSeconds', 0, MAX_WAIT_SECONDS) * 1000, res);
       return tsend(res, 200, await runView(intParam(url, 'tail', 40, 400)));
     }
     const plans = /^\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(path);
-    if (method === 'GET' && plans) {
-      const result = await devopsListing(plans[1]);
-      return tsend(res, result.status, result.body);
-    }
-    if (method === 'POST' && path === '/runs/current/stop') return tsend(res, 200, { stopped: stopRun() });
-    if (method === 'GET' && path === '/results') {
-      const runId = url.searchParams.get('run');
-      const raw = await reportFile('results.json', runId);
-      if (!raw) return tsend(res, 404, { error: runId ? 'That run has no results.' : 'No results yet. Start a run first.' });
-      return tsend(res, 200, { run: runId ?? 'latest', ...summarizeResults(JSON.parse(raw) as TestResult[]) });
-    }
-    if (method === 'POST' && path === '/setup/check') {
-      const active = await store.getActive();
-      if (!active) return tsend(res, 400, { error: 'No profile is in use. Create one in the settings app, then call use_profile.' });
-      return tsend(res, 200, { profile: active, ...(await checkProfile(active)) });
-    }
-    if (method === 'GET' && path === '/history') return tsend(res, 200, { runs: (await history.list()).slice(0, intParam(url, 'limit', 20, 200) || 20) });
+    if (method === 'GET' && plans) return invoke(plans[1] === undefined ? 'list_devops_plans' : 'list_devops_suites', plans[1] === undefined ? {} : { plan: plans[1] });
+    if (method === 'POST' && path === '/runs/current/stop') return invoke('stop_run', {});
+    if (method === 'GET' && path === '/results') return invoke('get_results', Object.fromEntries(url.searchParams));
+    if (method === 'POST' && path === '/setup/check') return invoke('check_setup', {});
+    if (method === 'GET' && path === '/history') return invoke('list_runs', Object.fromEntries(url.searchParams));
     const rr = /^\/history\/([\w-]+)\/rerun$/.exec(path);
-    if (method === 'POST' && rr) {
-      const result = await rerunFailed(rr[1], await readJson(req), true);
-      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'No such run.' ? 404 : 400) : 200), result);
-    }
+    if (method === 'POST' && rr) return invoke('rerun_failed', { ...(await readJson(req)), id: rr[1] });
     const cmp = /^\/history\/([\w-]+)\/compare$/.exec(path);
-    if (method === 'GET' && cmp) {
-      const result = await compareRun(cmp[1], url.searchParams.get('with'));
-      return tsend(res, result.status, result.comparison ? { run: cmp[1], ...result.comparison } : { error: result.error });
-    }
+    if (method === 'GET' && cmp) return invoke('compare_runs', { ...Object.fromEntries(url.searchParams), id: cmp[1] });
     const up = /^\/history\/([\w-]+)\/upload$/.exec(path);
-    if (method === 'POST' && up) {
-      const result = await startUpload(up[1], await readJson(req), true);
-      return tsend(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'That run has no results to upload.' ? 404 : 400) : 200), result);
-    }
+    if (method === 'POST' && up) return invoke('upload_run', { ...(await readJson(req)), id: up[1] });
     return tsend(res, 404, { error: 'Not found.' });
   }
 
@@ -796,26 +870,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (hostHeader !== `127.0.0.1:${port}` && hostHeader !== `localhost:${port}`) return send(res, 403, { error: 'Unexpected Host header.' });
     const url = new URL(req.url ?? '/', `http://${hostHeader}`);
     const method = req.method ?? 'GET';
-    if (url.pathname.startsWith('/model/v1/')) {
-      if (req.headers.origin && req.headers.origin !== chatOrigin) return send(res, 403, { error: { message: 'Unexpected chat origin.' } });
-      const auth = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
-      if (!auth || !same(auth[1], toolToken)) return send(res, 401, { error: { message: 'Wrong model-bridge token.' } });
-      try {
-        const cfg = await modelConfig();
-        if (method === 'GET' && url.pathname === '/model/v1/models') return send(res, 200, { object: 'list', data: [{ id: 'd365fo-claude', name: 'Claude (shared connection)', object: 'model', owned_by: 'anthropic' }] });
-        if (method === 'POST' && url.pathname === '/model/v1/chat/completions') {
-          const body = await readJson(req);
-          const answer = await (opts.modelProvider ?? createLlmProvider)(cfg).complete(completionRequest(body));
-          return sendCompletion(res, answer, 'd365fo-claude', body.stream === true);
-        }
-        return send(res, 404, { error: { message: 'Unknown model endpoint.' } });
-      } catch (e) {
-        const cfg = await modelConfig().catch(() => undefined);
-        const message = cfg ? redactSecrets(cfg, (e as Error).message) : 'Check the AI connection in Settings.';
-        return send(res, e instanceof ProfileError ? e.status : 502, { error: { message } });
-      }
-    }
-
+    // Chat uses the same cookie-authenticated app API as Tests/Results; there is no second model protocol bridge.
 
     if (method === 'GET' && url.pathname === '/' && url.searchParams.has('token')) {
       if (!same(url.searchParams.get('token') ?? '', token)) return send(res, 403, { error: 'Wrong token.' });
@@ -843,6 +898,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       if (method === 'GET' && url.pathname === '/api/state') {
         return send(res, 200, { profiles: await profileCards(), aiConfigured: (await ai.read(true)).some((e) => ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].includes(e.key) && e.value), active: (await store.getActive()) ?? null, activeId: await activeIdOf(), home: opts.home, catalog: FIELD_CATALOG, groups: GROUP_INFO, providers: PROVIDER_LABELS, categoryHints: FAILURE_CATEGORY_HINTS });
       }
+      if (await chatController.handle(req, res, url, method)) return;
       if (method === 'POST' && url.pathname === '/api/active') {
         const body = await readJson(req);
         if (jobBusy()) return send(res, 409, { error: 'A run is in progress. Wait for it to finish or stop it before switching profiles.' });
@@ -1026,6 +1082,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     close: () =>
       new Promise((resolve) => {
         stopRun();
+        chatController.close();
         for (const l of listeners) l.end();
         server.closeAllConnections?.();
         server.close(() => resolve());
