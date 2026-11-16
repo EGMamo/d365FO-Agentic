@@ -87,7 +87,7 @@ is not used.
 ## 6. Run it
 
 **Actions > desktop-e2e > Run workflow**, pick the branch, and choose **arm64**. Tick **fresh** to delete the app's data
-folder first, so Chat history, settings, and legacy migration state start empty as on a new computer. Leave **model**
+folder first, so Chat history and settings start empty as on a new computer. Leave **model**
 off unless `E2E_ANTHROPIC_API_KEY` is configured and you want a real Chat request. The first run downloads Node.js,
 Electron, and the npm packages, so it takes longer than later ones. The run's summary lists each check; the artifact
 `desktop-e2e-win-arm64` holds screenshots, the app's log and the summary for 7 days, and `installer-win-arm64` the

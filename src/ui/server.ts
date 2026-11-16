@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultRepoRoot } from '../runtime/paths.js';
 import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.js';
 import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
-import { serverFile, tokenFile, toolTokenFile } from '../profiles/paths.js';
+import { serverFile, tokenFile, legacyToolTokenFile, toolTokenFile } from '../profiles/paths.js';
 import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
 import { AiSettings } from '../profiles/ai.js';
 import { discoverTestCases } from '../core/runner.js';
@@ -28,7 +28,6 @@ import { chatToolCatalog } from './chat/catalog.js';
 import { ChatService } from './chat/service.js';
 import { createChatController } from './chat/controller.js';
 import { JsonChatRepository } from './chat/store.js';
-import { importOpenWebUiChats } from './chat/legacy.js';
 import type { ChatRepository } from './chat/types.js';
 
 /**
@@ -115,8 +114,6 @@ export interface UiServerOptions {
   approveToolAction?: (action: ToolActionApproval) => Promise<boolean>;
   /** Conversation persistence. Defaults to private per-user JSON storage in the agent home. */
   chatRepository?: ChatRepository;
-  /** Existing Open WebUI data directory to import conversations from once, without modifying it. */
-  legacyOpenWebUiData?: string;
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -151,7 +148,29 @@ async function loadOrCreate(home: string, file: string): Promise<string> {
 
 export const loadOrCreateToken = (home: string): Promise<string> => loadOrCreate(home, tokenFile(home));
 /** The key external integration clients send to the tool routes. Delete the file and restart to rotate it. */
-export const loadOrCreateToolToken = (home: string): Promise<string> => loadOrCreate(home, toolTokenFile(home));
+export const loadOrCreateToolToken = async (home: string): Promise<string> => {
+  const file = toolTokenFile(home);
+  try {
+    const t = (await readFile(file, 'utf8')).trim();
+    if (t.length >= 32) return t;
+  } catch {
+    /* create below */
+  }
+  // An install from before the Open WebUI runtime was removed keeps its token, so external
+  // integrations stay connected across the upgrade.
+  const previous = legacyToolTokenFile(home);
+  try {
+    const t = (await readFile(previous, 'utf8')).trim();
+    if (t.length >= 32) {
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      await writeFile(file, t, { mode: 0o600 });
+      return t;
+    }
+  } catch {
+    /* no previous token */
+  }
+  return loadOrCreate(home, file);
+};
 
 const same = (a: string, b: string): boolean => {
   const left = Buffer.from(a);
@@ -260,14 +279,6 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   let chatOrigin: string | undefined;
   const listeners = new Set<ServerResponse>();
   const chatRepository = opts.chatRepository ?? new JsonChatRepository(join(opts.home, 'chats'));
-  if (opts.legacyOpenWebUiData) {
-    try {
-      const result = await importOpenWebUiChats(chatRepository, opts.legacyOpenWebUiData, join(opts.home, 'legacy-chat-import.json'));
-      if (result.imported) console.log(`[chat] imported ${result.imported} conversation(s) from Open WebUI.`);
-    } catch (e) {
-      console.warn(`[chat] could not import Open WebUI conversations: ${(e as Error).message}`);
-    }
-  }
   const chatService = new ChatService({
     repository: chatRepository,
     provider: async () => (opts.modelProvider ?? createLlmProvider)(await modelConfig()),

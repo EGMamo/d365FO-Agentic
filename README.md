@@ -41,7 +41,7 @@ The Advanced diagnostic skips mutating browser actions. It does not demonstrate 
 
 ## Development
 
-Node.js 22.13 or later:
+Node.js 20 or later:
 
 ```bash
 npm ci
@@ -72,7 +72,7 @@ An explicit `--profile` selects an environment by name or permanent ID. The shar
 
 Before the first simplified startup, configuration is copied to `backups/before-simplification-v1` in the agent's settings folder, with private file permissions. The shared connection is migrated from a usable selected chat connection, otherwise the active environment's Claude connection. Unsupported old providers need a new Claude connection in Settings; their original files remain in the backup.
 
-Environment IDs, custom report paths, saved sessions, conversations, and previous reports remain in place. Open WebUI conversations are imported from the legacy database without modifying it; migration is idempotent and does not reset edited shared settings. Legacy model, knowledge-base, and replay files are left untouched and unused.
+Environment IDs, custom report paths, saved sessions, and previous reports remain in place. Conversations from the previous chat runtime are not imported: that runtime's files stay where they are, untouched, until the user removes them. Legacy model, knowledge-base, and replay files are left untouched and unused.
 
 The application no longer exposes Docker studio, the Python/Open WebUI runtime, a second chat engine, model catalogs/overrides, general knowledge-base ranking/pruning, replay/export, automatic case retries, standalone case generation, OData app registrations, Release Planner, or Azure DevOps MCP. Azure DevOps uses its ordinary REST API.
 
@@ -80,7 +80,7 @@ The application no longer exposes Docker studio, the Python/Open WebUI runtime, 
 
 - [Desktop builds and smoke tests](desktop/README.md)
 - [Architecture and extension points](docs/architecture.md)
-- [Chat behavior and legacy conversation migration](docs/chat.md)
+- [Chat behavior and storage](docs/chat.md)
 - [Claude configuration](docs/providers.md)
 - [F&O sign-in, evidence, and safety](docs/d365fo.md)
 - [Learned form map](docs/self-learning.md)

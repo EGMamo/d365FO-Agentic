@@ -85,7 +85,6 @@
         messageCount: Array.isArray(conversation.messages)
           ? conversation.messages.length
           : conversation.messageCount ?? previous?.messageCount ?? 0,
-        importedFrom: conversation.importedFrom ?? previous?.importedFrom,
       };
     }
 
@@ -97,11 +96,6 @@
       if (index === -1) conversations.push(summary);
       else conversations[index] = { ...conversations[index], ...summary };
       sortConversations();
-    }
-
-    function importedSource() {
-      const summary = conversations.find((conversation) => conversation.id === activeId);
-      return current?.importedFrom ?? summary?.importedFrom;
     }
 
     function headers(method, stream = false) {
@@ -227,7 +221,6 @@
     }, '↻');
 
     const conversationHead = node('div', { class: 'chat-conversation-head' });
-    const importedNotice = node('div', { class: 'chat-imported', hidden: true, role: 'note' });
     const errorBox = node('div', { class: 'chat-error', hidden: true, role: 'alert' });
     const messages = node('div', {
       class: 'chat-messages',
@@ -285,7 +278,6 @@
       'section',
       { class: 'chat-main', 'aria-label': 'Current conversation' },
       conversationHead,
-      importedNotice,
       errorBox,
       messages,
       composer,
@@ -369,7 +361,6 @@
             'span',
             { class: 'chat-history-meta' },
             node('span', {}, facts || 'No messages yet'),
-            conversation.importedFrom ? node('span', { class: 'chat-imported-chip' }, 'Imported') : null,
           ),
         );
         return node('div', { class: 'chat-history-item', role: 'listitem' }, selector);
@@ -467,13 +458,6 @@
           }, 'Delete'),
         ),
       );
-    }
-
-    function renderImportedNotice() {
-      const source = importedSource();
-      importedNotice.hidden = !source;
-      importedNotice.replaceChildren();
-      if (source) importedNotice.append(node('strong', {}, 'Imported conversation'), node('span', {}, ` This chat was imported from ${asText(source)}.`));
     }
 
     function renderProblem() {
@@ -680,7 +664,6 @@
       if (disposed) return;
       renderHistory();
       renderHeader();
-      renderImportedNotice();
       renderProblem();
       renderMessages();
       syncComposer();
@@ -877,7 +860,6 @@
       renderHistory();
       if (activeId === id) {
         renderHeader();
-        renderImportedNotice();
         renderMessages();
       }
     }

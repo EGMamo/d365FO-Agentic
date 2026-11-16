@@ -17,5 +17,7 @@ export const profilesDir = (home: string): string => join(home, 'profiles');
 export const stateFile = (home: string): string => join(home, 'state.json');
 export const tokenFile = (home: string): string => join(home, 'ui-token');
 export const serverFile = (home: string): string => join(home, 'ui-server.json');
-export const toolTokenFile = (home: string): string => join(home, 'openwebui-token');
+export const toolTokenFile = (home: string): string => join(home, 'tool-token');
+/** The token file used before the Open WebUI runtime was removed. Read once, then migrated. */
+export const legacyToolTokenFile = (home: string): string => join(home, 'openwebui-token');
 export const modelsDir = (home: string): string => join(home, 'models');

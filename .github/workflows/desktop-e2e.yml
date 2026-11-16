@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       fresh:
-        description: Delete the app's data folder first, including its conversations and legacy migration state
+        description: Delete the app's data folder first, including its conversations and settings
         type: boolean
         default: false
   pull_request:

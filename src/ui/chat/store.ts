@@ -75,12 +75,6 @@ export class JsonChatRepository implements ChatRepository {
     });
   }
 
-  async import(chat: ChatConversation): Promise<void> {
-    assertId(chat.id);
-    if (chat.version !== 1 || !Array.isArray(chat.messages)) throw new ProfileError('This chat uses an unsupported format.', 409);
-    await this.write(chat);
-  }
-
   async delete(id: string): Promise<void> {
     assertId(id);
     try {
@@ -133,7 +127,7 @@ export class JsonChatRepository implements ChatRepository {
 }
 
 function summary(chat: ChatConversation): ChatSummary {
-  return { id: chat.id, title: chat.title, createdAt: chat.createdAt, updatedAt: chat.updatedAt, messageCount: chat.messages.length, ...(chat.importedFrom ? { importedFrom: chat.importedFrom } : {}) };
+  return { id: chat.id, title: chat.title, createdAt: chat.createdAt, updatedAt: chat.updatedAt, messageCount: chat.messages.length };
 }
 
 function assertId(id: string): void {

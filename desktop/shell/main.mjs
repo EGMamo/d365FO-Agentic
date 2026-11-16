@@ -177,8 +177,6 @@ async function main() {
     root,
     childEnv,
     approveToolAction,
-    // The former runtime is never started. Its database is only read for the one-way conversation migration.
-    legacyOpenWebUiData: join(app.getPath('userData'), 'openwebui', 'data'),
   });
   await appView.webContents.loadURL(ui.openUrl);
   await run(appView, `document.body.classList.add('embedded')`);

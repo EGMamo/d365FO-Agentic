@@ -31,7 +31,7 @@ cpSync(join(root, 'LICENSE'), join(app, 'LICENSE'));
 cpSync(join(desktop, 'shell'), join(app, 'shell'), { recursive: true });
 cpSync(join(runtime, 'package.json'), join(app, 'package.json'));
 cpSync(join(runtime, 'package-lock.json'), join(app, 'package-lock.json'));
-// No Python/Open WebUI runtime is staged; conversations are migrated from the legacy database instead.
+// No Python or chat-runtime sidecar is staged; the app ships the Node application alone.
 execSync('npm ci --omit=dev --ignore-scripts --no-fund --loglevel=error', { cwd: app, stdio: 'inherit' });
 execSync('npm audit --omit=dev --audit-level=high', { cwd: app, stdio: 'inherit' });
 // A machine-readable inventory accompanies the exact dependency lock in every installer.

@@ -66,7 +66,6 @@ The optional `/tools` endpoint is a thin OpenAPI adapter for integration compati
 - **Stronger persistence/querying:** implement `ChatRepository` with SQLite or another transactional store. Keep `service.ts` and its tests unchanged. JSON is intentionally sufficient for one local user; do not add a database server just for conversations.
 - **New Chat action:** add its schema to `src/ui/tools.ts`, then implement it in the shared executor in `server.ts`. Both the Chat tool schema and the optional OpenAPI document are generated from that catalog. Put native destructive-action approval in the operation, not the prompt or UI.
 - **Replacement desktop/web transport:** retain `ChatService`, `ChatRepository`, and the operation executor; replace only the controller or shell.
-- **Legacy migrations:** keep them separate from current runtime code (`src/ui/chat/legacy.ts`) and make them non-destructive and idempotent.
 
 ## Limits and failure behavior
 
@@ -78,7 +77,6 @@ A chat message is capped at 32,000 characters, a conversation at 500 persisted m
 - Service tests cover tool ordering, failures, turn limits, and provider outages.
 - HTTP tests cover SSE persistence and native approval on the direct Chat path.
 - Existing tool API tests continue to prove reservation, approval, progress, results, and comparison invariants.
-- SQLite migration tests cover current branches, idempotent resume, the real Open WebUI schema, and committed WAL data.
 - Packaged desktop smoke covers conversation CRUD/reload and all four pages, without a model key; `E2E_MODEL=true` adds a real model check when an E2E Anthropic key is supplied.
 
 Run `npm run lint`, `npm test`, `cd desktop && npm run stage`, and package/smoke on each native target before a release.

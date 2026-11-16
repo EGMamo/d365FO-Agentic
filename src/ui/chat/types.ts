@@ -13,8 +13,6 @@ export interface ChatConversation {
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
-  /** Set when this conversation came from an older desktop installation. */
-  importedFrom?: string;
 }
 
 export interface ChatSummary {
@@ -23,7 +21,6 @@ export interface ChatSummary {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
-  importedFrom?: string;
 }
 
 export interface ChatRepository {
@@ -32,8 +29,6 @@ export interface ChatRepository {
   create(title?: string): Promise<ChatConversation>;
   rename(id: string, title: string): Promise<ChatConversation>;
   append(id: string, messages: Array<Omit<ChatMessage, 'id' | 'at'>>): Promise<ChatConversation>;
-  /** Import a complete legacy conversation, preserving its timestamps and stable identity. */
-  import(chat: ChatConversation): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

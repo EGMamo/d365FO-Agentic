@@ -35,6 +35,6 @@ Signed tags need the credentials checked by `scripts/check-release.mjs`: a macOS
 
 There is no automatic update feed. Keep the previous signed installer, close the app, and install the new signed version over it. Validate an upgrade and rollback with a copy of existing settings/conversation data before distribution. Release approval also requires the real sandbox checks in [../docs/sandbox-checklist.md](../docs/sandbox-checklist.md); passing a diagnostic smoke test alone is insufficient.
 
-## Legacy Open WebUI files
+## Historical chat files
 
-Open WebUI is no longer bundled or executed, so its frontend branding and runtime are no longer part of the shipped application. Historical files are not deleted automatically; their conversation data is imported as described in [../docs/chat.md](../docs/chat.md). Follow the old Open WebUI license if redistributing any retained historical artifacts separately.
+No previous chat runtime is bundled or executed, so its frontend branding and runtime are no longer part of the shipped application. Historical files are not read, imported, or deleted automatically; they stay in their own folders until the user removes them through normal application-data administration. Follow any retained historical license if redistributing such artifacts separately.

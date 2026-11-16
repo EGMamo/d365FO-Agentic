@@ -174,14 +174,6 @@
   white-space: nowrap;
 }
 
-.chat-imported-chip {
-  flex: none;
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 10px;
-}
-
 .chat-sidebar-empty,
 .chat-list-loading {
   padding: 22px 12px;
@@ -272,24 +264,6 @@
 .chat-rename-input {
   flex: 1;
   width: 100%;
-}
-
-.chat-imported {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  margin: 12px 18px 0;
-  padding: 8px 11px;
-  border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-.chat-imported strong {
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .chat-error {
@@ -723,7 +697,6 @@
     padding: 10px 12px;
   }
 
-  .chat-imported,
   .chat-error {
     margin-right: 12px;
     margin-left: 12px;
