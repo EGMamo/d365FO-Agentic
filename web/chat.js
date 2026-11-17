@@ -547,7 +547,9 @@
           node('strong', {}, mine ? 'You' : 'Assistant'),
           formatWhen(message.at) ? node('time', { datetime: message.at || '' }, formatWhen(message.at)) : null,
         ),
-        node('div', { class: 'chat-message-content' }, asText(message.content)),
+        mine || !window.chatMarkdown
+          ? node('div', { class: 'chat-message-content' }, asText(message.content))
+          : node('div', { class: 'chat-message-content chat-markdown' }, ...window.chatMarkdown.renderMarkdown(asText(message.content), node)),
         !mine ? toolCallDetails(message.toolCalls) : null,
       );
     }

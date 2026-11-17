@@ -15,23 +15,28 @@ export async function fetchWithResilience(
   let attempt = 0;
   while (true) {
     attempt += 1;
+    const caller = init.signal ?? undefined;
+    caller?.throwIfAborted();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), opts.timeoutMs);
+    // The caller's signal (a stopped run or chat) cancels the request; the per-attempt timeout only retries it.
+    const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
+      const response = await fetch(url, { ...init, signal });
       if (response.ok) return response;
       if (attempt <= opts.maxRetries && RETRYABLE_STATUS.has(response.status)) {
         const delay = retryDelayMs(response, opts.retryBaseMs, attempt);
         if (delay !== undefined) {
           await safeDrain(response);
-          await sleep(delay);
+          await sleep(delay, caller);
           continue;
         }
       }
       return response;
     } catch (error) {
+      if (caller?.aborted) throw caller.reason ?? error;
       if (attempt <= opts.maxRetries && isRetryableError(error)) {
-        await sleep(backoffDelay(opts.retryBaseMs, attempt));
+        await sleep(backoffDelay(opts.retryBaseMs, attempt), caller);
         continue;
       }
       throw error;
@@ -79,6 +84,21 @@ async function safeDrain(response: Response): Promise<void> {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+    };
+    const stop = (): void => {
+      done();
+      reject(signal?.reason ?? new Error('aborted'));
+    };
+    const timer = setTimeout(() => {
+      done();
+      resolve();
+    }, ms);
+    if (signal?.aborted) stop();
+    else signal?.addEventListener('abort', stop, { once: true });
+  });
 }

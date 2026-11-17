@@ -1,6 +1,6 @@
 // Electron main process: one local Node application and one web app containing Chat, Tests, Results and Settings.
 // The shell owns packaging, navigation and native confirmations; it contains no test or Chat model logic.
-import { app, BaseWindow, dialog, ipcMain, Menu, shell, WebContentsView } from 'electron';
+import { app, BaseWindow, dialog, ipcMain, Menu, session, shell, WebContentsView } from 'electron';
 import { cpSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -14,7 +14,10 @@ if (process.env.D365FO_DESKTOP_DATA) {
   mkdirSync(process.env.D365FO_DESKTOP_DATA, { recursive: true, mode: 0o700 });
   app.setPath('userData', process.env.D365FO_DESKTOP_DATA);
 }
-if (!app.requestSingleInstanceLock()) app.quit();
+// A second launch only focuses the first window (see 'second-instance'); it must not start its own server,
+// which would take another port and overwrite the first instance's ui-server.json.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
 
 const RAIL_WIDTH = 76;
 let win;
@@ -24,6 +27,8 @@ let ui;
 let current = 'chat';
 let profileInfo = { active: null, profiles: [], busy: false };
 let quitting = false;
+/** running → asking (confirm dialog open) → closing (stopping the run, saving reports) → done. */
+let quitState = 'running';
 
 /** Test cases, reports and what the agent learns live here, where the user can see them. */
 function workspace() {
@@ -42,7 +47,12 @@ function guardLinks(contents) {
     return { action: 'deny' };
   });
   const guardNavigation = (event, url) => {
-    const allowed = ui && new URL(url).origin === new URL(ui.url).origin;
+    let allowed = false;
+    try {
+      allowed = Boolean(ui) && new URL(url).origin === new URL(ui.url).origin;
+    } catch {
+      allowed = false; // an unparsable target is never ours
+    }
     if (!allowed) {
       event.preventDefault();
       if (/^https?:/.test(url)) void shell.openExternal(url);
@@ -144,6 +154,40 @@ async function approveToolAction(action) {
   return !quitting && result.response === 1;
 }
 
+/**
+ * Desktop apps started from the Dock or Start menu do not inherit a shell's HTTPS_PROXY. When the operating system
+ * has one fixed proxy (the same answer for the model endpoint and Azure DevOps), use it for the Node side too; a PAC
+ * file that routes hosts differently is left alone, since one proxy for every host could break intranet gateways.
+ * D365FO_SYSTEM_PROXY=false turns this off.
+ */
+async function adoptSystemProxy({ proxyFromEnv, proxyFromRule, withLocalNoProxy }) {
+  if (proxyFromEnv(process.env) || /^(0|false|no|off)$/i.test(process.env.D365FO_SYSTEM_PROXY ?? '')) return;
+  const resolveFor = (url) => session.defaultSession.resolveProxy(url).then(proxyFromRule, () => undefined);
+  const [model, devops] = await Promise.all([resolveFor('https://api.anthropic.com/'), resolveFor('https://dev.azure.com/')]);
+  if (!model || model !== devops) return;
+  process.env.HTTPS_PROXY = model;
+  process.env.HTTP_PROXY = model;
+  process.env.NO_PROXY = withLocalNoProxy(process.env.NO_PROXY);
+}
+
+/** Asks before quitting while a run is going, since quitting stops it. */
+async function confirmQuit() {
+  if (!win || win.isDestroyed() || !appView || appView.webContents.isDestroyed()) return true;
+  // A hung page must not make the app impossible to quit.
+  const info = await Promise.race([run(appView, 'window.appInfo ? appInfo() : null'), new Promise((r) => setTimeout(() => r(profileInfo), 2000))]);
+  if (!info?.busy) return true;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Keep running', 'Stop the run and quit'],
+    defaultId: 0,
+    cancelId: 0,
+    message: 'A test run is still in progress.',
+    detail: 'Quitting stops it. The case in progress is marked as interrupted and the partial results are saved to Results.',
+    noLink: true,
+  });
+  return response === 1;
+}
+
 async function main() {
   await app.whenReady();
   buildMenu();
@@ -154,8 +198,11 @@ async function main() {
   win.contentView.addChildView(appView);
   win.contentView.addChildView(rail);
   win.on('resize', layout);
-  win.on('close', () => {
-    if (process.platform !== 'darwin') app.quit();
+  // Closing the window quits the app; route it through before-quit so a running test is not lost by accident.
+  win.on('close', (event) => {
+    if (quitState === 'done') return;
+    event.preventDefault();
+    app.quit();
   });
   guardLinks(appView.webContents);
   const isRailSender = (event) => event.sender === rail.webContents && event.senderFrame?.url === pathToFileURL(join(here, 'rail.html')).href;
@@ -167,6 +214,12 @@ async function main() {
 
   const root = workspace();
   process.chdir(root);
+  const network = await lib('net/network.js');
+  await adoptSystemProxy(network);
+  // Trust the OS certificate store (company TLS inspection) and use the proxy for model and DevOps calls.
+  // Child processes inherit HTTPS_PROXY/NO_PROXY and run the same setup in the CLI.
+  const setup = network.configureNetwork();
+  for (const note of setup.notes) console.warn(`[network] ${note}`);
   const { startUiServer } = await lib('ui/server.js');
   const { agentHome } = await lib('profiles/paths.js');
   const home = agentHome();
@@ -196,12 +249,28 @@ app.on('second-instance', () => {
   }
 });
 app.on('activate', () => win?.show());
-app.on('before-quit', () => {
-  quitting = true;
-  void ui?.close();
+app.on('before-quit', (event) => {
+  if (quitState === 'done' || !primary) return;
+  event.preventDefault();
+  if (quitState !== 'running') return;
+  quitState = 'asking';
+  void (async () => {
+    if (!(await confirmQuit().catch(() => true))) {
+      quitState = 'running';
+      return;
+    }
+    quitState = 'closing';
+    quitting = true; // also declines any native approval dialog still waiting
+    await ui?.close().catch(() => undefined);
+    quitState = 'done';
+    app.quit();
+  })();
 });
 app.on('window-all-closed', () => app.quit());
-main().catch((e) => {
-  dialog.showErrorBox('D365FO Agent could not start', String(e?.stack ?? e));
-  app.quit();
-});
+if (primary) {
+  main().catch((e) => {
+    dialog.showErrorBox('D365FO Agent could not start', String(e?.stack ?? e));
+    quitState = 'done';
+    app.quit();
+  });
+}

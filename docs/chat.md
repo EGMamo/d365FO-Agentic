@@ -4,7 +4,7 @@ Chat is part of the same local page as Tests, Results, and Settings. It uses the
 
 ## User workflow
 
-Create a conversation, ask about setup/cases/results, and follow model activity in the composer area. Conversations can be renamed and deleted. Enter sends a message; Shift+Enter adds a new line. Stop cancels the active model response; already persisted messages remain. Drafts are retained while switching conversations.
+Create a conversation, ask about setup/cases/results, and follow model activity in the composer area. Assistant answers are rendered as Markdown (headings, lists, tables, code, http(s) links that open in the system browser); your own messages are shown as typed. Conversations can be renamed and deleted. Enter sends a message; Shift+Enter adds a new line. Stop cancels the active model response; already persisted messages remain. Drafts are retained while switching conversations.
 
 Chat can list and check environments, read cases and Azure DevOps plans, follow runs, explain and compare results, and upload selected runs. It cannot edit profiles or test-case files through model tools. Live runs, reruns, and uploads still show the desktop's native confirmation with the actual environment, source, cases, or upload plan. In browser-only development mode, those actions are refused unless the page itself supplies them; diagnostics remain available.
 

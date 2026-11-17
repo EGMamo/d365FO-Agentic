@@ -48,4 +48,18 @@ describe('JsonChatRepository', () => {
     assert.deepEqual((await repo.list()).map((c) => c.id), [id]);
     assert.equal(JSON.parse(await readFile(join(home, `${id}.json`), 'utf8')).title, 'Readable');
   });
+
+  it('does not let an answer still being saved recreate a deleted chat', async () => {
+    const home = await temp();
+    const repo = new JsonChatRepository(home);
+    const { id } = await repo.create();
+    const saving = repo.append(id, [{ role: 'user', content: 'Still saving' }]);
+    const deleting = repo.delete(id);
+    const late = repo.append(id, [{ role: 'assistant', content: 'Too late' }]);
+    await saving;
+    await deleting;
+    await assert.rejects(late, /No such chat/);
+    assert.deepEqual(await repo.list(), []);
+    await assert.rejects(readFile(join(home, `${id}.json`)), { code: 'ENOENT' });
+  });
 });

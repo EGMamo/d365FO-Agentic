@@ -53,15 +53,16 @@ The design uses **dependency inversion**, **ports and adapters**, and **controll
 
 ## Security boundaries
 
-The browser API remains loopback-only, token-cookie authenticated, Host-header checked, and protected against cross-origin writes. Provider secrets stay in the Node service and are redacted from Chat errors. The frontend safely renders model/user text through DOM text nodes rather than injected HTML.
+The browser API remains loopback-only, token-cookie authenticated, Host-header checked, and protected against cross-origin writes. Provider secrets stay in the Node service and are redacted from Chat errors. The frontend renders model/user text through DOM text nodes rather than injected HTML; `web/markdown.js` parses assistant Markdown into a tree and builds elements from it, never HTML strings, and links only http(s) addresses.
 
 Chat operations use the same executor as other application actions. A dry-run remains a diagnostic only. Live runs, reruns, and uploads requested by Chat still require the native approval supplied by Electron; model text cannot approve them. The reservation and history-finalization behavior is shared with page-initiated operations.
 
-The optional `/tools` endpoint is a thin OpenAPI adapter for integration compatibility, not another backend or another implementation of the operations. The old `/model/v1` protocol bridge has been removed.
+The optional `/tools` endpoint is a thin OpenAPI adapter for integration clients holding the tool token, not another backend or another implementation of the operations. It refuses any request with an `Origin` header (that is, from a web page) and offers no CORS. The old `/model/v1` protocol bridge has been removed.
 
 ## Intentional extension points
 
-- **Another provider/protocol:** implement `LlmProvider` and select it in `src/llm/index.ts`. Chat and the test runner use the same interface. Provider adaptation belongs in `src/llm/`, not `web/` or the Electron shell.
+- **Another provider/protocol:** implement `LlmProvider` and select it in `src/llm/index.ts`. Chat and the test runner use the same interface. Provider adaptation belongs in `src/llm/`, not `web/` or the Electron shell. Two exist: the Claude Messages API (`anthropic.ts`) and OpenAI-compatible chat completions for gateways (`openai.ts`), chosen by `LLM_API_FORMAT`.
+- **Network:** `src/net/network.ts` adds the OS certificate store and the environment proxy to Node once per process (CLI and Electron main). Outbound calls use Node's `fetch`, so they inherit both.
 - **Token streaming:** extend the provider through an optional streaming method, then map deltas to `ChatEvent`. The SSE controller and frontend event handling do not need to move into the provider. Preserve non-streaming providers as a supported case.
 - **Stronger persistence/querying:** implement `ChatRepository` with SQLite or another transactional store. Keep `service.ts` and its tests unchanged. JSON is intentionally sufficient for one local user; do not add a database server just for conversations.
 - **New Chat action:** add its schema to `src/ui/tools.ts`, then implement it in the shared executor in `server.ts`. Both the Chat tool schema and the optional OpenAPI document are generated from that catalog. Put native destructive-action approval in the operation, not the prompt or UI.

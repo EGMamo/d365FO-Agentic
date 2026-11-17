@@ -49,6 +49,7 @@ const STATIC_ASSETS: Record<string, string> = {
   'app.js': 'text/javascript; charset=utf-8',
   'chat.css': 'text/css; charset=utf-8',
   'chat.js': 'text/javascript; charset=utf-8',
+  'markdown.js': 'text/javascript; charset=utf-8',
 };
 const assetCache = new Map<string, Buffer>();
 /** The page's files are read once; set D365FO_UI_DEV=1 to re-read them on every request while editing. */
@@ -116,9 +117,6 @@ export interface UiServerOptions {
   chatRepository?: ChatRepository;
 }
 
-const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
-export const isLoopback = (host: string): boolean => LOOPBACK.has(host);
-
 export interface RunningUi {
   server: Server;
   port: number;
@@ -128,8 +126,6 @@ export interface RunningUi {
   openUrl: string;
   /** Bearer token for the optional OpenAPI integration endpoint at `<url>tools`. */
   toolToken: string;
-  /** Register the one browser origin allowed to use the chat/model bridges. */
-  setChatOrigin: (origin: string) => void;
   close: () => Promise<void>;
 }
 
@@ -276,7 +272,6 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   const caseFiles = new TestCaseFiles(repoRoot);
   let run: RunState | undefined;
   let runSeq = 0;
-  let chatOrigin: string | undefined;
   const listeners = new Set<ServerResponse>();
   const chatRepository = opts.chatRepository ?? new JsonChatRepository(join(opts.home, 'chats'));
   const chatService = new ChatService({
@@ -703,9 +698,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     return path && existsSync(path) ? readFile(path, 'utf8') : undefined;
   }
 
-  /** Browser calls are limited to the registered local chat origin; token-authenticated CLI calls have no Origin. */
-  const CORS = { 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '600', Vary: 'Origin' };
-  const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { ...CORS, 'Content-Type': 'application/json; charset=utf-8' });
+  const tsend = (res: ServerResponse, status: number, body: unknown): void => send(res, status, body, { 'Content-Type': 'application/json; charset=utf-8' });
   const intParam = (url: URL, name: string, def: number, max: number): number => {
     const n = Number.parseInt(url.searchParams.get(name) ?? '', 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, 0), max) : def;
@@ -747,9 +740,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   /**
-   * The application operations available to an LLM. This is the single execution path for the owned Chat service;
-   * the legacy OpenAPI adapter below exposes the same operations during migration. Approval remains inside startRun,
-   * startUpload and rerunFailed, so neither transport can bypass the native desktop policy.
+   * The application operations available to an LLM. This is the single execution path for the app's own Chat and
+   * for the optional OpenAPI adapter below. Approval remains inside startRun, startUpload and rerunFailed, so
+   * neither transport can bypass the native desktop policy.
    */
   async function executeChatOperation(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const text = (key: string): string => typeof args[key] === 'string' ? String(args[key]).trim() : '';
@@ -816,17 +809,14 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     }
   }
 
-  /** Optional OpenAPI adapter over the exact operations used by app-owned Chat. */
+  /**
+   * Optional OpenAPI adapter over the exact operations used by the app's Chat, for external integration clients
+   * (scripts, a self-hosted assistant) holding the tool token. Those send no Origin header; any request that does
+   * comes from a web page, which has no business here, so browsers are refused and no CORS is offered.
+   */
   async function toolsHandler(req: IncomingMessage, res: ServerResponse, url: URL, method: string): Promise<void> {
     const path = url.pathname.slice(TOOLS_PREFIX.length) || '/';
-    if (req.headers.origin) {
-      if (req.headers.origin !== chatOrigin) return send(res, 403, { error: 'Unexpected chat origin.' });
-      res.setHeader('Access-Control-Allow-Origin', chatOrigin);
-    }
-    if (method === 'OPTIONS') {
-      res.writeHead(204, CORS);
-      return void res.end();
-    }
+    if (req.headers.origin) return tsend(res, 403, { error: 'The tool API does not accept requests from web pages.' });
     if (method === 'GET' && path === '/openapi.json') {
       const base = `http://${req.headers.host ?? `127.0.0.1:${port}`}${TOOLS_PREFIX}`;
       return tsend(res, 200, openApiSpec(base));
@@ -1085,19 +1075,17 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     url,
     openUrl: `${url}?token=${token}`,
     toolToken,
-    setChatOrigin: (origin: string) => {
-      const parsed = new URL(origin);
-      if (parsed.protocol !== 'http:' || !isLoopback(parsed.hostname) || parsed.origin !== origin) throw new Error('The chat origin must be an exact local HTTP origin.');
-      chatOrigin = origin;
+    close: async () => {
+      // A run in progress gets SIGTERM and time to mark its case interrupted and write its partial reports
+      // (the child is force-killed after 20 s), so quitting the app does not leave a run without a history entry.
+      const pending = run && !run.settled ? run : undefined;
+      stopRun();
+      chatController.close();
+      if (pending) await waitToSettle(pending, 25_000);
+      for (const l of listeners) l.end();
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     },
-    close: () =>
-      new Promise((resolve) => {
-        stopRun();
-        chatController.close();
-        for (const l of listeners) l.end();
-        server.closeAllConnections?.();
-        server.close(() => resolve());
-      }),
   };
 }
 

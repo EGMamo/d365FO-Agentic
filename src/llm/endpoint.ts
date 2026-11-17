@@ -1,3 +1,5 @@
+import { normalizeOpenAiBaseUrl } from './openai.js';
+
 export const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com';
 
 /**
@@ -28,20 +30,24 @@ export async function checkAnthropicEndpoint(
   auth: { apiKey?: string; authToken?: string },
   timeoutMs = 6000,
   fetchImpl: typeof fetch = fetch,
+  format: 'anthropic' | 'openai' = 'anthropic',
 ): Promise<AnthropicEndpointCheck> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const openai = format === 'openai';
+  const url = openai ? `${normalizeOpenAiBaseUrl(baseUrl)}/models` : `${normalizeAnthropicBaseUrl(baseUrl)}/v1/models`;
+  const bearer = openai ? auth.authToken || auth.apiKey : auth.authToken;
   try {
-    const res = await fetchImpl(`${normalizeAnthropicBaseUrl(baseUrl)}/v1/models`, {
+    const res = await fetchImpl(url, {
       headers: {
-        'anthropic-version': '2023-06-01',
-        ...(auth.apiKey ? { 'x-api-key': auth.apiKey } : {}),
-        ...(auth.authToken ? { authorization: `Bearer ${auth.authToken}` } : {}),
+        ...(openai ? {} : { 'anthropic-version': '2023-06-01' }),
+        ...(auth.apiKey && !openai ? { 'x-api-key': auth.apiKey } : {}),
+        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       },
       signal: controller.signal,
     });
     if (res.status === 401 || res.status === 403) return { reachable: true, authorized: false, models: [], detail: `the server refused the key or token (HTTP ${res.status})` };
-    if (!res.ok) return { reachable: true, authorized: true, models: [], detail: `no model list (HTTP ${res.status} from /v1/models)` };
+    if (!res.ok) return { reachable: true, authorized: true, models: [], detail: `no model list (HTTP ${res.status} from ${new URL(url).pathname})` };
     const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: unknown }> };
     const models = (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string');
     return { reachable: true, authorized: true, models, detail: `${models.length} model(s) listed` };

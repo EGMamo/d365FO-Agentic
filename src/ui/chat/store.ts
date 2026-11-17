@@ -75,24 +75,34 @@ export class JsonChatRepository implements ChatRepository {
     });
   }
 
-  async delete(id: string): Promise<void> {
+  /**
+   * Queued behind pending writes of the same chat, so an answer still being saved cannot recreate the file
+   * after it was deleted; writes queued later find it gone and fail with "No such chat".
+   */
+  delete(id: string): Promise<void> {
     assertId(id);
-    try {
-      await unlink(join(this.directory, `${id}.json`));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileError('No such chat.', 404);
-      throw e;
-    }
+    return this.serialize(id, async () => {
+      try {
+        await unlink(join(this.directory, `${id}.json`));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileError('No such chat.', 404);
+        throw e;
+      }
+    });
   }
 
-  /** Serializes writes per conversation while allowing unrelated chats to proceed independently. */
   private mutate(id: string, change: (chat: ChatConversation) => ChatConversation): Promise<ChatConversation> {
-    const previous = this.writes.get(id) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(async () => {
+    return this.serialize(id, async () => {
       const chat = change(await this.readFile(id));
       await this.write(chat);
       return chat;
     });
+  }
+
+  /** Serializes operations per conversation while allowing unrelated chats to proceed independently. */
+  private serialize<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.writes.get(id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
     this.writes.set(id, next);
     void next.finally(() => {
       if (this.writes.get(id) === next) this.writes.delete(id);

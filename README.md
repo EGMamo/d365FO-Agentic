@@ -18,7 +18,7 @@ Chat, Tests, Results, and Settings are pages of one local application rather tha
 Use the desktop installer, or build it as described in [desktop/README.md](desktop/README.md).
 
 1. In **Settings**, create an environment with its F&O sandbox URL, sign-in, and legal entity. Use a saved session for accounts requiring MFA, or a test username/password.
-2. Enter your Claude API key in **Shared AI connection** and press **Test connection**. Chat and all test runs use this connection; there is no second model to configure. Model name and corporate gateway settings are under Advanced.
+2. Enter your Claude API key in **Shared AI connection** and press **Test connection**. Chat and all test runs use this connection; there is no second model to configure. Model name, gateway address and API format (Claude Messages or OpenAI-compatible) are under Advanced; see [docs/providers.md](docs/providers.md) for company gateways, proxies and certificates.
 3. Choose **Use this environment**, then **Check setup**.
 4. In **Tests**, load local cases or an Azure DevOps plan/suite, select cases, and run them. Real runs ask for confirmation.
 5. Review the evidence in **Results**. Upload a selected run explicitly when needed.

@@ -15,9 +15,11 @@ npm start
 
 The desktop stages the built Node service, web pages, examples, shell, and pinned Playwright MCP. Staging checks the committed `runtime/package.json` against application dependencies, installs with `npm ci`, audits the application tree, and includes a CycloneDX dependency inventory. Run `npm run lock:runtime` and commit the runtime manifest and lockfile whenever application dependencies or the Playwright pin change.
 
-The packaged desktop needs **no Python, uv, Open WebUI, Docker, or first-launch Chat download**. The first browser test run may still download the Playwright browser. Browser sign-in uses the bundled Playwright CLI under Electron, without a system Node/npm installation. Node's built-in SQLite reader imports legacy Open WebUI conversations, including committed WAL data, without an extra dependency or service.
+The packaged desktop needs **no Python, uv, Open WebUI, Docker, or first-launch Chat download**. The first browser test run may still download the Playwright browser. Browser sign-in uses the bundled Playwright CLI under Electron, without a system Node/npm installation.
 
-The settings service owns model credentials, application operations, Chat persistence, and run processes. Live runs and uploads requested by Chat require a native desktop confirmation showing the actual target. Chat and the page actions share the same executor and reservation policy. Open WebUI conversations are imported once from its existing SQLite database without modifying or starting the legacy runtime; see [../docs/chat.md](../docs/chat.md).
+The settings service owns model credentials, application operations, Chat persistence, and run processes. Live runs and uploads requested by Chat require a native desktop confirmation showing the actual target. Chat and the page actions share the same executor and reservation policy; see [../docs/chat.md](../docs/chat.md). Quitting while a run is in progress asks first, then stops the run and waits for its partial results to be saved.
+
+On a corporate network the app trusts the operating system's certificate store (for TLS-inspecting proxies) and uses the system proxy when it is one fixed proxy; see [../docs/providers.md](../docs/providers.md#corporate-networks).
 
 Settings are in the usual private `d365fo-agent` user folder (override `D365FO_AGENT_HOME`). Test files and reports are under `Documents/D365FO Agent` (override `D365FO_WORKSPACE`). App-owned conversations are under `chats/` in the agent home. Upgrades back up configuration before migration and retain existing environment IDs/report paths and legacy model files. See [../docs/architecture.md](../docs/architecture.md) for module ownership and extension points.
 

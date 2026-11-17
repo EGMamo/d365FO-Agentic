@@ -31,6 +31,9 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
 
+  // Wire protocol of the model endpoint: Claude's Messages API, or OpenAI-compatible chat completions for gateways
+  // (LiteLLM, corporate GenAI services) that only serve /v1/chat/completions. Same key, URL and model settings.
+  LLM_API_FORMAT: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() || undefined : v), z.enum(['anthropic', 'openai']).default('anthropic')),
   ANTHROPIC_API_KEY: z.string().optional(),
   // A Claude-compatible endpoint other than api.anthropic.com: a company gateway, a proxy, or a model router.
   ANTHROPIC_BASE_URL: z
@@ -183,6 +186,7 @@ export function validateForRun(cfg: AppConfig): string[] {
         issues.push(cfg.ANTHROPIC_BASE_URL ? 'ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for the custom Claude API URL' : 'ANTHROPIC_API_KEY is required for provider=anthropic');
       }
       if (cfg.ANTHROPIC_BASE_URL && !isHttpUrl(cfg.ANTHROPIC_BASE_URL)) issues.push(`ANTHROPIC_BASE_URL is not a valid http(s) URL: ${cfg.ANTHROPIC_BASE_URL}`);
+      if (cfg.LLM_API_FORMAT === 'openai' && !cfg.ANTHROPIC_BASE_URL) issues.push('LLM_API_FORMAT=openai needs the gateway address in ANTHROPIC_BASE_URL');
       break;
   }
 

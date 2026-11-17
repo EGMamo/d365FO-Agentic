@@ -45,10 +45,19 @@ export const FIELD_CATALOG: FieldSpec[] = [
   {
     group: 'AI model',
     key: 'ANTHROPIC_BASE_URL',
-    label: 'Claude API URL',
+    label: 'API URL',
     type: 'url',
     advanced: true,
     placeholder: 'https://api.anthropic.com',
+    help: 'Leave empty for Anthropic. For a company gateway, paste the address it gives you.',
+  },
+  {
+    group: 'AI model',
+    key: 'LLM_API_FORMAT',
+    label: 'API format',
+    options: ['', 'openai'],
+    advanced: true,
+    help: 'Use OpenAI-compatible for gateways that serve /v1/chat/completions (for example LiteLLM-based corporate GenAI services). The model name is the one the gateway lists.',
   },
   { group: 'AI model', key: 'ANTHROPIC_AUTH_TOKEN', label: 'Gateway bearer token', secret: true, advanced: true },
   {

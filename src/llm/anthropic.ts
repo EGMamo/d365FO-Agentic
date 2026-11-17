@@ -57,7 +57,9 @@ export class AnthropicProvider implements LlmProvider {
     promptCache?: boolean;
     client?: AnthropicClientLike;
   }) {
-    this.client = opts.client ?? (new Anthropic(anthropicClientOptions(opts)) as unknown as AnthropicClientLike);
+    // Node's own fetch, not the SDK's bundled HTTP agent: it honours the proxy and system certificates set up by
+    // configureNetwork (src/net/network.ts).
+    this.client = opts.client ?? (new Anthropic({ ...anthropicClientOptions(opts), fetch: globalThis.fetch as never }) as unknown as AnthropicClientLike);
     this.model = opts.model;
     this.defaultMaxTokens = opts.maxTokens;
     this.defaultTemperature = opts.temperature;

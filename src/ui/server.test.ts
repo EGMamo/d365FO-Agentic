@@ -410,7 +410,6 @@ describe('OpenAPI integration endpoint', () => {
       },
     });
     tui = await startUiServer({ home: join(dir, 'home'), port: 0, cliPath: join(dir, 'cli.mjs'), root: dir, devopsClient, approveToolAction: async () => true });
-    tui.setChatOrigin('http://127.0.0.1:3000');
     tcall = (path, init = {}) => {
       const { key = tui.toolToken, ...rest } = init;
       const headers: Record<string, string> = {};
@@ -424,7 +423,7 @@ describe('OpenAPI integration endpoint', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('publishes an OpenAPI document without a key, with CORS restricted to the registered chat origin', async () => {
+  it('publishes an OpenAPI document without a key, and refuses every web page origin', async () => {
     const r = await tcall('/openapi.json', { key: null });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('access-control-allow-origin'), null);
@@ -438,9 +437,10 @@ describe('OpenAPI integration endpoint', () => {
       'check_setup', 'compare_runs', 'get_results', 'get_run', 'list_devops_plans', 'list_devops_suites', 'list_profiles', 'list_runs', 'list_test_cases', 'read_test_case', 'rerun_failed', 'start_run', 'stop_run', 'upload_run', 'use_profile',
     ]);
     const pre = await fetch(`http://127.0.0.1:${tui.port}/tools/runs`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:3000', 'access-control-request-method': 'POST' } });
-    assert.equal(pre.status, 204);
-    assert.equal(pre.headers.get('access-control-allow-origin'), 'http://127.0.0.1:3000');
-    assert.match(String(pre.headers.get('access-control-allow-headers')), /Authorization/);
+    assert.equal(pre.status, 403, 'even a local page gets no preflight');
+    assert.equal(pre.headers.get('access-control-allow-origin'), null);
+    const local = await fetch(`http://127.0.0.1:${tui.port}/tools/profiles`, { headers: { origin: `http://127.0.0.1:${tui.port}`, authorization: `Bearer ${tui.toolToken}` } });
+    assert.equal(local.status, 403, 'a page holding the token is still refused');
     const foreign = await fetch(`http://127.0.0.1:${tui.port}/tools/profiles`, { headers: { origin: 'https://untrusted.example', authorization: `Bearer ${tui.toolToken}` } });
     assert.equal(foreign.status, 403);
     assert.equal(foreign.headers.get('access-control-allow-origin'), null);
@@ -749,7 +749,6 @@ describe('atomic job reservations and native tool approval', () => {
     await writeFile(join(dir, 'release'), '');
     assert.equal((await call('/tools/runs', 'POST', { ...body, dryRun: true })).status, 200);
     await wait((s) => s?.settled);
-    assert.throws(() => server!.setChatOrigin('https://outside.example'), /local HTTP/);
   });
 
   it('binds native approval to the actual profile, source and selected cases', async () => {

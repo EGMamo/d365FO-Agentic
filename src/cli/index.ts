@@ -12,12 +12,17 @@ import { discoverTestCases, executeTestRun } from '../core/runner.js';
 import { checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, interactiveSessionLogin } from '../d365fo/session.js';
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
+import { normalizeOpenAiBaseUrl } from '../llm/openai.js';
 import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
 import { environmentForChild, modelSelection, overriddenKeys, profileSelection } from '../config/load-env.js';
 import { RunHistory } from '../ui/history.js';
 import { agentHome } from '../profiles/paths.js';
 import { DEFAULT_PORT, findRunningUi, loadOrCreateToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
+import { configureNetwork, redactProxy } from '../net/network.js';
+
+// Before any request: trust the OS certificate store and use HTTPS_PROXY on corporate networks.
+const network = configureNetwork();
 
 const program = new Command();
 program
@@ -38,15 +43,19 @@ program
     if (overriddenKeys.length) {
       console.log(`  WARNING: ${overriddenKeys.join(', ')} ${overriddenKeys.length === 1 ? 'is' : 'are'} also set in this computer's environment, and that value is used instead of the one in ${profileSelection.name ? 'the profile' : '.env'}.`);
     }
+    console.log(`Network: ${network.proxy ? `proxy ${redactProxy(network.proxy)}` : 'direct (no HTTPS_PROXY)'}; ${network.systemCertificates} certificate(s) added from the system store`);
+    for (const note of network.notes) console.log(`  NOTE: ${note}`);
     console.log(`LLM provider: ${cfg.LLM_PROVIDER} (${activeModel(cfg)})`);
     if (cfg.LLM_PROVIDER === 'anthropic') {
-      const custom = normalizeAnthropicBaseUrl(cfg.ANTHROPIC_BASE_URL);
+      const openai = cfg.LLM_API_FORMAT === 'openai';
+      console.log(`API format: ${openai ? 'OpenAI-compatible chat completions' : 'Claude Messages API'}`);
+      const custom = openai ? normalizeOpenAiBaseUrl(cfg.ANTHROPIC_BASE_URL) : normalizeAnthropicBaseUrl(cfg.ANTHROPIC_BASE_URL);
       if (!custom) {
         console.log(`Claude API URL: default (${ANTHROPIC_DEFAULT_BASE_URL})`);
       } else if (!/^https?:\/\//i.test(custom)) {
         console.log(`Claude API URL: INVALID (${custom})`);
       } else {
-        const ep = await checkAnthropicEndpoint(custom, { apiKey: cfg.ANTHROPIC_API_KEY, authToken: cfg.ANTHROPIC_AUTH_TOKEN });
+        const ep = await checkAnthropicEndpoint(custom, { apiKey: cfg.ANTHROPIC_API_KEY, authToken: cfg.ANTHROPIC_AUTH_TOKEN }, 6000, fetch, openai ? 'openai' : 'anthropic');
         if (!ep.reachable) {
           console.log(`Claude API URL: NOT REACHABLE at ${custom} (${ep.detail})`);
           issues.push(`Cannot reach the custom Claude API URL ${custom} (${ep.detail}). Check the address, VPN or proxy.`);

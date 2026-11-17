@@ -186,7 +186,9 @@ function values(root) {
 function field(spec, value, opts = {}) {
   const id = 'f_' + spec.key;
   const props = { id, 'data-key': spec.key };
-  const labels = { '': 'Default', 'azure-cli': 'Microsoft account', pat: 'Personal access token' };
+  const labels = spec.key === 'LLM_API_FORMAT'
+    ? { '': 'Claude Messages API (default)', openai: 'OpenAI-compatible (chat completions)' }
+    : { '': 'Default', 'azure-cli': 'Microsoft account', pat: 'Personal access token' };
   const input = spec.options
     ? el('select', props, spec.options.map((o) => el('option', { value: o }, labels[o] || o)))
     : el('input', {

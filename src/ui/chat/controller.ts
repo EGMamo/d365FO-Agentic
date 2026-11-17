@@ -43,9 +43,17 @@ export function createChatController(deps: ChatHttpDependencies) {
     }
     if (action !== '/messages' || method !== 'POST') throw new ProfileError('Method not allowed.', 405);
     if (active.has(id)) throw new ProfileError('This chat is already answering. Stop it or wait for the answer.', 409);
-    const body = await deps.readJson(req);
+    // Claim the conversation before the first await: two sends racing through body parsing would otherwise both
+    // run, interleaving their turns and breaking the tool_use/tool_result pairing the provider requires.
     const controller = new AbortController();
     active.set(id, controller);
+    let body: Record<string, unknown>;
+    try {
+      body = await deps.readJson(req);
+    } catch (e) {
+      if (active.get(id) === controller) active.delete(id);
+      throw e;
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-store',

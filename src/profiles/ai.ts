@@ -19,6 +19,7 @@ export const AI_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
+  'LLM_API_FORMAT',
   'LLM_MODEL',
   'LLM_MAX_TOKENS',
 ] as const;
@@ -45,14 +46,17 @@ export class AiSettings {
       throw new ProfileError('This release uses Claude. Your previous connections remain in the settings backup.');
     const old = new Map((await this.read(true)).map((e) => [e.key, e.value]));
     const final = checked
-      .filter((e) => e.key !== 'LLM_PROVIDER' && !(['LLM_MODEL', 'LLM_MAX_TOKENS'].includes(e.key) && !e.value.trim()))
+      .filter((e) => e.key !== 'LLM_PROVIDER' && !(['LLM_MODEL', 'LLM_MAX_TOKENS', 'LLM_API_FORMAT'].includes(e.key) && !e.value.trim()))
       .map((e) => ({ ...e, value: e.value === MASK && isSecretKey(e.key) ? (old.get(e.key) ?? '') : e.value }));
+    const format = final.find((e) => e.key === 'LLM_API_FORMAT')?.value.trim().toLowerCase();
+    if (format && !['anthropic', 'openai'].includes(format)) throw new ProfileError('Choose the Claude or the OpenAI-compatible API format.');
     const url = final.find((e) => e.key === 'ANTHROPIC_BASE_URL')?.value;
+    if (format === 'openai' && !url?.trim()) throw new ProfileError('The OpenAI-compatible format needs the gateway API URL.');
     if (url) {
       try {
         if (new URL(url).protocol !== 'https:') throw new Error();
       } catch {
-        throw new ProfileError('The Claude API URL must be an HTTPS address.');
+        throw new ProfileError('The API URL must be an HTTPS address.');
       }
     }
     await mkdir(this.home, { recursive: true, mode: 0o700 });
