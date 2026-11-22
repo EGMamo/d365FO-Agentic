@@ -20,6 +20,8 @@ export type McpServerSpec =
       transport: 'http';
       url: string;
       headers?: Record<string, string>;
+      /** A fresh bearer token for every request (they expire within the hour). */
+      token?: (signal?: AbortSignal) => Promise<string>;
     };
 
 export interface McpToolDescriptor {
@@ -51,6 +53,10 @@ export class McpManager {
     this.specs.set(spec.name, spec);
   }
 
+  has(name: string): boolean {
+    return this.specs.has(name);
+  }
+
   async connect(name: string, signal?: AbortSignal): Promise<Client> {
     signal?.throwIfAborted();
     const existing = this.clients.get(name);
@@ -72,8 +78,18 @@ export class McpManager {
         throw e;
       }
     } else {
+      const token = spec.token;
       const transport = new StreamableHTTPClientTransport(new URL(spec.url), {
         requestInit: { headers: spec.headers },
+        ...(token
+          ? {
+              fetch: async (input: string | URL, init?: RequestInit) => {
+                const headers = new Headers(init?.headers);
+                headers.set('authorization', `Bearer ${await token(init?.signal ?? undefined)}`);
+                return fetch(input, { ...init, headers });
+              },
+            }
+          : {}),
       });
       try {
         await client.connect(transport, { signal });

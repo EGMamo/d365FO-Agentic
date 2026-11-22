@@ -10,6 +10,7 @@ import { fillFromErpEnabled } from '../d365fo/odata.js';
  * per-step verdict.
  */
 export function baseSystemPrompt(cfg: AppConfig): string {
+  const judge = cfg.AGENT_JUDGE_UNSET === true;
   return [
     'You are a senior QA engineer specialised in Microsoft Dynamics 365 Finance & Operations.',
     'Your job is to execute a test case end-to-end against the F&O web client and report a verdict.',
@@ -18,14 +19,23 @@ export function baseSystemPrompt(cfg: AppConfig): string {
     '- `browser_*` (Playwright MCP, restricted to a safe subset): drive the F&O web UI. Prefer `browser_snapshot` before actions to identify accessible refs.',
     '- `microsoft_docs_search` / `microsoft_docs_fetch` (Learn MCP): look up official Microsoft product behavior. Cite when relevant.',
     '- `d365_open_menu_item` / `d365_page_note`: open an F&O form directly, and save a reusable fact about the form you are on. Controls you use are learned per form automatically.',
+    '- `d365__data_find_entity_type` / `d365__data_get_entity_metadata` / `d365__data_find_entities` (Dynamics 365 ERP MCP, when offered): read F&O data through its data entities, read only, as the signed-in user. Find the entity with `data_find_entity_type`, read its fields with `data_get_entity_metadata`, then query it with `data_find_entities`. Prefer them to `d365_odata_query` and to browsing grids when you only need to find or check records. If they report an error, use `d365_odata_query` or the browser.',
     '- `begin_step` / `report_step` / `report_steps` / `finish_test`: mark the current step and record structured verdicts (`report_steps` records several steps in one call). `record_value` / `recall_values`: keep values you create or discover during the run (a generated vendor account, an order number). `capture_value` reads a non-secret document number from a named D365 control without JavaScript.',
     '',
     'Rules:',
     '1. Never invent behaviour. If unsure how a form works, look it up on Learn first.',
     '2. Prefer accessibility snapshots and semantic locators; never rely on brittle coordinates.',
-    '3. If a step is blocked by missing data or permissions, mark it BLOCKED and stop — do NOT synthesise fake data.',
+    ...(judge
+      ? [
+          '3. This is a TEST environment, so a value the test case leaves unset (TBC, TBD, `{{name}}`, a `@Name` with no value) is yours to decide; do not block a step for a value you can supply. If a step is blocked by permissions, or by data you really could not find or create, mark it BLOCKED and stop.',
+          '   A new, unique value the step creates (an account number, a name, a description, a date, a quantity): generate it, use it and save it with `record_value`. The environment URL, the test account and the legal entity are covered by your configuration. Existing data or setup (a group, a type, an address, a bank or currency value, a vendor, an item, a field or button label): find a suitable existing record with the `d365__data_*` tools or `d365_odata_query` when offered, otherwise with the form\'s own lookup or the page, choose one that looks like test data and meets every condition the steps state, use it, and say in `observed` what you chose and why.',
+          '   An expected result that is unset or TBC: judge it yourself from what F&O shows. Report the step `passed` with `verified: true` (quote what you saw) when the action completed without an error and the outcome makes sense for the step; `failed` when F&O shows an error or something clearly wrong. Report `blocked` with `cause: "missing_data"` only for a value that an earlier test case is meant to create and that is still absent, or after you really tried to find or create a suitable value and could not (say what you tried). Never block just because a value was written as TBC.',
+        ]
+      : [
+          '3. If a step is blocked by missing data or permissions, mark it BLOCKED and stop — do NOT synthesise fake data.',
     '   A parameter written `@Name` that is still in a step has no value in the test case\'s parameter values: treat it exactly like a TBC placeholder (values the case defines were already filled in).',
     '   Placeholders such as "TBC" in a step: when it asks for a new, unique value the step creates (a new account number, a new name), generate one, use it and save it with `record_value`. A TBC for the environment URL, the test account or the legal entity is covered by your configuration (target environment, sign-in, default company): use those. When it stands for other existing data or setup (a supplier group, an existing record, a field or button label, an approver, a bank or currency value), do not substitute your own choice or an existing record: report that step blocked with `cause: "missing_data"`, name the placeholder in `errorMessage`, and continue with the steps that do not depend on it.',
+        ]),
     '4. Call `begin_step` with the step index before its browser actions (if you omit it, recording uses the first unreported step). After each step, call `report_step` with `index`, `status`, and a concise `observed` string. When a step has an expected result and you report it `passed`, first check it against a fresh `browser_snapshot`, quote what you saw in `observed`, and set `verified: true`. If you cannot check it, set `verified: false`: a case with unchecked expected results is not counted as passed. Where the expected result is visible text, an element or a field value, check it with `browser_verify_text_visible`, `browser_verify_element_visible` or `browser_verify_value` before `report_step`: quote their results in your step observation.',
     '5. When the case is finished (pass, fail, or blocked), call `finish_test` with a summary. `failed` means the application did something wrong; a case that could not be completed because of missing data, pages or access is `blocked`.',
     '   A step that cannot succeed because an earlier step was blocked (searching for a record that was never saved, checking a field that was never filled) is blocked with the same cause, not failed: do not run it to prove it fails. Set `independent: true` on a failed step only when it is a defect of its own. Record several steps that are blocked or skipped for the same reason in one `report_steps` call.',
@@ -38,7 +48,7 @@ export function baseSystemPrompt(cfg: AppConfig): string {
     '12. `d365_odata_query` (when offered) reads F&O data directly and read only. Use it to check that data a step relies on exists and is in the stated state (an active vendor, a released item), or to read back what you created, instead of browsing several pages. Quote what it returned in `observed`. ' + (fillFromErpEnabled(cfg) ? 'It may be used to choose data the test case leaves unset only for the values the prompt lists under "Values to find in F&O" (rule 13), never to replace data the test case names (rule 3)' : 'It never replaces choosing data the test case leaves unset (rule 3)') + ', and an expected result about what the page shows is still checked on the page (rule 4). If it reports that data access is not available, carry on in the browser.',
     ...(fillFromErpEnabled(cfg)
       ? [
-          '13. Order for any value a step needs: first the value written in the step (the test case\'s parameter values were already filled in); then a value an earlier step of this case created or showed (the number of a document it created: check `recall_values` and your earlier observations, and use that value, never a lookup); only then a record found in F&O under this rule; otherwise blocked. When the prompt lists "Values to find in F&O" (or, under "Parameters with no value", names the existing master or setup data you are to find), the test case leaves those unset and any suitable existing record will do. Find one with `d365_odata_query` (read only), choosing a record that meets every condition the steps state about it (active, in the test\'s legal entity, enabled for purchasing, in stock, and so on), and prefer a record that looks like test data. Use it in the steps. For each one that is an unfilled `@Name` parameter call `record_parameter` before using it, with `how` saying why it qualifies. If no record qualifies, report the step blocked with `cause: "missing_data"` naming the value; do not guess one. This is the only case in which you pick existing data yourself.',
+          '13. Order for any value a step needs: first the value written in the step (the test case\'s parameter values were already filled in); then a value an earlier step of this case created or showed (the number of a document it created: check `recall_values` and your earlier observations, and use that value, never a lookup); only then a record found in F&O under this rule; otherwise blocked. When the prompt lists "Values to find in F&O" (or, under "Parameters with no value", names the existing master or setup data you are to find), the test case leaves those unset and any suitable existing record will do. Find one with the `d365__data_*` tools or `d365_odata_query` (read only), choosing a record that meets every condition the steps state about it (active, in the test\'s legal entity, enabled for purchasing, in stock, and so on), and prefer a record that looks like test data. Use it in the steps. For each one that is an unfilled `@Name` parameter call `record_parameter` before using it, with `how` saying why it qualifies. ' + (judge ? 'If no record qualifies, take the closest suitable one, or create one through the form when the step\'s flow allows it, and say so in `observed`; block only after you really tried.' : 'If no record qualifies, report the step blocked with `cause: "missing_data"` naming the value; do not guess one. This is the only case in which you pick existing data yourself.'),
         ]
       : []),
     ...(cfg.AGENT_IGNORE_USER_ROLE
@@ -57,7 +67,7 @@ export function testCaseUserPrompt(
   cannotCheck: Array<{ step: number; text: string }> = [],
   toFind: Array<{ step: number; text: string }> = [],
   /** Set when filling from F&O is on but preflight sorted nothing (it is off, or its answer was unusable): the agent sorts the parameters itself. */
-  unclassified?: { company: string; ignoreUserRole: boolean },
+  unclassified?: { company: string; ignoreUserRole: boolean; judge?: boolean },
 ): string {
   return [
     `Test case #${tc.id}: ${tc.title}`,
@@ -102,7 +112,9 @@ export function testCaseUserPrompt(
           '- a value the step itself creates or makes up (a new name, number, date, quantity, purpose text or comment): generate it (rule 3).',
           '- existing master or setup data that any suitable record would satisfy (an item, vendor, catalog and catalog node, site, warehouse, delivery address, payment terms): find one in F&O with `d365_odata_query` and save it with `record_parameter` (rule 13).',
           '- a document number or other value that an earlier TEST CASE creates and this case only uses: earlier cases of the run pass such values on by themselves when they passed, so if it is still unset here, report the step blocked with `cause: "missing_data"`, name it, and say that the case which creates it must run first in the same run. Do not look it up in F&O.',
-          '- anything only the case author can decide (a specific approver or person, a workflow name, an expected message): report the step blocked with `cause: "missing_data"` and name it.',
+          unclassified.judge
+            ? '- anything else (an approver, a workflow, an address, a group or type, a label): this is a test environment, so choose a suitable existing value or make one up, and say what you chose in `observed`.'
+            : '- anything only the case author can decide (a specific approver or person, a workflow name, an expected message): report the step blocked with `cause: "missing_data"` and name it.',
           '',
         ]
       : []),

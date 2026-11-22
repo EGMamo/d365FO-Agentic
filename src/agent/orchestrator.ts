@@ -285,7 +285,7 @@ export class AgentOrchestrator {
   private async preflight(tc: TestCase, signal?: AbortSignal): Promise<PreflightReport | undefined> {
     if (this.cfg.AGENT_PREFLIGHT === 'off') return undefined;
     try {
-      const report = await withCancellation(signal, () => preflightCase(tc, this.llm, signal, { ignoreUserRole: this.cfg.AGENT_IGNORE_USER_ROLE === true, fillFromErp: this.fillEnabled() }));
+      const report = await withCancellation(signal, () => preflightCase(tc, this.llm, signal, { ignoreUserRole: this.cfg.AGENT_IGNORE_USER_ROLE === true, fillFromErp: this.fillEnabled(), judge: this.cfg.AGENT_JUDGE_UNSET === true }));
       if (report.error) console.warn(`[agent] preflight skipped: ${report.error}`);
       else if (this.cfg.AGENT_VERBOSE && report.placeholders.length) {
         this.log(`preflight: ${report.placeholders.length} placeholder(s), ${report.missing.length} missing${report.missing.length ? `: ${describeMissing(report.missing)}` : ''}`);
@@ -346,7 +346,9 @@ export class AgentOrchestrator {
         mcpTools.push(...tools);
       } catch (e) {
         signal?.throwIfAborted();
-        console.warn(`[agent] failed to list tools for MCP server '${server}': ${(e as Error).message}`);
+        console.warn(`[agent] failed to list tools for MCP server '${server}': ${(e as Error).message}${server === 'd365' ? ' The agent carries on without it (browser and OData). Is the sign-in client listed under Allowed MCP clients in F&O? See docs/d365fo.md.' : ''}`);
+        // An optional data source that is not reachable is not asked again for every case of the run.
+        if (server === 'd365') this.toolCache.set(server, []);
       }
     }
     const { allowed: allowedTools, blocked: hiddenTools } = this.guardrails.splitTools(mcpTools);
@@ -396,7 +398,7 @@ export class AgentOrchestrator {
     // its expected result is still done (later steps may need what it creates); it just cannot be checked.
     const split = preflight?.missing.length ? splitMissing(preflight.missing) : { cannotRun: [], cannotCheck: [] };
     const preBlocked = split.cannotRun.length ? preflightSteps(tc, split.cannotRun).filter((s) => s.status === 'blocked') : [];
-    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, preBlocked, split.cannotCheck, preflight?.lookup ?? [], this.fillEnabled() && (!preflight || preflight.error) ? { company: tc.legalEntity ?? this.cfg.D365_COMPANY, ignoreUserRole: this.cfg.AGENT_IGNORE_USER_ROLE === true } : undefined) }];
+    const messages: LlmMessage[] = [{ role: 'user', content: testCaseUserPrompt(tc, preBlocked, split.cannotCheck, preflight?.lookup ?? [], (this.fillEnabled() || this.cfg.AGENT_JUDGE_UNSET === true) && (!preflight || preflight.error) ? { company: tc.legalEntity ?? this.cfg.D365_COMPANY, ignoreUserRole: this.cfg.AGENT_IGNORE_USER_ROLE === true, judge: this.cfg.AGENT_JUDGE_UNSET === true } : undefined) }];
     const fill: FillState = { values: new Map(), seen: [] };
     const steps: StepResult[] = [...preBlocked];
     // Placeholders a step blocked on can block the other steps that use them; never ones preflight found to be
@@ -879,9 +881,13 @@ export class AgentOrchestrator {
         const hint = opts.noHint ? undefined : this.takeHint(ctx);
         if (hint) content += `\n\n${redactSecrets(this.cfg, hint)}`;
       }
-      return { content, ...(res.isError ? { errored: true } : {}) };
+      // F&O's MCP data tools are a convenience: their errors never count toward the run's consecutive-error limit.
+      return { content, ...(res.isError && server !== 'd365' ? { errored: true } : {}) };
     } catch (e) {
       ctx.signal?.throwIfAborted();
+      if (server === 'd365') {
+        return { content: redactSecrets(this.cfg, JSON.stringify({ error: `The F&O MCP server did not answer: ${(e as Error).message}. Use ${ODATA_TOOL_NAME} or the browser instead.` })) };
+      }
       if (isTimeoutError(e)) {
         const ms = this.toolTimeoutMs(toolName, args);
         const note = this.clean(`${call.name} exceeded ${Math.round(ms / 1000)}s`, LIMITS.blockNote);

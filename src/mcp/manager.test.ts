@@ -35,3 +35,26 @@ describe('MCP request cancellation', () => {
     await assert.rejects(manager.callTool('fake', 'test', {}, undefined, controller.signal), { name: 'AbortError' });
   });
 });
+
+describe('http server with a token provider', () => {
+  it('sends a fresh bearer token on every request', async () => {
+    const seen: Array<string | null> = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get('authorization'));
+      return new Response('nope', { status: 500 });
+    }) as typeof fetch;
+    let n = 0;
+    try {
+      const m = new McpManager();
+      m.register({ name: 'x', transport: 'http', url: 'https://f.example/mcp', token: async () => `t${++n}` });
+      await m.connect('x').catch(() => undefined);
+      await m.connect('x').catch(() => undefined);
+    } finally {
+      globalThis.fetch = real;
+    }
+    assert.ok(seen.length >= 2, 'at least two requests were made');
+    assert.equal(seen[0], 'Bearer t1');
+    assert.equal(seen[1], 'Bearer t2');
+  });
+});

@@ -36,6 +36,9 @@ const DEFAULT_ALLOWED_TOOLS: Record<string, readonly string[]> = {
     'browser_verify_value',
   ],
   learn: ['microsoft_docs_search', 'microsoft_docs_fetch', 'microsoft_code_sample_search'],
+  // Dynamics 365 ERP MCP: the read-only data tools only. Creating, changing and deleting data, the form tools and the
+  // action tools are not offered; the agent works the application through the browser.
+  d365: ['data_find_entity_type', 'data_get_entity_metadata', 'data_find_entities', 'data_find_entities_sql'],
   // Read-only queries of Microsoft's public release plans (FastTrack Release Planner MCP sample).
 };
 

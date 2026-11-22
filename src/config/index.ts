@@ -86,6 +86,15 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
 
+  // The Dynamics 365 ERP MCP server (<F&O address>/mcp): read-only data tools the agent uses to find and check F&O data.
+  // Needs the data-access sign-in and the client of that sign-in listed in F&O's "Allowed MCP clients" (see docs/d365fo.md).
+  AGENT_D365_MCP: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // Only when the MCP server is not at <F&O address>/mcp.
+  D365_MCP_URL: z.string().transform((v) => v.trim() || undefined).optional(),
+
   PW_HEADLESS: z
     .string()
     .default('true')
@@ -164,6 +173,12 @@ const envSchema = z.object({
   // Unset values that are existing F&O data (an active vendor, an item, a warehouse): true lets the agent find one in F&O
   // (read only, needs AGENT_ODATA) and suggests saving it to the test case's parameter values after the run.
   AGENT_FILL_FROM_ERP: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // Test environment: values a case leaves unset (TBC, @parameters, unset expected results) are decided by the agent
+  // (finds or makes up a suitable value, judges the result) instead of blocking the case. Production is refused anyway.
+  AGENT_JUDGE_UNSET: z
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),

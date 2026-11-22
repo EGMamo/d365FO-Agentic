@@ -2,6 +2,24 @@ import type { AppConfig } from '../config/index.js';
 import { McpManager, type McpServerSpec } from './manager.js';
 import { playwrightMcpCommand } from './playwright-browser.js';
 import { traceLaunchArgs } from './playwright-trace.js';
+import { createODataTokenSource, fnoOrigin } from '../d365fo/odata-auth.js';
+
+/**
+ * The Dynamics 365 ERP MCP server, at `<F&O address>/mcp`. It takes the same Microsoft Entra token as F&O's data
+ * access (the profile's "Data access sign-in"). Not registered when it is off, there is no F&O address, or no
+ * sign-in can be made, so a run is never stopped by it.
+ */
+export function d365McpSpec(cfg: AppConfig): McpServerSpec | undefined {
+  if (cfg.AGENT_D365_MCP === false || !cfg.D365_BASE_URL) return undefined;
+  try {
+    const url = cfg.D365_MCP_URL ?? `${fnoOrigin(cfg.D365_BASE_URL)}/mcp`;
+    const source = createODataTokenSource(cfg);
+    return { name: 'd365', transport: 'http', url, token: (signal) => source.token(signal) };
+  } catch (e) {
+    console.warn(`[agent] the F&O MCP server is off for this run: ${(e as Error).message}`);
+    return undefined;
+  }
+}
 
 /**
  * F&O renders every control with its AOT control name in `data-dyn-controlname` (the name Task Recorder
@@ -55,6 +73,9 @@ export function buildDefaultManager(cfg: AppConfig, sessionFile?: string): McpMa
     url: cfg.LEARN_MCP_URL,
   };
   manager.register(learn);
+
+  const d365 = d365McpSpec(cfg);
+  if (d365) manager.register(d365);
 
   return manager;
 }

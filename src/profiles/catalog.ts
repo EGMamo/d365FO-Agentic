@@ -74,6 +74,22 @@ export const FIELD_CATALOG: FieldSpec[] = [
   },
   {
     group: 'Dynamics 365 F&O',
+    key: 'AGENT_D365_MCP',
+    label: 'Dynamics 365 ERP MCP server',
+    options: ['', 'true', 'false'],
+    advanced: true,
+    help: 'true (default): the agent reads F&O data through the Dynamics 365 ERP MCP server (<F&O address>/mcp, read only) to find and check records. It uses the data-access sign-in, and that sign-in\'s client (04b07795-8ddb-461a-bbee-02f9e1bf7b46) must be listed and allowed under Allowed MCP clients in F&O. If it is not reachable the agent carries on with OData and the browser.',
+  },
+  {
+    group: 'Dynamics 365 F&O',
+    key: 'AGENT_JUDGE_UNSET',
+    label: 'Let the agent decide unset values',
+    options: ['', 'true', 'false'],
+    advanced: true,
+    help: 'true (default, for test environments): a TBC or @parameter the case leaves unset is found in F&O or made up by the agent, and an unset expected result is judged from what F&O shows, instead of blocking. Only a value that an earlier case creates, or a secret, still blocks. false: stricter, as set by "Unfilled TBC values".',
+  },
+  {
+    group: 'Dynamics 365 F&O',
     key: 'AGENT_RECORD_TESTS',
     label: 'Record standalone Playwright tests',
     options: ['', 'true', 'false'],

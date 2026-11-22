@@ -517,7 +517,7 @@ async function openEditor(name) {
       ),
       el('details', { class: 'section' }, el('summary', {}, 'Advanced'), ...devopsSpecs.filter((s) => s.advanced).map((s) => field(s, map.get(s.key)))),
     ),
-    el('details', { class: 'section' }, el('summary', {}, 'Advanced'), field(spec('D365_ENVIRONMENT_TYPE'), map.get('D365_ENVIRONMENT_TYPE')), field(spec('D365_ODATA_AUTH'), map.get('D365_ODATA_AUTH')), field(spec('AGENT_PREFLIGHT'), map.get('AGENT_PREFLIGHT')), field(spec('AGENT_IGNORE_USER_ROLE'), map.get('AGENT_IGNORE_USER_ROLE')), field(spec('AGENT_FILL_FROM_ERP'), map.get('AGENT_FILL_FROM_ERP')), field(spec('AGENT_RECORD_TESTS'), map.get('AGENT_RECORD_TESTS')), field(spec('AGENT_REPLAY_DIR'), map.get('AGENT_REPLAY_DIR'))),
+    el('details', { class: 'section' }, el('summary', {}, 'Advanced'), field(spec('D365_ENVIRONMENT_TYPE'), map.get('D365_ENVIRONMENT_TYPE')), field(spec('D365_ODATA_AUTH'), map.get('D365_ODATA_AUTH')), field(spec('AGENT_PREFLIGHT'), map.get('AGENT_PREFLIGHT')), field(spec('AGENT_IGNORE_USER_ROLE'), map.get('AGENT_IGNORE_USER_ROLE')), field(spec('AGENT_FILL_FROM_ERP'), map.get('AGENT_FILL_FROM_ERP')), field(spec('AGENT_D365_MCP'), map.get('AGENT_D365_MCP')), field(spec('AGENT_JUDGE_UNSET'), map.get('AGENT_JUDGE_UNSET')), field(spec('AGENT_RECORD_TESTS'), map.get('AGENT_RECORD_TESTS')), field(spec('AGENT_REPLAY_DIR'), map.get('AGENT_REPLAY_DIR'))),
   );
   show();
   $('editorTitle').textContent = profile.name;

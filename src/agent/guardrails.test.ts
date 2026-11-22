@@ -15,6 +15,11 @@ describe('tool allowlist', () => {
     for (const t of ['microsoft_docs_search', 'microsoft_docs_fetch', 'microsoft_code_sample_search']) assert.equal(g.isToolAllowed('learn', t), true, t);
   });
 
+  it('offers only the read-only data tools of the Dynamics 365 ERP MCP server', () => {
+    for (const t of ['data_find_entity_type', 'data_get_entity_metadata', 'data_find_entities', 'data_find_entities_sql']) assert.equal(g.isToolAllowed('d365', t), true, t);
+    for (const t of ['data_create_entities', 'data_update_entities', 'data_delete_entities', 'form_click_control', 'api_invoke_action']) assert.equal(g.isToolAllowed('d365', t), false, t);
+  });
+
   it('denies tools that expose cookies, storage, scripts, files or network internals', () => {
     for (const t of [
       'browser_storage_state', 'browser_set_storage_state', 'browser_cookie_list', 'browser_cookie_get', 'browser_localstorage_get',

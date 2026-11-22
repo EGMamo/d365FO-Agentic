@@ -191,6 +191,26 @@ describe('filling unset data from F&O and user roles', () => {
   });
 });
 
+describe('test environment: the agent decides unset values (judge)', () => {
+  const vendor = tc([{ index: 1, action: 'Select vendor @VendorAccount in group (TBC - confirm the group)', expected: 'Message TBC - confirmation text' }]);
+
+  it('keeps lookups for the agent even without F&O data access, and never blocks an unset expected result', async () => {
+    // The model calls the group and the expected message "missing"; with judge on, the expected one is the agent's to judge.
+    const { llm, calls } = fakeLlm(() => classified([{ id: 0, kind: 'lookup' }, { id: 1, kind: 'lookup' }, { id: 2, kind: 'missing' }]));
+    const report = await preflightCase(vendor, llm, undefined, { fillFromErp: false, judge: true });
+    assert.deepEqual(report.missing, []);
+    assert.deepEqual(report.lookup.map((p) => p.text), ['@VendorAccount', 'TBC - confirm the group']);
+    assert.match(calls[0].system ?? '', /TEST environment/);
+    assert.match(calls[0].system ?? '', /When unsure, choose lookup or generate, never missing/);
+  });
+
+  it('still blocks what only an earlier case or a secret can supply, when the model says so', async () => {
+    const { llm } = fakeLlm(() => classified([{ id: 0, kind: 'missing' }, { id: 1, kind: 'generate' }, { id: 2, kind: 'not_placeholder' }]));
+    const report = await preflightCase(vendor, llm, undefined, { judge: true });
+    assert.deepEqual(report.missing.map((p) => p.text), ['@VendorAccount']);
+  });
+});
+
 describe('preflightSteps', () => {
   it('blocks the steps with a missing placeholder, names it, and skips the rest', () => {
     const steps = preflightSteps(tc([{ index: 1, action: 'Open' }, { index: 2, action: 'x', expected: 'TBC - message' }]), [{ step: 2, where: 'expected', text: 'TBC - message' }]);

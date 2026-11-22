@@ -87,7 +87,7 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
     cfg,
     llm,
     mcp,
-    mcpServers: ['playwright', 'learn'],
+    mcpServers: ['playwright', 'learn', ...(mcp.has('d365') ? ['d365'] : [])],
   });
 
   let results: TestResult[] = [];

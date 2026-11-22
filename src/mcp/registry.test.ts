@@ -13,6 +13,15 @@ describe('buildDefaultManager', () => {
     assert.deepEqual([...specs({}).keys()], ['playwright', 'learn']);
   });
 
+  it('registers the Dynamics 365 ERP MCP server at <F&O address>/mcp when there is an F&O address, unless it is off', () => {
+    const fno = { D365_BASE_URL: 'https://x.sandbox.operations.dynamics.com/?cmp=USMF', D365_USERNAME: 'u', D365_PASSWORD: 'p' };
+    const on = specs({ ...fno, AGENT_D365_MCP: true });
+    assert.deepEqual([...on.keys()], ['playwright', 'learn', 'd365']);
+    assert.equal(on.get('d365')?.url, 'https://x.sandbox.operations.dynamics.com/mcp');
+    assert.equal(specs({ ...fno, AGENT_D365_MCP: true, D365_MCP_URL: 'https://mcp.example/mcp' }).get('d365')?.url, 'https://mcp.example/mcp');
+    assert.deepEqual([...specs({ ...fno, AGENT_D365_MCP: false }).keys()], ['playwright', 'learn']);
+  });
+
   it('turns on the testing tools, merged with devtools when tracing', () => {
     assert.deepEqual(capsArgs([]), ['--caps', 'testing']);
     assert.deepEqual(capsArgs(['--caps', 'devtools', '--output-dir', 'x']), ['--caps', 'testing,devtools', '--output-dir', 'x']);
