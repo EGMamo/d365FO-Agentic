@@ -9,7 +9,7 @@ import { dotenvFileProblems } from '../config/dotenv-check.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { azdoAuthMode, azLogin, azTokenProblem } from '../devops/auth.js';
 import { ODataClient } from '../d365fo/odata.js';
-import { BrowserTokenSource, fnoOrigin, odataAuthMode, signInFile } from '../d365fo/odata-auth.js';
+import { BrowserTokenSource, dataClientId, fnoOrigin, odataAuthMode, signInFile } from '../d365fo/odata-auth.js';
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
@@ -160,7 +160,7 @@ program
     // Plain messages, no stack trace: the settings app shows this output as it is.
     try {
       const origin = fnoOrigin(cfg.D365_BASE_URL);
-      const source = new BrowserTokenSource(origin, signInFile(cfg));
+      const source = new BrowserTokenSource(origin, signInFile(cfg), undefined, undefined, dataClientId(cfg));
       if (opts.logout) {
         await source.logout();
         console.log('The data-access sign-in was removed.');

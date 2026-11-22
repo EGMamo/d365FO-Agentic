@@ -80,11 +80,20 @@ export function describeTokenError(body: { error?: string; error_description?: s
   return `Microsoft refused the sign-in for data access: ${first.slice(0, 300)}`;
 }
 
-async function tokenRequest(tenant: string, params: Record<string, string>, f: Fetch, hasRefresh = false): Promise<Required<Pick<TokenResponse, 'access_token'>> & TokenResponse> {
+/** The client id sign-in uses: the profile's own Entra app (D365_MCP_CLIENT_ID), else Microsoft's public Azure CLI client. */
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function dataClientId(cfg: Pick<AppConfig, 'D365_MCP_CLIENT_ID'>): string {
+  const id = cfg.D365_MCP_CLIENT_ID?.trim();
+  if (!id) return PUBLIC_CLIENT_ID;
+  if (!GUID.test(id)) throw new ODataSignInError('D365_MCP_CLIENT_ID must be the Application (client) ID of an Entra app registration: a GUID such as 00000000-0000-0000-0000-000000000000.');
+  return id;
+}
+
+async function tokenRequest(tenant: string, params: Record<string, string>, f: Fetch, hasRefresh = false, clientId: string = PUBLIC_CLIENT_ID): Promise<Required<Pick<TokenResponse, 'access_token'>> & TokenResponse> {
   const res = await f(`${LOGIN_HOST}/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-    body: new URLSearchParams({ client_id: PUBLIC_CLIENT_ID, ...params }),
+    body: new URLSearchParams({ client_id: clientId, ...params }),
     signal: AbortSignal.timeout(30_000),
   });
   const body = (await res.json().catch(() => ({}))) as TokenResponse;
@@ -120,19 +129,19 @@ class Cached {
 /** The configured username and password, sent to Microsoft's token endpoint (no MFA). */
 export class PasswordTokenSource extends Cached implements ODataTokenSource {
   readonly mode = 'password' as const;
-  constructor(private origin: string, private username: string, private password: string, private tenant?: string, private f: Fetch = fetch, now: () => number = Date.now) {
+  constructor(private origin: string, private username: string, private password: string, private tenant?: string, private f: Fetch = fetch, now: () => number = Date.now, private clientId: string = PUBLIC_CLIENT_ID) {
     super(now);
   }
   async token(): Promise<string> {
     const cached = this.get();
     if (cached) return cached;
     const tenant = this.tenant ?? (await discoverTenant(this.origin, this.f)) ?? 'organizations';
-    const body = await tokenRequest(tenant, { grant_type: 'password', username: this.username, password: this.password, scope: `${this.origin}/.default` }, this.f);
+    const body = await tokenRequest(tenant, { grant_type: 'password', username: this.username, password: this.password, scope: `${this.origin}/.default` }, this.f, false, this.clientId);
     return this.set(body.access_token, expiresAt(body, this.now()));
   }
 }
 
-interface StoredSignIn { origin: string; tenant: string; refreshToken: string; account?: string }
+interface StoredSignIn { origin: string; tenant: string; refreshToken: string; account?: string; clientId?: string }
 
 /** Where a profile keeps its data-access sign-in. It holds a refresh token: as private as a saved browser session. */
 export function signInFile(cfg: Pick<AppConfig, 'PROFILE_ID'>, home: string = agentHome()): string {
@@ -142,14 +151,15 @@ export function signInFile(cfg: Pick<AppConfig, 'PROFILE_ID'>, home: string = ag
 /** The sign-in made in a browser (`d365-data-login`), renewed with its refresh token. */
 export class BrowserTokenSource extends Cached implements ODataTokenSource {
   readonly mode = 'browser' as const;
-  constructor(private origin: string, private file: string, private f: Fetch = fetch, now: () => number = Date.now) {
+  constructor(private origin: string, private file: string, private f: Fetch = fetch, now: () => number = Date.now, private clientId: string = PUBLIC_CLIENT_ID) {
     super(now);
   }
 
   private async load(): Promise<StoredSignIn | undefined> {
     try {
       const stored = JSON.parse(await readFile(this.file, 'utf8')) as Partial<StoredSignIn>;
-      return stored.origin === this.origin && stored.refreshToken && stored.tenant ? (stored as StoredSignIn) : undefined;
+      // A refresh token belongs to the app that got it: another client id means signing in again.
+      return stored.origin === this.origin && stored.refreshToken && stored.tenant && (stored.clientId ?? PUBLIC_CLIENT_ID) === this.clientId ? (stored as StoredSignIn) : undefined;
     } catch {
       return undefined;
     }
@@ -166,7 +176,7 @@ export class BrowserTokenSource extends Cached implements ODataTokenSource {
     if (cached) return cached;
     const stored = await this.load();
     if (!stored) throw new ODataSignInError('Not signed in for data access yet. Use "Sign in for data access" in the settings app, or run `d365fo-agent d365-data-login`.');
-    const body = await tokenRequest(stored.tenant, { grant_type: 'refresh_token', refresh_token: stored.refreshToken, scope: `${this.origin}/.default offline_access` }, this.f, true);
+    const body = await tokenRequest(stored.tenant, { grant_type: 'refresh_token', refresh_token: stored.refreshToken, scope: `${this.origin}/.default offline_access` }, this.f, true, this.clientId);
     // Microsoft rotates refresh tokens: keep the new one, or the next run would present an old one.
     if (body.refresh_token && body.refresh_token !== stored.refreshToken) await this.save({ ...stored, refreshToken: body.refresh_token });
     return this.set(body.access_token, expiresAt(body, this.now()));
@@ -196,7 +206,7 @@ export class BrowserTokenSource extends Cached implements ODataTokenSource {
     const port = (server.address() as { port: number }).port;
     const redirectUri = `http://localhost:${port}`;
     const url = `${LOGIN_HOST}/${encodeURIComponent(tenant)}/oauth2/v2.0/authorize?${new URLSearchParams({
-      client_id: PUBLIC_CLIENT_ID, response_type: 'code', redirect_uri: redirectUri, response_mode: 'query',
+      client_id: this.clientId, response_type: 'code', redirect_uri: redirectUri, response_mode: 'query',
       scope: `${this.origin}/.default offline_access`, state, prompt: 'select_account',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256',
     })}`;
@@ -205,10 +215,10 @@ export class BrowserTokenSource extends Cached implements ODataTokenSource {
       await (opts.open ?? openInBrowser)(url);
       const r = await result;
       if (!r.code) throw new ODataSignInError(`The sign-in did not finish: ${String(r.error).split('\n')[0].slice(0, 300)}`);
-      const body = await tokenRequest(tenant, { grant_type: 'authorization_code', code: r.code, redirect_uri: redirectUri, code_verifier: verifier, scope: `${this.origin}/.default offline_access` }, this.f);
+      const body = await tokenRequest(tenant, { grant_type: 'authorization_code', code: r.code, redirect_uri: redirectUri, code_verifier: verifier, scope: `${this.origin}/.default offline_access` }, this.f, false, this.clientId);
       if (!body.refresh_token) throw new ODataSignInError('Microsoft returned no refresh token, so the sign-in cannot be kept. Try again, or use another data-access sign-in.');
       const account = tokenAccount(body.access_token);
-      await this.save({ origin: this.origin, tenant, refreshToken: body.refresh_token, ...(account ? { account } : {}) });
+      await this.save({ origin: this.origin, tenant, refreshToken: body.refresh_token, ...(account ? { account } : {}), ...(this.clientId !== PUBLIC_CLIENT_ID ? { clientId: this.clientId } : {}) });
       this.set(body.access_token, expiresAt(body, this.now()));
       return { account };
     } finally {
@@ -246,10 +256,12 @@ export interface ODataAuthDeps { fetch?: Fetch; az?: AzRunner; home?: string; no
 export function createODataTokenSource(cfg: AppConfig, deps: ODataAuthDeps = {}): ODataTokenSource {
   const origin = fnoOrigin(cfg.D365_BASE_URL);
   const mode = odataAuthMode(cfg);
-  if (mode === 'browser') return new BrowserTokenSource(origin, signInFile(cfg, deps.home), deps.fetch, deps.now);
+  const clientId = dataClientId(cfg);
+  if (mode === 'browser') return new BrowserTokenSource(origin, signInFile(cfg, deps.home), deps.fetch, deps.now, clientId);
   if (mode === 'password') {
     if (!cfg.D365_USERNAME || !cfg.D365_PASSWORD) throw new ODataSignInError('Data access with a password needs D365_USERNAME and D365_PASSWORD.');
-    return new PasswordTokenSource(origin, cfg.D365_USERNAME, cfg.D365_PASSWORD, undefined, deps.fetch, deps.now);
+    return new PasswordTokenSource(origin, cfg.D365_USERNAME, cfg.D365_PASSWORD, undefined, deps.fetch, deps.now, clientId);
   }
+  if (clientId !== PUBLIC_CLIENT_ID) throw new ODataSignInError('The Azure CLI sign-in always uses the Azure CLI app, so it cannot use D365_MCP_CLIENT_ID. Set "Data access sign-in" to browser or password, or clear the client id.');
   return azureCliSource(origin, undefined, deps.az);
 }

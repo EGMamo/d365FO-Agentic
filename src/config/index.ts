@@ -92,6 +92,9 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false'),
+  // The Entra app (Application/client ID) the data-access sign-in uses, for OData and the MCP server. Empty: Microsoft's
+  // public Azure CLI client. A custom app must be a public client with the redirect http://localhost, and be allowed in F&O.
+  D365_MCP_CLIENT_ID: z.string().transform((v) => v.trim() || undefined).optional(),
   // Only when the MCP server is not at <F&O address>/mcp.
   D365_MCP_URL: z.string().transform((v) => v.trim() || undefined).optional(),
 

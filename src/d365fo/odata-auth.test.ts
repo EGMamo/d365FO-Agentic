@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { AppConfig } from '../config/index.js';
-import { BrowserTokenSource, createODataTokenSource, describeTokenError, discoverTenant, fnoOrigin, ODataSignInError, odataAuthMode, PasswordTokenSource, signInFile, tokenAccount } from './odata-auth.js';
+import { BrowserTokenSource, createODataTokenSource, dataClientId, PUBLIC_CLIENT_ID, describeTokenError, discoverTenant, fnoOrigin, ODataSignInError, odataAuthMode, PasswordTokenSource, signInFile, tokenAccount } from './odata-auth.js';
 
 const ORIGIN = 'https://x.sandbox.operations.dynamics.com';
 const jwt = (claims: object): string => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
@@ -180,5 +180,42 @@ describe('browser sign-in', () => {
     assert.deepEqual(await source.status(), { signedIn: false });
     await writeFile(file, 'not json');
     assert.deepEqual(await source.status(), { signedIn: false });
+  });
+});
+
+describe('a custom client id (D365_MCP_CLIENT_ID)', () => {
+  const OWN = '11111111-2222-3333-4444-555555555555';
+
+  it('defaults to the Azure CLI client, accepts a GUID and rejects anything else', () => {
+    assert.equal(dataClientId({}), PUBLIC_CLIENT_ID);
+    assert.equal(dataClientId({ D365_MCP_CLIENT_ID: `  ${OWN} ` }), OWN);
+    assert.throws(() => dataClientId({ D365_MCP_CLIENT_ID: 'my-app' }), /must be the Application \(client\) ID/);
+  });
+
+  it('sends it to the password, sign-in and refresh requests', async () => {
+    const ep = tokenEndpoint(() => json({ access_token: jwt({ upn: 'jo@contoso.com' }), refresh_token: 'r1', expires_in: 3600 }));
+    await new PasswordTokenSource(ORIGIN, 'u', 'p', 'contoso.com', ep.f, Date.now, OWN).token();
+    assert.equal(ep.forms[0].get('client_id'), OWN);
+    const dir = await mkdtemp(join(tmpdir(), 'odata-'));
+    const file = join(dir, 'p.json');
+    const login = tokenEndpoint(() => json({ access_token: jwt({ upn: 'jo@contoso.com' }), refresh_token: 'r1', expires_in: 3600 }));
+    let authorizeUrl = '';
+    const source = new BrowserTokenSource(ORIGIN, file, login.f, () => 0, OWN);
+    await source.login({ tenant: 'contoso.com', open: async (url) => { authorizeUrl = url; const u = new URL(url); await fetch(`${u.searchParams.get('redirect_uri')}/?code=c&state=${u.searchParams.get('state')}`); } });
+    assert.equal(new URL(authorizeUrl).searchParams.get('client_id'), OWN);
+    assert.equal(login.forms[0].get('client_id'), OWN);
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).clientId, OWN);
+    const later = tokenEndpoint(() => json({ access_token: 'a2', expires_in: 3600 }));
+    await new BrowserTokenSource(ORIGIN, file, later.f, () => 10 * 3600_000, OWN).token();
+    assert.equal(later.forms[0].get('client_id'), OWN);
+  });
+
+  it('does not reuse a sign-in made by another app, and the Azure CLI mode refuses a custom client', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'odata-'));
+    const file = join(dir, 'p.json');
+    await writeFile(file, JSON.stringify({ origin: ORIGIN, tenant: 'contoso.com', refreshToken: 'r' }));
+    assert.equal((await new BrowserTokenSource(ORIGIN, file, undefined, undefined, OWN).status()).signedIn, false);
+    assert.equal((await new BrowserTokenSource(ORIGIN, file).status()).signedIn, true);
+    assert.throws(() => createODataTokenSource({ D365_BASE_URL: ORIGIN, D365_ODATA_AUTH: 'azure-cli', D365_MCP_CLIENT_ID: OWN } as AppConfig), /cannot use D365_MCP_CLIENT_ID/);
   });
 });

@@ -74,11 +74,18 @@ export const FIELD_CATALOG: FieldSpec[] = [
   },
   {
     group: 'Dynamics 365 F&O',
+    key: 'D365_MCP_CLIENT_ID',
+    label: 'Data access app (client ID)',
+    advanced: true,
+    help: 'Optional. The Application (client) ID of your own Entra app registration for the data-access sign-in (OData and the F&O MCP server). Empty uses Microsoft\'s public Azure CLI client, which an F&O admin must allow under Allowed MCP clients. Your app must be a public client with the redirect URI http://localhost (Mobile and desktop), have the F&O API permission, and be listed and allowed in Allowed MCP clients. Sign in for data access again after changing it. Not for the Azure CLI sign-in.',
+  },
+  {
+    group: 'Dynamics 365 F&O',
     key: 'AGENT_D365_MCP',
     label: 'Dynamics 365 ERP MCP server',
     options: ['', 'true', 'false'],
     advanced: true,
-    help: 'true (default): the agent reads F&O data through the Dynamics 365 ERP MCP server (<F&O address>/mcp, read only) to find and check records. It uses the data-access sign-in, and that sign-in\'s client (04b07795-8ddb-461a-bbee-02f9e1bf7b46) must be listed and allowed under Allowed MCP clients in F&O. If it is not reachable the agent carries on with OData and the browser.',
+    help: 'true (default): the agent reads F&O data through the Dynamics 365 ERP MCP server (<F&O address>/mcp, read only) to find and check records. It uses the data-access sign-in, and that sign-in\'s client (04b07795-8ddb-461a-bbee-02f9e1bf7b46, or your own app set under Data access app) must be listed and allowed under Allowed MCP clients in F&O. If it is not reachable the agent carries on with OData and the browser.',
   },
   {
     group: 'Dynamics 365 F&O',
