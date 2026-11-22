@@ -73,6 +73,18 @@ const envSchema = z.object({
     .transform((v) => v.trim() || undefined)
     .optional(),
   D365_SESSION_MAX_AGE_HOURS: z.coerce.number().positive().default(12),
+  // How the agent signs in to F&O's OData data endpoint. It needs a Microsoft access token: a browser session is not accepted there.
+  // browser: your own sign-in in a browser window, once (`d365-data-login`), kept for later runs. password: D365_USERNAME and
+  // D365_PASSWORD (an account without MFA). azure-cli: the account of `az login`. Unset: follows how the tests sign in.
+  D365_ODATA_AUTH: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() || undefined : v),
+    z.enum(['browser', 'password', 'azure-cli']).optional(),
+  ),
+  // Lets the agent read F&O data through OData (read only) to check prerequisites and records.
+  AGENT_ODATA: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
 
   PW_HEADLESS: z
     .string()
@@ -93,6 +105,13 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  // Save standalone Playwright specs from successful allowlisted MCP calls. Replay itself never uses a model or MCP.
+  AGENT_RECORD_TESTS: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // Defaults to <REPORT_DIR>/replay, keeping each profile's generated project and results separate.
+  AGENT_REPLAY_DIR: z.string().transform((v) => v.trim() || undefined).optional(),
   AGENT_VERBOSE: z
     .string()
     .default('true')
@@ -134,6 +153,25 @@ const envSchema = z.object({
     .transform((v) => v.toLowerCase() !== 'false'),
   // Keep the latest N bulky tool results (page snapshots) verbatim and collapse older ones (0 disables).
   AGENT_CONTEXT_KEEP_RECENT: z.coerce.number().int().min(0).default(3),
+  // Before a case runs, look for unresolved placeholders (TBC, TBD, {{...}}) that stand for existing data or setup.
+  // block: end such a case blocked at once, without opening the browser. partial: run only the other steps. off: no check.
+  AGENT_PREFLIGHT: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() || undefined : v), z.enum(['block', 'partial', 'off']).default('block')),
+  // A case that needs a specific user role (or "act as" another user): true runs it as the signed-in user instead of blocking it.
+  AGENT_IGNORE_USER_ROLE: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // Unset values that are existing F&O data (an active vendor, an item, a warehouse): true lets the agent find one in F&O
+  // (read only, needs AGENT_ODATA) and suggests saving it to the test case's parameter values after the run.
+  AGENT_FILL_FROM_ERP: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
+  // When a case that changed data does not pass, discard the form's unsaved changes at the end so no half-made record is saved.
+  AGENT_DISCARD_UNSAVED: z
+    .string()
+    .default('true')
+    .transform((v) => v.toLowerCase() !== 'false'),
   // Guardrails. The environment check and tool/navigation policy are enforced in code, not just in the prompt.
   AGENT_ALLOW_PRODUCTION: z
     .string()

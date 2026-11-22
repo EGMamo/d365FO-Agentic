@@ -80,12 +80,19 @@ export function azTokenProblem(res: AzResult): string {
 export class AzureCliTokenSource {
   private cached?: { token: string; expiresAt: number };
 
-  constructor(private tenant?: string, private az: AzRunner = runAz, private now: () => number = Date.now) {}
+  /** `resource` is what the token is for (Azure DevOps unless given); `problem` words a failure for that resource. */
+  constructor(
+    private tenant?: string,
+    private az: AzRunner = runAz,
+    private now: () => number = Date.now,
+    private resource: string = AZDO_RESOURCE,
+    private problem: (res: AzResult) => string = azTokenProblem,
+  ) {}
 
   async token(): Promise<string> {
     if (this.cached && this.cached.expiresAt - this.now() > 5 * 60_000) return this.cached.token;
-    const res = await this.az(['account', 'get-access-token', '--resource', AZDO_RESOURCE, '--output', 'json', ...tenantArgs(this.tenant)], { timeoutMs: 60_000 });
-    if (res.code !== 0) throw new Error(azTokenProblem(res));
+    const res = await this.az(['account', 'get-access-token', '--resource', this.resource, '--output', 'json', ...tenantArgs(this.tenant)], { timeoutMs: 60_000 });
+    if (res.code !== 0) throw new Error(this.problem(res));
     let parsed: { accessToken?: unknown; expires_on?: unknown; expiresOn?: unknown };
     try {
       parsed = JSON.parse(res.stdout) as typeof parsed;

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from 'commander';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { describeSuggestions, parameterSuggestions } from '../core/suggestions.js';
 import { activeModel, loadConfig, validateForRun } from '../config/index.js';
 import { dotenvFileProblems } from '../config/dotenv-check.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { azdoAuthMode, azLogin, azTokenProblem } from '../devops/auth.js';
+import { ODataClient } from '../d365fo/odata.js';
+import { BrowserTokenSource, fnoOrigin, odataAuthMode, signInFile } from '../d365fo/odata-auth.js';
 import { writeReports } from '../reporting/reporters.js';
 import type { TestCase, TestResult } from '../testing/types.js';
 import { discoverTestCases, executeTestRun } from '../core/runner.js';
@@ -13,13 +17,14 @@ import { checkSession, probeBlocksRun, probeSession, DEFAULT_SESSION_FILE, inter
 import { checkPlaywrightBrowser } from '../mcp/playwright-browser.js';
 import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
 import { normalizeOpenAiBaseUrl } from '../llm/openai.js';
-import { allowedHosts, describeEnvironment } from '../d365fo/environment.js';
+import { allowedHosts, assertSafeEnvironment, describeEnvironment } from '../d365fo/environment.js';
 import { environmentForChild, modelSelection, overriddenKeys, profileSelection } from '../config/load-env.js';
 import { RunHistory } from '../ui/history.js';
 import { agentHome } from '../profiles/paths.js';
 import { DEFAULT_PORT, findRunningUi, loadOrCreateToken, startUiServer } from '../ui/server.js';
 import { openBrowser } from '../ui/open.js';
 import { configureNetwork, redactProxy } from '../net/network.js';
+import { readReplayResults, replayTestResults, startReplay } from '../replay/replay.js';
 
 // Before any request: trust the OS certificate store and use HTTPS_PROXY on corporate networks.
 const network = configureNetwork();
@@ -93,6 +98,17 @@ program
     } else {
       console.log('Azure DevOps: not configured (optional)');
     }
+    // Optional: reading F&O data (OData) to check prerequisites. A problem here never stops a run.
+    if (!cfg.AGENT_ODATA || !cfg.D365_BASE_URL) {
+      console.log(`F&O data access (OData): ${cfg.AGENT_ODATA ? 'no F&O address' : 'off (AGENT_ODATA=false)'}`);
+    } else {
+      try {
+        const data = await new ODataClient(cfg).check();
+        console.log(`F&O data access (OData): ${data.ok ? 'OK' : 'NOT READY'} - ${data.detail}`);
+      } catch (e) {
+        console.log(`F&O data access (OData): NOT READY - ${(e as Error).message.split('\n')[0]}`);
+      }
+    }
     const browser = await checkPlaywrightBrowser(cfg);
     if (browser.installed === false) {
       console.log(`Playwright browser (${cfg.PW_BROWSER}): NOT INSTALLED (looked in ${browser.cacheDir})`);
@@ -133,6 +149,35 @@ program
       if (!check.ok) process.exitCode = 1;
     }
     if (azdoAuthMode(cfg) === 'pat') console.log('Note: a personal access token is also set and is used instead. Clear it (AZDO_PAT) to use this sign-in.');
+  });
+
+program
+  .command('d365-data-login')
+  .description('Sign in once, in a browser, so the agent can read F&O data over OData (read only). MFA is fine; later runs reuse the sign-in')
+  .option('--logout', 'Forget the saved data-access sign-in instead')
+  .action(async (opts: { logout?: boolean }) => {
+    const cfg = loadConfig();
+    // Plain messages, no stack trace: the settings app shows this output as it is.
+    try {
+      const origin = fnoOrigin(cfg.D365_BASE_URL);
+      const source = new BrowserTokenSource(origin, signInFile(cfg));
+      if (opts.logout) {
+        await source.logout();
+        console.log('The data-access sign-in was removed.');
+        return;
+      }
+      console.log(`Opening the Microsoft sign-in for ${origin} in your browser. Finish it there, then come back here.`);
+      const { account } = await source.login();
+      console.log(`Signed in${account ? ` as ${account}` : ''}. The sign-in is kept for this profile.`);
+      const mode = odataAuthMode(cfg);
+      if (mode !== 'browser') console.log(`Note: this profile reads data with the ${mode} sign-in. Set "Data access sign-in" to browser (D365_ODATA_AUTH=browser) to use this one.`);
+      const check = await new ODataClient(cfg, source).check();
+      console.log(`F&O data access (OData): ${check.ok ? 'OK' : 'NOT READY'} - ${check.detail}`);
+      if (!check.ok) process.exitCode = 1;
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -178,10 +223,12 @@ program
   .option('--module <names>', 'Only cases whose module or area contains one of these (comma-separated, repeatable)', collect, [] as string[])
   .option('--max-priority <n>', 'Only cases with this priority or more urgent (1 = highest)', intArg)
   .option('--sort-by-priority', 'Run the most urgent cases first instead of in suite or file order')
+  .option('--all-iterations', 'Run every Azure DevOps parameter row (default: only the first row)')
   .option('--fail-on <outcomes>', 'Exit with code 2 when any case ends with one of these outcomes (comma-separated, e.g. failed,blocked)')
   .option('--dry-run', 'Skip state-changing browser actions (click/type/fill/...); navigation and snapshots still run')
   .option('--upload', 'Upload results to Azure DevOps after the run')
   .option('--probe-session', 'Before running tests, verify the saved D365 session with one HTTP probe and fail fast if it is expired')
+  .option('--preflight <mode>', 'Unresolved placeholders (TBC) for existing data: block = end the case blocked before it runs (default), partial = run only the other steps, off = no check')
   .action(async (opts: {
     plan?: string;
     suite?: string;
@@ -191,15 +238,25 @@ program
     module: string[];
     maxPriority?: number;
     sortByPriority?: boolean;
+    allIterations?: boolean;
     failOn?: string;
     dryRun?: boolean;
     upload?: boolean;
     probeSession?: boolean;
+    preflight?: string;
   }) => {
     const cfg = loadConfig();
     const runStartedAt = new Date().toISOString();
     const warnings: string[] = [];
     if (opts.dryRun) cfg.AGENT_DRY_RUN = true;
+    if (opts.preflight !== undefined) {
+      const mode = opts.preflight.trim().toLowerCase();
+      if (mode !== 'block' && mode !== 'partial' && mode !== 'off') {
+        console.error('config: --preflight takes block, partial or off');
+        process.exit(1);
+      }
+      cfg.AGENT_PREFLIGHT = mode;
+    }
     const failOn = parseOutcomes(opts.failOn);
     if (failOn === null) {
       console.error('config: --fail-on takes a comma-separated list of passed, failed, skipped, blocked');
@@ -249,6 +306,7 @@ program
         modules: opts.module,
         maxPriority: opts.maxPriority,
         sortByPriority: opts.sortByPriority,
+        allIterations: opts.allIterations,
         signal: interrupt.signal,
         dryRun: cfg.AGENT_DRY_RUN,
         upload: opts.upload,
@@ -264,6 +322,12 @@ program
       return;
     }
     console.log(`\nReports:\n  ${execution.reportPaths.html}\n  ${execution.reportPaths.json}\n  ${execution.reportPaths.junit}`);
+    const suggested = parameterSuggestions(execution.results);
+    if (suggested.length && cfg.AZDO_ORG_URL && cfg.AZDO_PROJECT) {
+      console.log('\nThe agent chose these values for parameters the test case leaves unset (the cases passed with them):');
+      for (const line of describeSuggestions(suggested)) console.log(line);
+      console.log(`Save them to the test case parameters (only parameters without a value are filled; you are asked first):\n  d365fo-agent ${profileSelection.name ? `--profile "${profileSelection.name}" ` : ''}save-parameters`);
+    }
     if (execution.interrupted) {
       console.error('\nThe run was interrupted; the case in flight is marked interrupted and the remaining cases were not run.');
       if (opts.upload) console.error('Results were not uploaded to Azure DevOps.');
@@ -302,6 +366,46 @@ program
     } catch (e) {
       console.warn(`warning: could not save the run to the history: ${(e as Error).message}`);
     }
+  });
+
+program
+  .command('replay [filters...]')
+  .description('Replay generated standalone Playwright tests without a model or MCP')
+  .option('--grep <pattern>', 'Only run tests whose titles match this Playwright grep pattern')
+  .option('--headed', 'Run the browser headed')
+  .option('--upload', 'Explicitly upload the fresh replay results to Azure DevOps')
+  .option('--plan <id>', 'Azure DevOps test plan id for --upload')
+  .action(async (filters: string[], opts: { grep?: string; headed?: boolean; upload?: boolean; plan?: string }) => {
+    const cfg = loadConfig();
+    if (!cfg.D365_BASE_URL) throw new Error('D365_BASE_URL is required to replay tests against the active profile');
+    assertSafeEnvironment(cfg);
+    const interrupt = new AbortController();
+    let stopCode = 130;
+    const onStop = (sig: NodeJS.Signals): void => {
+      stopCode = sig === 'SIGTERM' ? 143 : 130;
+      if (interrupt.signal.aborted) process.exit(stopCode);
+      interrupt.abort();
+      console.error(`\nInterrupted (${sig}): stopping Playwright. Results from an incomplete replay are not uploaded.`);
+    };
+    process.on('SIGINT', onStop);
+    process.on('SIGTERM', onStop);
+    console.log('Replaying standalone Playwright tests (no model or MCP).');
+    const replay = startReplay(cfg, { files: filters, grep: opts.grep, headed: opts.headed, signal: interrupt.signal }, (text) => process.stdout.write(text));
+    const code = await replay.done;
+    process.off('SIGINT', onStop);
+    process.off('SIGTERM', onStop);
+    const rows = readReplayResults(cfg, replay.startedAt);
+    if (opts.upload) {
+      if (interrupt.signal.aborted) throw new Error('Not uploaded: the replay was interrupted.');
+      const mappable = rows.filter((r) => /^\d+$/.test(r.caseId));
+      if (!mappable.length) throw new Error('Not uploaded: this replay wrote no fresh results with Azure DevOps test case ids.');
+      const planId = opts.plan ?? cfg.AZDO_TEST_PLAN_ID;
+      if (!planId) throw new Error('--plan or AZDO_TEST_PLAN_ID is required to upload replay results');
+      const uploaded = await new AzureDevOpsClient(cfg).publishResults(planId, replayTestResults(mappable));
+      console.log(`Uploaded replay results to Azure DevOps run #${uploaded.runId}: ${uploaded.url}`);
+    }
+    if (interrupt.signal.aborted) process.exitCode = stopCode;
+    else if (code !== 0 || !rows.length) process.exitCode = code === 0 && !rows.length ? 1 : (code ?? 1);
   });
 
 program
@@ -355,6 +459,64 @@ function parseOutcomes(csv: string | undefined): TestResult['outcome'][] | undef
 async function discover(cfg: ReturnType<typeof loadConfig>, opts: { plan?: string; suite?: string; local?: string }): Promise<TestCase[]> {
   return discoverTestCases(cfg, opts);
 }
+
+program
+  .command('save-parameters')
+  .description('Save the parameter values the agent chose from F&O to the Azure DevOps test cases (only parameters that have no value yet)')
+  .option('--input <file>', 'results.json of a run (default: the latest run of this profile)')
+  .option('--case <ids>', 'Only these test-case ids (comma-separated)')
+  .option('--yes', 'Save without asking')
+  .action(async (opts: { input?: string; case?: string; yes?: boolean }) => {
+    const cfg = loadConfig();
+    const file = opts.input ?? join(resolve(cfg.REPORT_DIR), 'results.json');
+    // Plain messages, no stack trace: the settings app shows this output as it is.
+    let results: TestResult[];
+    try {
+      results = JSON.parse(await readFile(file, 'utf8')) as TestResult[];
+    } catch {
+      console.error(`Could not read the results in ${file}. Run the cases first, or pass --input.`);
+      process.exitCode = 1;
+      return;
+    }
+    const only = (opts.case ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    const list = parameterSuggestions(results, only);
+    if (!list.length) {
+      console.log('No parameter values to save: the agent chose none for a passed Azure DevOps test case in these results.');
+      return;
+    }
+    if (!cfg.AZDO_ORG_URL || !cfg.AZDO_PROJECT) {
+      console.error('Azure DevOps is not set up for this profile (organization URL and project).');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`These values will be saved to the test case parameters in ${cfg.AZDO_ORG_URL} / ${cfg.AZDO_PROJECT}:`);
+    for (const line of describeSuggestions(list)) console.log(line);
+    console.log('Only parameters without a value are filled; values already in the table are never changed.');
+    if (!opts.yes) {
+      if (!process.stdin.isTTY) {
+        console.error('Not saved: this is not an interactive terminal. Run it again with --yes to save without asking.');
+        process.exitCode = 1;
+        return;
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = (await rl.question('Save them? [y/N] ')).trim().toLowerCase();
+      rl.close();
+      if (answer !== 'y' && answer !== 'yes') {
+        console.log('Not saved.');
+        return;
+      }
+    }
+    const client = new AzureDevOpsClient(cfg);
+    for (const s of list) {
+      try {
+        const { saved, skipped } = await client.saveParameterValues(s.caseId, Object.fromEntries(s.values.map((v) => [v.name, v.value])));
+        console.log(`Case ${s.caseId}: saved ${saved.length ? saved.map((n) => `@${n}`).join(', ') : 'nothing'}${skipped.length ? `; left ${skipped.map((n) => `@${n}`).join(', ')} as it already had a value` : ''}.`);
+      } catch (e) {
+        console.error(`Case ${s.caseId}: ${(e as Error).message.split('\n')[0].slice(0, 400)}`);
+        process.exitCode = 1;
+      }
+    }
+  });
 
 program
   .command('ui')

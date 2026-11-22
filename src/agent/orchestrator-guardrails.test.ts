@@ -38,7 +38,7 @@ function harness(
   const h: Harness = { reached: [], requests: [], run: async () => { throw new Error('unset'); } };
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40,
-    D365_BASE_URL: BASE, D365_COMPANY: 'USMF', D365_PASSWORD: PASS, ANTHROPIC_API_KEY: API_KEY,
+    D365_BASE_URL: BASE, D365_COMPANY: 'USMF', D365_PASSWORD: PASS, ANTHROPIC_API_KEY: API_KEY, AGENT_DISCARD_UNSAVED: false,
     ...over,
   } as AppConfig;
   const llm = {

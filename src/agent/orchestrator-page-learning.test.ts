@@ -22,7 +22,7 @@ async function run(turns: LlmCompleteResponse[], replies: (tool: string, args: R
   const cfg = {
     LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 20, AGENT_MAX_CONSECUTIVE_ERRORS: 0,
     REPORT_DIR: dir, KB_DIR: dir,
-    D365_BASE_URL: BASE, D365_COMPANY: 'USMF', AGENT_ALLOW_DESTRUCTIVE: false, ...over,
+    D365_BASE_URL: BASE, D365_COMPANY: 'USMF', AGENT_ALLOW_DESTRUCTIVE: false, AGENT_DISCARD_UNSAVED: false, ...over,
   } as AppConfig;
   const llm = {
     name: 'fake',

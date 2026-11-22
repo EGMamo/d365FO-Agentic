@@ -231,7 +231,7 @@ function runDoctor(store: ProfileStore, name: string, cliPath: string, baseEnv: 
 }
 
 /** Runs a CLI command against a profile and returns its output with that profile's secrets scrubbed. */
-async function runProfileCommand(command: 'doctor' | 'devops-login' | 'session-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv, extra: string[] = []): Promise<{ exitCode: number | null; output: string }> {
+async function runProfileCommand(command: 'doctor' | 'devops-login' | 'session-login' | 'd365-data-login', timeoutMs: number, store: ProfileStore, name: string, cliPath: string, baseEnv: NodeJS.ProcessEnv, extra: string[] = []): Promise<{ exitCode: number | null; output: string }> {
   const secrets = await profileSecrets(store, name, baseEnv);
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cliPath, command, ...extra], {
@@ -351,9 +351,9 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     });
   }
 
-  function runArguments(body: Record<string, unknown>): { args: string[]; cases: string[]; error?: string } {
+  function runArguments(body: Record<string, unknown>, fromTools = false): { args: string[]; cases: string[]; error?: string } {
     const bad = (error: string) => ({ args: [], cases: [], error });
-    if (['model', 'retries', 'upload', 'tags', 'modules', 'maxPriority', 'sortByPriority'].some((key) => body[key] !== undefined)) return bad('Choose cases and use the shared AI connection. Upload a selected result after the run.');
+    if (['model', 'retries', 'upload', 'tags', 'modules', 'maxPriority', 'sortByPriority'].some((key) => body[key] !== undefined) || (fromTools && body.allIterations !== undefined)) return bad('Choose cases and use the shared AI connection. Upload a selected result after the run. Iteration and publishing choices stay in Tests/Results.');
     const args = ['run'];
     const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
     if (body.source === 'local') {
@@ -372,6 +372,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
     if (caseIds.some((c) => !ID.test(c))) return bad('Invalid case id');
     if (caseIds.length) args.push('--case', caseIds.join(','));
     if (body.dryRun === true) args.push('--dry-run');
+    if (body.allIterations === true) args.push('--all-iterations');
     args.push('--fail-on', 'failed,blocked');
     return { args, cases: [...new Set(caseIds)] };
   }
@@ -381,7 +382,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   async function launchRun(state: RunState, body: Record<string, unknown>, fromTools: boolean, rerunId?: string): Promise<StartResult> {
-    const parsed = runArguments(body);
+    const parsed = runArguments(body, fromTools);
     if (parsed.error) return { error: parsed.error };
     const active = await store.getActive();
     state.profile = active;
@@ -408,7 +409,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
   }
 
   async function startRun(body: Record<string, unknown>, fromTools = false): Promise<StartResult> {
-    const parsed = runArguments(body);
+    const parsed = runArguments(body, fromTools);
     if (parsed.error) return { error: parsed.error };
     return reservedJob('run', (state) => launchRun(state, body, fromTools));
   }
@@ -448,6 +449,27 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
       const m = line && /^Uploaded run #(\d+): (\S+)/.exec(line);
       if (state.status === 'passed') await history.update(id, { upload: { runId: m ? Number(m[1]) : undefined, url: m ? m[2] : undefined, at: new Date().toISOString() } });
     });
+    });
+  }
+
+  /**
+   * Saves the parameter values a run chose from F&O to the Azure DevOps test cases, with the profile the run belongs to.
+   * The app asks for confirmation before it calls this, listing the values; the command fills only parameters without a value.
+   */
+  async function startSaveParameters(id: string): Promise<StartResult> {
+    return reservedJob('upload', async (state) => {
+      const input = await history.file(id, 'results.json');
+      if (!input) return { error: 'That run has no results to upload.' };
+      const meta = await history.meta(id);
+      let owner: string | undefined;
+      if (meta?.profileId || meta?.profile) {
+        owner = await store.resolve(meta.profileId || '').then((n) => n ?? store.resolve(meta.profile || ''));
+        if (!owner) return { error: `The profile this run belongs to (${meta.profile ?? meta.profileId}) no longer exists, so its Azure DevOps settings are gone.` };
+      }
+      const args = ['save-parameters', '--input', input, '--yes'];
+      state.args = args;
+      state.profile = owner ?? (await store.getActive());
+      return startCli(state, args, state.profile);
     });
   }
 
@@ -914,7 +936,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         else await store.write(name, body.entries ?? [], 'create');
         return send(res, 201, { name });
       }
-      const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login|\/session-login)?$/.exec(url.pathname);
+      const m = /^\/api\/profiles\/([^/]+)(\/check|\/devops-login|\/session-login|\/d365-data-login)?$/.exec(url.pathname);
       if (m) {
         const name = decodeURIComponent(m[1]);
         if (method !== 'GET' && jobBusy()) return send(res, 409, { error: 'Wait for the current job before changing environments.' });
@@ -922,6 +944,7 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         if (m[2] === '/session-login' && method === 'POST') return send(res, 200, await sessionLogin(name));
         // Opens the Microsoft sign-in in the browser and waits for it (up to 5 minutes), then checks the project.
         if (m[2] === '/devops-login' && method === 'POST') return send(res, 200, await runProfileCommand('devops-login', 300_000, store, name, cliPath, childEnv()));
+        if (m[2] === '/d365-data-login' && method === 'POST') return send(res, 200, await runProfileCommand('d365-data-login', 360_000, store, name, cliPath, childEnv()));
         if (!m[2] && method === 'GET') return send(res, 200, { name, id: await store.idOf(name), entries: await store.read(name) });
         if (!m[2] && method === 'PUT') {
           await store.write(name, (await readJson(req)).entries, 'replace');
@@ -1010,10 +1033,10 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         const result = await compareRun(hx[1], url.searchParams.get('with'));
         return send(res, result.status, result.comparison ?? { error: result.error });
       }
-      const hm = /^\/api\/history\/([\w-]+)(\/upload)?$/.exec(url.pathname);
+      const hm = /^\/api\/history\/([\w-]+)(\/upload|\/parameters)?$/.exec(url.pathname);
       if (hm) {
         if (hm[2] && method === 'POST') {
-          const result = await startUpload(hm[1], await readJson(req));
+          const result = hm[2] === '/parameters' ? await startSaveParameters(hm[1]) : await startUpload(hm[1], await readJson(req));
           return send(res, result.busy ? 409 : result.status ?? (result.error ? (result.error === 'That run has no results to upload.' ? 404 : 400) : 200), result);
         }
         if (!(await history.meta(hm[1]))) return send(res, 404, { error: 'No such run.' });

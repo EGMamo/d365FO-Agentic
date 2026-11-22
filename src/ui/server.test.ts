@@ -225,6 +225,13 @@ describe('run management', () => {
     assert.doesNotMatch(r.lines.join('\n'), /--model|reloop/);
   });
 
+  it('passes the direct all-iteration choice to the CLI', async () => {
+    const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', caseId: 'TC-1', dryRun: true, allIterations: true }) });
+    assert.equal(started.status, 200);
+    const r = await pollStatus('passed');
+    assert.match(r.lines.join('\n'), /--all-iterations/);
+  });
+
   it('hands the page only the log lines it has not seen, with the run progress', async () => {
     const started = await rcall('/api/run', { method: 'POST', body: JSON.stringify({ source: 'local', local: 'cases', dryRun: true }) });
     assert.equal(started.status, 200);
@@ -271,6 +278,9 @@ describe('test-case editor, run history and upload', () => {
     "  console.log('INPUT ' + args[2] + ' PLAN ' + (args[4] ?? '-'));",
     "  console.log('UPLOAD_PROFILE ' + process.env.D365FO_PROFILE);",
     "  console.log('Uploaded run #42: https://dev.azure.com/org/p/_testManagement/runs?runId=42');",
+    "} else if (args[0] === 'save-parameters') {",
+    "  console.log('SAVE_INPUT ' + args[2] + ' CONFIRMED ' + args.includes('--yes'));",
+    "  console.log('SAVE_PROFILE ' + process.env.D365FO_PROFILE);",
     "}",
   ].join('\n');
 
@@ -366,6 +376,12 @@ describe('test-case editor, run history and upload', () => {
     assert.equal((await hcall(`/api/history/${run.id}/upload`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
     const again = await waitFor((r) => r.kind === 'upload' && r.status === 'passed' && r.lines.some((l: string) => l.includes('Alpha 2')));
     assert.match(again.lines.join('\n'), /UPLOAD_PROFILE Alpha 2/);
+    // Parameter save-back is a separate, explicitly confirmed history action, and keeps the run owner's profile too.
+    assert.equal((await hcall(`/api/history/${run.id}/parameters`, { method: 'POST', body: JSON.stringify({}) })).status, 200);
+    const saved = await waitFor((r) => r.kind === 'upload' && r.status === 'passed' && r.lines.some((l: string) => l.startsWith('SAVE_PROFILE')));
+    const output = saved.lines.join('\n');
+    assert.match(output, /SAVE_INPUT .*history.*results\.json CONFIRMED true/);
+    assert.match(output, /SAVE_PROFILE Alpha 2/);
   });
 });
 
@@ -745,10 +761,18 @@ describe('atomic job reservations and native tool approval', () => {
     assert.equal((await call('/tools/runs', 'POST', forged)).status, 403);
     assert.equal((await call(`/tools/history/${savedId}/rerun`, 'POST', { confirmed: true })).status, 403);
     assert.equal((await call(`/tools/history/${savedId}/upload`, 'POST', { confirmed: true, plan: '7' })).status, 403);
+    assert.equal((await call(`/tools/history/${savedId}/parameters`, 'POST', { confirmed: true })).status, 404, 'parameter writes are not exposed as model tools');
     await assert.rejects(readFile(join(dir, 'spawned.log')), { code: 'ENOENT' });
     await writeFile(join(dir, 'release'), '');
     assert.equal((await call('/tools/runs', 'POST', { ...body, dryRun: true })).status, 200);
     await wait((s) => s?.settled);
+  });
+
+  it('does not let Chat silently select all iterations', async () => {
+    await start(async () => true);
+    const response = await call('/tools/runs', 'POST', { ...body, dryRun: true, allIterations: true });
+    assert.equal(response.status, 400);
+    await assert.rejects(readFile(join(dir, 'spawned.log')), { code: 'ENOENT' });
   });
 
   it('binds native approval to the actual profile, source and selected cases', async () => {

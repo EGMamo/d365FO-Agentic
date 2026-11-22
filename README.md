@@ -32,10 +32,14 @@ Azure DevOps supports Microsoft-account sign-in through the Azure CLI, or a PAT 
 - F&O direct page links, stable control names, busy/loading waits, and smaller snapshots.
 - A small local map of learned forms and controls, including UK vendor/supplier aliases.
 - Values recorded within a case, bounded execution, cancellation, screenshots, and failure traces.
-- Missing-data/TBC handling: generate new unique values only where the case asks to create them; block unspecified existing data.
+- Preflight placeholder classification with `block`, `partial`, and `off` modes; batch step verdicts and dependency-aware blocked-versus-failed results.
+- Azure DevOps nested shared steps, all local/shared parameter rows (first row by default, optional all iterations), and values carried from earlier passed cases by normalized parameter name.
+- Optional read-only F&O OData lookups, including browser/PKCE, password, and Azure CLI sign-in, to fill suitable unresolved existing-data parameters.
+- Explicit, confirmed save-back of agent-chosen values to empty Azure DevOps parameters only, with readback verification and rollback; best-effort discard of unsaved F&O changes after unsuccessful cases.
+- Optional standalone Playwright recording from successful allowlisted MCP calls, safe dynamic D365 value capture, and AI-free CLI replay with fresh-result upload protection.
 - Production, host, tool, legal-entity, and destructive-action restrictions; secret masking.
 
-Cases run independently. An earlier case's recorded values are not automatically handed to later cases. Prepare shared prerequisites explicitly. Rerun a selected case manually when appropriate; there are no automatic case reloops or recorded-code replays.
+Cases run in the selected order without sharing browser state. Values recorded by a **passed** case are carried only within that run into later unresolved parameters with matching normalized names; the case's own values win, and nothing is carried between runs or produced by one parameter row for another. Prepare other shared prerequisites explicitly. Rerun a selected case manually when appropriate; there are no automatic case reloops. Standalone replay is an explicit CLI operation documented in [docs/replay.md](docs/replay.md).
 
 The Advanced diagnostic skips mutating browser actions. It does not demonstrate that sign-in or a business workflow succeeds.
 
@@ -61,9 +65,12 @@ Internal CLI examples:
 node dist/cli/index.js doctor
 node dist/cli/index.js discover --local examples/testcases
 node dist/cli/index.js run --local examples/testcases --case TC-SMOKE-LOGIN --fail-on failed,blocked
-node dist/cli/index.js run --plan 1234 --suite 5678 --fail-on failed,blocked
+node dist/cli/index.js run --plan 1234 --suite 5678 --all-iterations --fail-on failed,blocked
+node dist/cli/index.js replay 'tests/TC-1234-*.spec.ts'
 node dist/cli/index.js upload --input reports/results.json --plan 1234
 node dist/cli/index.js session-login
+node dist/cli/index.js d365-data-login
+node dist/cli/index.js save-parameters --input reports/results.json
 ```
 
 An explicit `--profile` selects an environment by name or permanent ID. The shared AI connection still applies. Genuine process environment variables override saved settings; the setup check reports overrides. Without an active profile, the CLI can read `.env` (see [.env.example](.env.example)).
@@ -74,7 +81,7 @@ Before the first simplified startup, configuration is copied to `backups/before-
 
 Environment IDs, custom report paths, saved sessions, and previous reports remain in place. Conversations from the previous chat runtime are not imported: that runtime's files stay where they are, untouched, until the user removes them. Legacy model, knowledge-base, and replay files are left untouched and unused.
 
-The application no longer exposes Docker studio, the Python/Open WebUI runtime, a second chat engine, model catalogs/overrides, general knowledge-base ranking/pruning, replay/export, automatic case retries, standalone case generation, OData app registrations, Release Planner, or Azure DevOps MCP. Azure DevOps uses its ordinary REST API.
+The application no longer exposes Docker studio, the Python/Open WebUI runtime, a second chat engine, model catalogs/overrides, general knowledge-base ranking/pruning, automatic case retries, OData app registrations, Release Planner, or Azure DevOps MCP. Azure DevOps uses its ordinary REST API. The new standalone recorder/replay is limited to the safe allowlisted workflow in [docs/replay.md](docs/replay.md); it is not a general arbitrary-code recorder or Chat-triggered replay/export API.
 
 ## Further documentation
 
@@ -83,6 +90,7 @@ The application no longer exposes Docker studio, the Python/Open WebUI runtime, 
 - [Chat behavior and storage](docs/chat.md)
 - [Claude configuration](docs/providers.md)
 - [F&O sign-in, evidence, and safety](docs/d365fo.md)
+- [Standalone recording and replay](docs/replay.md)
 - [Learned form map](docs/self-learning.md)
 - [Sandbox validation checklist](docs/sandbox-checklist.md)
 - [License](LICENSE)

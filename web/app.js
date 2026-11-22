@@ -432,6 +432,17 @@ async function openEditor(name) {
         el('span', { class: 'help' }, 'A browser opens; sign in, wait for the dashboard, then close it.'),
       ),
     ),
+    el(
+      'div',
+      { class: 'field' },
+      el('span'),
+      el(
+        'div',
+        { class: 'row' },
+        el('button', { type: 'button', id: 'dataLogin', onclick: (e) => busy(e.currentTarget, () => profileCommand('d365-data-login')) }, 'Sign in for data access…'),
+        el('span', { class: 'help' }, 'Optional, once: lets the agent read F&O data (read only) to check prerequisites. MFA is fine.'),
+      ),
+    ),
   );
   const show = () => {
     pw.hidden = method !== 'password';
@@ -467,7 +478,7 @@ async function openEditor(name) {
       ),
       el('details', { class: 'section' }, el('summary', {}, 'Advanced'), ...devopsSpecs.filter((s) => s.advanced).map((s) => field(s, map.get(s.key)))),
     ),
-    el('details', { class: 'section' }, el('summary', {}, 'Advanced'), field(spec('D365_ENVIRONMENT_TYPE'), map.get('D365_ENVIRONMENT_TYPE'))),
+    el('details', { class: 'section' }, el('summary', {}, 'Advanced'), field(spec('D365_ENVIRONMENT_TYPE'), map.get('D365_ENVIRONMENT_TYPE')), field(spec('D365_ODATA_AUTH'), map.get('D365_ODATA_AUTH')), field(spec('AGENT_PREFLIGHT'), map.get('AGENT_PREFLIGHT')), field(spec('AGENT_IGNORE_USER_ROLE'), map.get('AGENT_IGNORE_USER_ROLE')), field(spec('AGENT_FILL_FROM_ERP'), map.get('AGENT_FILL_FROM_ERP')), field(spec('AGENT_RECORD_TESTS'), map.get('AGENT_RECORD_TESTS')), field(spec('AGENT_REPLAY_DIR'), map.get('AGENT_REPLAY_DIR'))),
   );
   show();
   $('editorTitle').textContent = profile.name;
@@ -940,9 +951,13 @@ $('runSelected').onclick = () =>
     if (tests.editorDirty) throw new Error('Save your test-case edits before running.');
     const ids = tests.cases.filter((c) => tests.selected.has(c.id)).map((c) => c.id);
     const diagnostic = $('dryRun').checked;
+    const allIterations = $('allIterations').checked;
+    const selectedCases = tests.cases.filter((c) => tests.selected.has(c.id));
+    const rows = allIterations ? selectedCases.reduce((n, c) => n + Math.max(1, c.parameters?.rows || 1), 0) : ids.length;
     const list = ids.length > 6 ? ids.slice(0, 6).join(', ') + ` and ${ids.length - 6} more` : ids.join(', ');
-    if (!(await confirmAction(`${diagnostic ? 'Diagnostic run (no clicks or typing)' : 'Run'} ${plural(ids.length, 'case')} in ${state.active}?\n\n${list}`))) return;
-    await startRun({ source: tests.source, cases: ids, dryRun: diagnostic, ...Object.fromEntries(sourceQuery()) });
+    const scope = `${plural(ids.length, 'case')}${allIterations ? `, ${plural(rows, 'iteration')}` : ' (first data row of each)'}`;
+    if (!(await confirmAction(`${diagnostic ? 'Diagnostic run (no clicks or typing)' : 'Run'} ${scope} in ${state.active}?\n\n${list}`))) return;
+    await startRun({ source: tests.source, cases: ids, dryRun: diagnostic, allIterations, ...Object.fromEntries(sourceQuery()) });
   });
 
 async function startRun(body) {
@@ -1341,6 +1356,18 @@ async function renderResults() {
       : null,
   );
   const upload = meta?.upload?.url ? el('div', { class: 'callout info' }, 'Uploaded to Azure DevOps ', el('a', { href: meta.upload.url, target: '_blank', rel: 'noopener' }, meta.upload.runId ? `run #${meta.upload.runId}` : 'run'), ` on ${new Date(meta.upload.at).toLocaleString()}.`) : null;
+  // Values the agent chose from F&O for parameters the case leaves unset, in cases that passed with them.
+  const suggested = meta ? rows.filter((r) => !r.interrupted && r.outcome === 'passed' && /^\d+$/.test(r.testCaseId) && r.suggestedParameters?.length) : [];
+  const params = suggested.length
+    ? el(
+        'div',
+        { class: 'callout info' },
+        el('strong', {}, 'The agent chose values for parameters the test case leaves unset'),
+        el('div', {}, 'These cases passed with them. Save them to the test case parameters so the next run needs no lookup. Only parameters without a value are filled; nothing else is changed.'),
+        ...suggested.map((r) => el('div', { class: 'muted' }, `Case ${r.testCaseId}: ` + r.suggestedParameters.map((p) => `@${p.name} = ${p.value}`).join(', '))),
+        el('div', { style: 'margin-top:8px' }, el('button', { onclick: (e) => busy(e.currentTarget, () => saveParameters(meta, suggested)) }, 'Save to test case parameters…')),
+      )
+    : null;
   if (!rows.length) {
     box.replaceChildren(head, actions, el('div', { class: 'empty' }, el('strong', {}, 'No test results in this run'), meta?.status === 'stopped' ? 'It was stopped before a case finished.' : 'It ended before a case finished; the run log has the reason.'));
     return;
@@ -1365,7 +1392,7 @@ async function renderResults() {
       ),
     ),
   );
-  box.replaceChildren(head, actions, upload, el('div', { id: 'comparison' }), filters, el('div', { id: 'caseResults' }));
+  box.replaceChildren(head, actions, upload, params, el('div', { id: 'comparison' }), filters, el('div', { id: 'caseResults' }));
   renderCaseResults();
 }
 function renderCaseResults() {
@@ -1457,6 +1484,14 @@ async function uploadRun(meta) {
   const plan = await promptText(`Upload this run to Azure DevOps using ${meta.profile || 'its environment'}. Test plan ID:`, meta.args?.[meta.args.indexOf('--plan') + 1] || (tests.source === 'devops' ? $('plan').value.trim() : ''));
   if (!plan) return;
   const r = await api('/api/history/' + meta.id + '/upload', 'POST', { plan });
+  if (r.error) throw new Error(r.error);
+  run.hidden = false;
+  await refreshRun();
+}
+async function saveParameters(meta, suggested) {
+  const list = suggested.map((r) => `Case ${r.testCaseId}: ` + r.suggestedParameters.map((p) => `@${p.name} = ${p.value}`).join(', ')).join('\n');
+  if (!(await confirmAction(`Save these values to the Azure DevOps test case parameters (${meta.profile || 'its environment'})? Only parameters without a value are filled.\n\n${list}`))) return;
+  const r = await api('/api/history/' + meta.id + '/parameters', 'POST', {});
   if (r.error) throw new Error(r.error);
   run.hidden = false;
   await refreshRun();

@@ -88,7 +88,7 @@ async function run(turns: LlmCompleteResponse[], pages: string[] = [], over: Par
   let attempts = 0;
   const reached: Array<Record<string, unknown>> = [];
   const cfg = {
-    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40, D365_BASE_URL: BASE, D365_COMPANY: 'USMF', REPORT_DIR: await mkdtemp(join(tmpdir(), 'rg-')), ...over,
+    LLM_PROVIDER: 'anthropic', AGENT_DRY_RUN: false, AGENT_VERBOSE: false, AGENT_MAX_STEPS: 40, D365_BASE_URL: BASE, D365_COMPANY: 'USMF', REPORT_DIR: await mkdtemp(join(tmpdir(), 'rg-')), AGENT_DISCARD_UNSAVED: false, ...over,
   } as AppConfig;
   const llm = { name: 'fake', async complete() { attempts++; return turns.shift() ?? finish({ outcome: 'blocked' }); } };
   const mcp = {

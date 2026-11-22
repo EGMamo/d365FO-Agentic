@@ -12,7 +12,7 @@ describe('d365fo-agent CLI', () => {
     const res = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8', timeout: 30_000 });
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stdout, /Usage: d365fo-agent/);
-    for (const cmd of ['doctor', 'session-login', 'discover', 'run', 'report', 'upload', 'ui']) {
+    for (const cmd of ['doctor', 'session-login', 'd365-data-login', 'discover', 'run', 'replay', 'report', 'upload', 'save-parameters', 'ui']) {
       assert.match(res.stdout, new RegExp(`\\b${cmd}\\b`), `help should list "${cmd}"`);
     }
   });

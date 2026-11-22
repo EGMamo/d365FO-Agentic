@@ -912,3 +912,8 @@ dialog#wizard {
     transition: none !important;
   }
 }
+
+/* The confirmation dialog can list several lines (the parameter values about to be saved). */
+#questionText {
+  white-space: pre-wrap;
+}

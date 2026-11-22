@@ -59,7 +59,8 @@ function toJUnit(results: TestResult[]): string {
       } else {
         body = `<system-out>${xmlEscape(retryMeta)}</system-out>`;
       }
-      return `<testcase classname="d365fo-agentic" name="${xmlEscape(r.title)}" time="${t}">${body}</testcase>`;
+      const name = `${r.title}${r.iteration && r.iteration.count > 1 ? ` [row ${r.iteration.row}/${r.iteration.count}]` : ''}`;
+      return `<testcase classname="d365fo-agentic" name="${xmlEscape(name)}" time="${t}">${body}</testcase>`;
     })
     .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -74,7 +75,7 @@ function toHtml(results: TestResult[]): string {
       (r) => `
 <tr class="row ${r.outcome}">
   <td>${xmlEscape(r.testCaseId)}</td>
-  <td>${xmlEscape(r.title)}</td>
+  <td>${xmlEscape(r.title)}${r.iteration && r.iteration.count > 1 ? `<div class="data">Iteration ${r.iteration.row} of ${r.iteration.count}</div>` : ''}</td>
   <td><span class="badge ${xmlEscape(r.outcome)}">${xmlEscape(r.outcome)}</span></td>
   <td>${r.failureCategory ? `<span class="cat" title="${xmlEscape(categoryHint(r.failureCategory))}">${xmlEscape(r.failureCategory)}</span>` : ''}</td>
   <td>${r.attemptCount ?? 1}</td>

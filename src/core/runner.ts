@@ -12,6 +12,8 @@ import type { TestCase, TestResult } from '../testing/types.js';
 import { AzureDevOpsClient } from '../devops/client.js';
 import { LlmUnavailableError } from '../llm/errors.js';
 import { FAILURE_CATEGORY_HINTS, summarizeFailures } from '../testing/triage.js';
+import { applyCarriedValues, rememberValues, type CarriedValues } from './carry.js';
+import { iterationCount, iterationIndexes, testCaseForIteration } from './iterations.js';
 
 export interface RunExecutionOptions {
   plan?: string;
@@ -31,6 +33,8 @@ export interface RunExecutionOptions {
   signal?: AbortSignal;
   dryRun?: boolean;
   upload?: boolean;
+  /** Execute every local/shared parameter row, in source order. Default: only the first row. */
+  allIterations?: boolean;
 
 }
 
@@ -89,7 +93,7 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
   let results: TestResult[] = [];
   let aborted: string | undefined;
   try {
-    ({ results, aborted } = await runCases(orchestrator, filtered, console.log, opts.signal));
+    ({ results, aborted } = await runCases(orchestrator, filtered, console.log, opts.signal, { allIterations: opts.allIterations }));
   } finally {
     await mcp.closeAll();
   }
@@ -110,7 +114,8 @@ export async function executeTestRun(cfg: AppConfig, opts: RunExecutionOptions):
     upload = await client.publishResults(planId, results);
   }
 
-  return { cases: filtered, results, reportPaths, upload, aborted, interrupted: (opts.signal?.aborted && (results.length < filtered.length || results.some((r) => r.interrupted))) || undefined };
+  const expectedResults = filtered.reduce((n, tc) => n + (opts.allIterations ? iterationCount(tc) : 1), 0);
+  return { cases: filtered, results, reportPaths, upload, aborted, interrupted: (opts.signal?.aborted && (results.length < expectedResults || results.some((r) => r.interrupted))) || undefined };
 }
 
 /**
@@ -158,53 +163,74 @@ export async function runCases(
   cases: TestCase[],
   log: (line: string) => void = console.log,
   signal?: AbortSignal,
+  options: { allIterations?: boolean } = {},
 ): Promise<{ results: TestResult[]; aborted?: string }> {
   const results: TestResult[] = [];
-  log(`Running ${cases.length} test case(s).`);
-  for (const [i, tc] of cases.entries()) {
+  // Values from earlier cases are the starting point of every row. Values produced by one row never enter another row.
+  const carried: CarriedValues = new Map();
+  const total = cases.reduce((n, tc) => n + (options.allIterations ? iterationCount(tc) : 1), 0);
+  log(`Running ${cases.length} test case(s), ${total} iteration(s).`);
+  for (const [i, original] of cases.entries()) {
     if (signal?.aborted) {
       const reason = 'Run interrupted';
       log(`\n${reason}: ${cases.length - i} case(s) were not run.`);
       logTriage(results, log);
       return { results, aborted: reason };
     }
-    log(`\n▶ Running [${tc.id}] ${tc.title}`);
-    try {
-      const result = await orchestrator.runTestCase(tc, signal);
-      results.push(result);
-      if (result.interrupted) {
+    const rows = iterationIndexes(original, options.allIterations);
+    const produced: CarriedValues = new Map();
+    for (const [rowPosition, row] of rows.entries()) {
+      if (signal?.aborted) {
         const reason = 'Run interrupted';
-        log(`  → interrupted before it finished; recorded as not a test result`);
-        log(`\n${reason}: ${cases.length - i - 1} further case(s) were not run.`);
-        logTriage(results.filter((r) => !r.interrupted), log);
+        log(`\n${reason}: the remaining iterations were not run.`);
+        logTriage(results, log);
         return { results, aborted: reason };
       }
-      const attempts = result.attemptCount ?? 1;
-      log(`  → ${result.outcome} (${attempts} attempt${attempts > 1 ? 's' : ''}) in ${(result.durationMs / 1000).toFixed(1)}s`);
-      if (result.outcome !== 'passed' && result.outcome !== 'skipped' && result.errorMessage) {
-        log(`    reason: ${result.errorMessage.replace(/\s+/g, ' ').slice(0, 300)}`);
+      const base = testCaseForIteration(original, row);
+      const { tc, used } = applyCarriedValues(base, carried);
+      const iteration = { row: row + 1, count: iterationCount(original) };
+      log(`\n▶ Running [${tc.id}] ${tc.title}${iteration.count > 1 ? ` (row ${iteration.row}/${iteration.count})` : ''}`);
+      if (used.length) log(`  ↳ values from earlier cases of this run: ${used.map((u) => `@${u.name} (case ${u.from})`).join(', ')}`);
+      try {
+        const result = await orchestrator.runTestCase(tc, signal);
+        result.iteration = iteration;
+        results.push(result);
+        rememberValues(produced, result);
+        if (result.interrupted) {
+          const reason = 'Run interrupted';
+          log(`  → interrupted before it finished; recorded as not a test result`);
+          log(`\n${reason}: ${options.allIterations ? 'the remaining iterations were not run' : `${cases.length - i - 1} further case(s) were not run`}.`);
+          logTriage(results.filter((r) => !r.interrupted), log);
+          return { results, aborted: reason };
+        }
+        const attempts = result.attemptCount ?? 1;
+        log(`  → ${result.outcome} (${attempts} attempt${attempts > 1 ? 's' : ''}) in ${(result.durationMs / 1000).toFixed(1)}s`);
+        if (result.outcome !== 'passed' && result.outcome !== 'skipped' && result.errorMessage) {
+          log(`    reason: ${result.errorMessage.replace(/\s+/g, ' ').slice(0, 300)}`);
+        }
+        if (result.failureCategory) log(`    category: ${result.failureCategory} — ${FAILURE_CATEGORY_HINTS[result.failureCategory]}`);
+      } catch (e) {
+        if (!(e instanceof LlmUnavailableError)) throw e;
+        const now = new Date().toISOString();
+        results.push({
+          testCaseId: tc.id,
+          title: tc.title,
+          iteration,
+          outcome: 'blocked',
+          runState: 'blocked',
+          startedAt: now,
+          finishedAt: now,
+          durationMs: 0,
+          steps: [],
+          artifacts: [],
+          errorMessage: `Run aborted, not a test result: ${e.message}`,
+          failureCategory: 'infrastructure',
+        });
+        log(`  ✖ ${e.message}`);
+        log(`\nRun aborted: ${options.allIterations ? 'the remaining iterations were not run' : `${cases.length - i - 1} further case(s) were not run`}.`);
+        return { results, aborted: e.message };
       }
-      if (result.failureCategory) log(`    category: ${result.failureCategory} — ${FAILURE_CATEGORY_HINTS[result.failureCategory]}`);
-    } catch (e) {
-      if (!(e instanceof LlmUnavailableError)) throw e;
-      const now = new Date().toISOString();
-      results.push({
-        testCaseId: tc.id,
-        title: tc.title,
-        outcome: 'blocked',
-        runState: 'blocked',
-        startedAt: now,
-        finishedAt: now,
-        durationMs: 0,
-        steps: [],
-        artifacts: [],
-        errorMessage: `Run aborted, not a test result: ${e.message}`,
-        failureCategory: 'infrastructure',
-      });
-      const notRun = cases.length - i - 1;
-      log(`  ✖ ${e.message}`);
-      log(`\nRun aborted: ${notRun} further case(s) were not run.`);
-      return { results, aborted: e.message };
+      if (rowPosition === rows.length - 1) for (const [key, value] of produced) carried.set(key, value);
     }
   }
   logTriage(results, log);

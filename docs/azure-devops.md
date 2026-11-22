@@ -40,7 +40,9 @@ AZDO_TEST_SUITE_ID=5678
 
 ## Test cases
 
-The agent lists the suite's test cases from `Plans/<planId>/Suites/<suiteId>/testcases`, then reads the work items' title, area path, tags (split on `;`), priority and `Microsoft.VSTS.TCM.Steps`. Each step's first parameterized string becomes the action and the second the expected result. If the field has no `<step>` elements (for example plain text), the parser falls back to one step per line, without expected results. Nothing else is read from the test case: attachments such as Task recorder recordings or RSAT Excel parameter files are ignored.
+The agent lists the suite's test cases from `Plans/<planId>/Suites/<suiteId>/testcases`, then reads the work items' title, area path, tags (split on `;`), priority and `Microsoft.VSTS.TCM.Steps`. Each step's first parameterized string becomes the action and the second the expected result. Nested `compref` shared steps are expanded, retaining action paths and shared-step metadata, with bounded batched reads and caching. Unreadable or recursive shared steps become an explicit case problem and block the case before model/browser execution. If the field has no `<step>` elements (for example plain text), the parser falls back to one step per line, without expected results.
+
+The case's **Parameter values** (`Microsoft.VSTS.TCM.Parameters` and `Microsoft.VSTS.TCM.LocalDataSource`) and any **shared parameter sets** linked to it are read as well. Every row is retained. By default each `@Name` is replaced with its value from the first data row (see "Parameter values from Azure DevOps" in `docs/d365fo.md`); `run --all-iterations` or the Tests page's **All data rows** runs each row independently. Newer JSON shared-parameter mappings are supported. Nothing else is read from the test case: attachments such as Task recorder recordings or RSAT Excel parameter files are ignored.
 
 In app-owned Chat, `list_devops_plans` lists the project's test plans with their ids and root suites, and `list_devops_suites` the suites of one plan (read only). `d365fo-agent discover --plan <id> --suite <id>` lists what would run; `--output <file>` writes the parsed cases as JSON.
 
@@ -49,11 +51,11 @@ In app-owned Chat, `list_devops_plans` lists the project's test plans with their
 `d365fo-agent run --upload` (after the run) or `d365fo-agent upload --input results.json` will:
 
 1. Create a new automated Test Run under the configured Test Plan, state InProgress.
-2. Publish one Test Result per test case, mapped to Passed / Failed / Blocked / NotExecuted (skipped), with duration and error message. A result is linked to its test case when the case id is numeric (an Azure DevOps work item id); local cases with other ids are published by title only.
+2. Publish one Test Result per test case, mapped to Passed / Failed / Blocked / NotExecuted (skipped), with duration and error message. Multiple parameter rows become `iterationDetails` on that one result (with `actionResults` and a worst-outcome rollup), not duplicate independent case results. Servers that reject iteration details receive the case-level fallback. A result is linked to its test case when the case id is numeric (an Azure DevOps work item id); local cases with other ids are published by title only. The existing first-test-point/service mapping is retained; full multi-configuration coverage is not claimed.
 3. Attach the artifacts the agent captured for each case (screenshots, Playwright traces).
 4. Mark the Test Run as Completed.
 
-Cases stopped by Ctrl+C are not published, and a run aborted by a model-provider outage is not uploaded. A failed attachment upload is logged and skipped; it does not fail the upload.
+Cases stopped by Ctrl+C are not published, and a run aborted by a model-provider outage is not uploaded. A failed attachment upload is logged and skipped; it does not fail the upload. AI-free replay uses the same explicit publisher and will not upload stale or interrupted results; see [recording and replay](replay.md).
 
 ## Troubleshooting
 
