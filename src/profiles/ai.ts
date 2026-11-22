@@ -25,6 +25,23 @@ export const AI_KEYS = [
 ] as const;
 export const aiFile = (home: string): string => join(home, 'ai.env');
 
+/**
+ * A gateway address is HTTPS, except a local model server (Ollama, LM Studio, a local LiteLLM), which
+ * serves plain HTTP on the loopback interface. Anything else over HTTP would send the token in the clear.
+ */
+export function isAllowedApiUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol === 'https:') return true;
+  if (url.protocol !== 'http:') return false;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
 /** One connection shared by app-owned Chat and every test run. Legacy files are never deleted. */
 export class AiSettings {
   constructor(readonly home: string) {}
@@ -52,12 +69,8 @@ export class AiSettings {
     if (format && !['anthropic', 'openai'].includes(format)) throw new ProfileError('Choose the Claude or the OpenAI-compatible API format.');
     const url = final.find((e) => e.key === 'ANTHROPIC_BASE_URL')?.value;
     if (format === 'openai' && !url?.trim()) throw new ProfileError('The OpenAI-compatible format needs the gateway API URL.');
-    if (url) {
-      try {
-        if (new URL(url).protocol !== 'https:') throw new Error();
-      } catch {
-        throw new ProfileError('The API URL must be an HTTPS address.');
-      }
+    if (url && !isAllowedApiUrl(url)) {
+      throw new ProfileError('The API URL must be an HTTPS address, or plain HTTP on this machine (localhost, 127.0.0.1 or [::1]) for a local model server.');
     }
     await mkdir(this.home, { recursive: true, mode: 0o700 });
     const target = aiFile(this.home);

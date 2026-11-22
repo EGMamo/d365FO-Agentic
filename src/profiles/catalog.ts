@@ -11,7 +11,7 @@ export interface FieldSpec {
 }
 export const GROUP_INFO: Record<string, string> = {
   'Dynamics 365 F&O': 'Choose the sandbox and how to sign in.',
-  'AI model': 'One Claude connection for chat and all test runs.',
+  'AI model': 'One model connection for chat and all test runs: Claude, a local server, or an OpenAI-compatible gateway.',
   'Azure DevOps': 'Optional: read test plans and upload results.',
 };
 export const PROVIDER_LABELS = { anthropic: 'Claude (Anthropic)' };
@@ -87,24 +87,28 @@ export const FIELD_CATALOG: FieldSpec[] = [
     advanced: true,
     help: 'Optional. Defaults to <report folder>/replay for this profile. Existing generated config and helper edits are preserved.',
   },
-  { group: 'AI model', key: 'ANTHROPIC_API_KEY', label: 'Claude API key', secret: true },
-  { group: 'AI model', key: 'LLM_MODEL', label: 'Model name', advanced: true, placeholder: 'claude-opus-4-5-20251101' },
+  {
+    group: 'AI model',
+    key: 'LLM_API_FORMAT',
+    label: 'Provider',
+    options: ['', 'openai'],
+    help: 'Claude uses the Anthropic Messages API. Local or OpenAI-compatible uses /v1/chat/completions: Ollama, LM Studio, LiteLLM or a company gateway.',
+  },
   {
     group: 'AI model',
     key: 'ANTHROPIC_BASE_URL',
     label: 'API URL',
     type: 'url',
-    advanced: true,
-    placeholder: 'https://api.anthropic.com',
-    help: 'Leave empty for Anthropic. For a company gateway, paste the address it gives you.',
+    placeholder: 'http://127.0.0.1:11434/v1',
+    help: 'Leave empty for Anthropic. For a local server or company gateway, paste its address; model names are discovered from it.',
   },
+  { group: 'AI model', key: 'LLM_MODEL', label: 'Model', placeholder: 'claude-opus-4-5-20251101' },
   {
     group: 'AI model',
-    key: 'LLM_API_FORMAT',
-    label: 'API format',
-    options: ['', 'openai'],
-    advanced: true,
-    help: 'Use OpenAI-compatible for gateways that serve /v1/chat/completions (for example LiteLLM-based corporate GenAI services). The model name is the one the gateway lists.',
+    key: 'ANTHROPIC_API_KEY',
+    label: 'API key or token',
+    secret: true,
+    help: 'The Claude key, or any value a local server accepts (for example local).',
   },
   { group: 'AI model', key: 'ANTHROPIC_AUTH_TOKEN', label: 'Gateway bearer token', secret: true, advanced: true },
   {

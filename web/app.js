@@ -122,7 +122,7 @@ async function api(path, method = 'GET', body) {
     throw new Error('The app could not be reached. Your entries are kept; check that the app is still running.');
   }
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(data?.error?.message || data?.error || `Request failed (${res.status}).`);
+  if (!res.ok) throw new Error(data?.error?.message || data?.error || data?.detail || `Request failed (${res.status}).`);
   return data;
 }
 
@@ -186,8 +186,9 @@ function values(root) {
 function field(spec, value, opts = {}) {
   const id = 'f_' + spec.key;
   const props = { id, 'data-key': spec.key };
+  if (spec.key === 'LLM_MODEL') props.list = 'modelOptions';
   const labels = spec.key === 'LLM_API_FORMAT'
-    ? { '': 'Claude Messages API (default)', openai: 'OpenAI-compatible (chat completions)' }
+    ? { '': 'Claude (Anthropic)', openai: 'Local or OpenAI-compatible' }
     : { '': 'Default', 'azure-cli': 'Microsoft account', pat: 'Personal access token' };
   const input = spec.options
     ? el('select', props, spec.options.map((o) => el('option', { value: o }, labels[o] || o)))
@@ -226,12 +227,37 @@ async function loadAi() {
   settings.aiSnapshot = JSON.stringify(values('aiFields'));
   renderAiBadge();
   updateDirty();
+  if ($('f_LLM_API_FORMAT')?.value === 'openai' && $('f_ANTHROPIC_BASE_URL')?.value.trim()) {
+    discoverModels(true).catch(() => {});
+  }
 }
 function renderAiBadge() {
+  const local = $('f_LLM_API_FORMAT')?.value === 'openai';
   $('aiBadge').replaceChildren(
     el('span', { class: 'dot ' + (state.aiConfigured ? 'good' : 'warn') }),
-    el('span', { class: 'muted' }, state.aiConfigured ? 'Configured' : 'Needs a Claude API key'),
+    el('span', { class: 'muted' }, state.aiConfigured ? 'Configured' : local ? 'Needs an API URL' : 'Needs an API key'),
   );
+}
+
+/* Asks the endpoint which models it serves, and offers them on the model field. */
+async function discoverModels(quiet = false) {
+  const status = $('aiStatus');
+  if (!quiet) {
+    status.textContent = 'Looking for models…';
+    status.className = 'muted';
+  }
+  const r = await api('/api/ai/models', 'POST', { entries: values('aiFields') });
+  const models = Array.isArray(r.models) ? r.models : [];
+  $('modelOptions').replaceChildren(...models.map((m) => el('option', { value: m })));
+  const input = $('f_LLM_MODEL');
+  if (input && models.length && !input.value.trim()) input.value = models[0];
+  renderAiBadge();
+  updateDirty();
+  if (!quiet) {
+    status.textContent = models.length ? `${r.detail}: ${models.slice(0, 6).join(', ')}${models.length > 6 ? ', …' : ''}` : r.detail;
+    status.className = r.reachable && r.authorized && models.length ? 'good' : 'bad';
+  }
+  return models;
 }
 async function saveAi() {
   const entries = values('aiFields');
@@ -245,8 +271,21 @@ async function saveAi() {
 }
 $('aiForm').onsubmit = (e) => {
   e.preventDefault();
-  busy($('saveAi'), saveAi);
+  busy($('saveAi'), async () => {
+    await saveAi();
+    if ($('f_LLM_API_FORMAT')?.value === 'openai') await discoverModels(true).catch(() => {});
+  });
 };
+$('discoverModels').onclick = () =>
+  busy($('discoverModels'), async () => {
+    await discoverModels();
+  });
+$('aiForm').addEventListener('change', (e) => {
+  const key = e.target?.dataset?.key;
+  if ((key === 'LLM_API_FORMAT' || key === 'ANTHROPIC_BASE_URL') && $('f_LLM_API_FORMAT')?.value === 'openai' && $('f_ANTHROPIC_BASE_URL')?.value.trim()) {
+    discoverModels(true).catch(() => {});
+  }
+});
 $('checkAi').onclick = () =>
   busy($('checkAi'), async () => {
     if (JSON.stringify(values('aiFields')) !== settings.aiSnapshot) await saveAi();

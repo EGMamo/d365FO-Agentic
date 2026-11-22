@@ -10,8 +10,8 @@ import { defaultRepoRoot } from '../runtime/paths.js';
 import { FIELD_CATALOG, GROUP_INFO, PROVIDER_LABELS } from '../profiles/catalog.js';
 import { FAILURE_CATEGORY_HINTS } from '../testing/triage.js';
 import { serverFile, tokenFile, legacyToolTokenFile, toolTokenFile } from '../profiles/paths.js';
-import { isSecretKey, ProfileError, ProfileStore } from '../profiles/store.js';
-import { AiSettings } from '../profiles/ai.js';
+import { isSecretKey, MASK, ProfileError, ProfileStore } from '../profiles/store.js';
+import { AiSettings, isAllowedApiUrl } from '../profiles/ai.js';
 import { discoverTestCases } from '../core/runner.js';
 import { resolveCaseDir, TestCaseFileError, TestCaseFiles } from '../testing/store.js';
 import { HistoryIndex, REPORT_FILES, RunHistory, type ReportFile } from './history.js';
@@ -21,6 +21,8 @@ import { environmentForChild } from '../config/load-env.js';
 import { parseConfig, type AppConfig } from '../config/index.js';
 import { createLlmProvider } from '../llm/index.js';
 import { checkModel as checkModelEndpoint } from '../llm/check.js';
+import { ANTHROPIC_DEFAULT_BASE_URL, checkAnthropicEndpoint, normalizeAnthropicBaseUrl } from '../llm/endpoint.js';
+import { normalizeOpenAiBaseUrl } from '../llm/openai.js';
 import { redactSecrets } from '../d365fo/login.js';
 import type { LlmProvider } from '../llm/types.js';
 import type { TestResult } from '../testing/types.js';
@@ -109,12 +111,22 @@ export interface UiServerOptions {
   childEnv?: () => NodeJS.ProcessEnv;
   /** Builds the chat model from the profile in use. Defaults to the provider the profile selects; tests pass a fake. */
   modelProvider?: (cfg: AppConfig) => LlmProvider;
+  /** Lists the models an OpenAI-compatible or Claude endpoint offers, for the model picker. Tests pass a fake. */
+  modelLister?: (cfg: AppConfig) => Promise<ModelListing>;
   /** Builds the Azure DevOps client for the profile in use (test plans and suites). Tests pass a fake. */
   devopsClient?: (cfg: AppConfig) => Pick<AzureDevOpsClient, 'listPlans' | 'listSuites'>;
   /** Native, non-model approval for live chat runs/reruns and uploads. Without it those tool actions are denied. */
   approveToolAction?: (action: ToolActionApproval) => Promise<boolean>;
   /** Conversation persistence. Defaults to private per-user JSON storage in the agent home. */
   chatRepository?: ChatRepository;
+}
+
+export interface ModelListing {
+  reachable: boolean;
+  /** False when the server answered 401/403: the key or token was refused. */
+  authorized: boolean;
+  models: string[];
+  detail: string;
 }
 
 export interface RunningUi {
@@ -255,6 +267,28 @@ async function runProfileCommand(command: 'doctor' | 'devops-login' | 'session-l
       done(null);
     });
     child.on('close', done);
+  });
+}
+
+/** Asks the configured endpoint which models it serves, for the model picker in Settings. */
+async function defaultModelLister(cfg: AppConfig): Promise<ModelListing> {
+  const openai = cfg.LLM_API_FORMAT === 'openai';
+  const base = openai
+    ? normalizeOpenAiBaseUrl(cfg.ANTHROPIC_BASE_URL)
+    : normalizeAnthropicBaseUrl(cfg.ANTHROPIC_BASE_URL) ?? ANTHROPIC_DEFAULT_BASE_URL;
+  if (!base) return { reachable: false, authorized: false, models: [], detail: 'Set the API URL of the local server or gateway first.' };
+  return checkAnthropicEndpoint(base, { apiKey: cfg.ANTHROPIC_API_KEY, authToken: cfg.ANTHROPIC_AUTH_TOKEN }, 8000, fetch, openai ? 'openai' : 'anthropic');
+}
+
+/** The AI fields from the form, with masked secrets replaced by what is already saved. */
+function aiEntriesForConfig(posted: unknown, saved: Array<{ key: string; value: string }>): Array<{ key: string; value: string }> {
+  const previous = new Map(saved.map((e) => [e.key, e.value]));
+  if (!Array.isArray(posted)) return saved;
+  return posted.flatMap((raw) => {
+    const entry = raw as { key?: unknown; value?: unknown };
+    if (typeof entry.key !== 'string') return [];
+    const value = typeof entry.value === 'string' ? entry.value : '';
+    return [{ key: entry.key, value: value === MASK ? (previous.get(entry.key) ?? '') : value }];
   });
 }
 
@@ -972,6 +1006,19 @@ export async function startUiServer(opts: UiServerOptions): Promise<RunningUi> {
         const cfg = await modelConfig();
         const secrets = Object.entries(cfg).filter(([key, value]) => isSecretKey(key) && typeof value === 'string' && value.length >= 4).map(([, value]) => String(value));
         return send(res, 200, await checkModelEndpoint(cfg, secrets, opts.modelProvider));
+      }
+      if (method === 'POST' && url.pathname === '/api/ai/models') {
+        const body = await readJson(req).catch(() => ({}) as Record<string, unknown>);
+        let cfg: AppConfig;
+        try {
+          const entries = aiEntriesForConfig(body.entries, await ai.read(true));
+          cfg = parseConfig({ ...Object.fromEntries(entries.map((e) => [e.key, e.value])), ...childEnv() });
+          if (cfg.ANTHROPIC_BASE_URL && !isAllowedApiUrl(cfg.ANTHROPIC_BASE_URL))
+            return send(res, 400, { reachable: false, authorized: false, models: [], detail: 'The API URL must be HTTPS, or plain HTTP on this machine.' });
+        } catch (e) {
+          return send(res, 400, { reachable: false, authorized: false, models: [], detail: (e as Error).message.split('\n')[0].slice(0, 300) });
+        }
+        return send(res, 200, await (opts.modelLister ?? defaultModelLister)(cfg));
       }
       if (method === 'GET' && url.pathname === '/api/cases') return send(res, 200, await casesFor(url));
       const dp = /^\/api\/devops\/plans(?:\/([^/]+)\/suites)?$/.exec(url.pathname);

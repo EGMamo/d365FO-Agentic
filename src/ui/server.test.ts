@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { startUiServer, type RunningUi, type ToolActionApproval } from './server.js';
-import { ProfileStore } from '../profiles/store.js';
+import { MASK, ProfileStore } from '../profiles/store.js';
 import { RunHistory } from './history.js';
 import { TestCaseFiles } from '../testing/store.js';
 
@@ -34,6 +34,42 @@ it('Tests and Chat read the same Azure DevOps suite through the existing REST cl
   } finally {
     await server.close();
     await new Promise<void>((resolve) => remote.close(() => resolve()));
+  }
+});
+
+it('discovers models from the configured endpoint, keeping masked secrets out of the form', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ai-models-'));
+  const seen: Array<{ format?: string; url?: string; token?: string }> = [];
+  const server = await startUiServer({
+    home,
+    port: 0,
+    childEnv: () => ({}),
+    modelLister: async (cfg) => {
+      seen.push({ format: cfg.LLM_API_FORMAT, url: cfg.ANTHROPIC_BASE_URL, token: cfg.ANTHROPIC_AUTH_TOKEN });
+      return { reachable: true, authorized: true, models: ['qwen2.5:7b', 'llama3.1:8b'], detail: '2 model(s) listed' };
+    },
+  });
+  const auth = { cookie: `d365fo_ui=${server.token}`, 'x-requested-with': 'd365fo-ui', 'content-type': 'application/json' };
+  try {
+    const saved = await fetch(server.url + 'api/ai', { method: 'PUT', headers: auth, body: JSON.stringify({ entries: [{ key: 'ANTHROPIC_AUTH_TOKEN', value: 'local-token' }] }) });
+    assert.equal(saved.status, 200);
+    const r = await fetch(server.url + 'api/ai/models', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ entries: [
+        { key: 'LLM_API_FORMAT', value: 'openai' },
+        { key: 'ANTHROPIC_BASE_URL', value: 'http://127.0.0.1:11434/v1' },
+        { key: 'ANTHROPIC_AUTH_TOKEN', value: MASK },
+        { key: 'LLM_MODEL', value: 'qwen2.5:7b' },
+      ] }),
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual(((await r.json()) as { models: string[] }).models, ['qwen2.5:7b', 'llama3.1:8b']);
+    assert.deepEqual(seen, [{ format: 'openai', url: 'http://127.0.0.1:11434/v1', token: 'local-token' }]);
+    const bad = await fetch(server.url + 'api/ai/models', { method: 'POST', headers: auth, body: JSON.stringify({ entries: [{ key: 'LLM_API_FORMAT', value: 'openai' }, { key: 'ANTHROPIC_BASE_URL', value: 'http://remote.example/v1' }] }) });
+    assert.equal(bad.status, 400, 'a remote plain-HTTP address is refused before any request');
+  } finally {
+    await server.close();
   }
 });
 

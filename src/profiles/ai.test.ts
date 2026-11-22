@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { it } from 'node:test';
-import { AiSettings } from './ai.js';
+import { AiSettings, isAllowedApiUrl } from './ai.js';
 import { MASK, ProfileStore } from './store.js';
 
 it('backs up legacy configuration, prefers the chat connection, preserves profile IDs, and migrates once', async () => {
@@ -64,4 +64,31 @@ it('falls back to the active profile and leaves unsupported connections in the b
   );
   await assert.rejects(ai.write([{ key: 'LLM_PROVIDER', value: 'openai' }]), /uses Claude/);
   await assert.rejects(ai.write([{ key: 'ANTHROPIC_BASE_URL', value: 'not-an-address' }]), /HTTPS/);
+});
+
+it('accepts a local model server over plain HTTP but keeps remote gateways on HTTPS', async () => {
+  for (const url of ['http://127.0.0.1:11434/v1', 'http://localhost:1234/v1', 'http://[::1]:8000/v1', 'https://gw.example/v1']) {
+    assert.equal(isAllowedApiUrl(url), true, url);
+  }
+  for (const url of ['http://gw.example/v1', 'ftp://127.0.0.1/v1', 'not-an-address']) {
+    assert.equal(isAllowedApiUrl(url), false, url);
+  }
+  const home = await mkdtemp(join(tmpdir(), 'local-ai-'));
+  const ai = new AiSettings(home);
+  await ai.write([
+    { key: 'LLM_API_FORMAT', value: 'openai' },
+    { key: 'ANTHROPIC_BASE_URL', value: 'http://127.0.0.1:11434/v1' },
+    { key: 'ANTHROPIC_AUTH_TOKEN', value: 'local' },
+    { key: 'LLM_MODEL', value: 'qwen2.5:7b' },
+  ]);
+  const saved = await ai.read(true);
+  assert.equal(saved.find((e) => e.key === 'LLM_API_FORMAT')?.value, 'openai');
+  assert.equal(saved.find((e) => e.key === 'ANTHROPIC_BASE_URL')?.value, 'http://127.0.0.1:11434/v1');
+  await assert.rejects(
+    ai.write([
+      { key: 'LLM_API_FORMAT', value: 'openai' },
+      { key: 'ANTHROPIC_BASE_URL', value: 'http://gw.example/v1' },
+    ]),
+    /HTTPS/,
+  );
 });
